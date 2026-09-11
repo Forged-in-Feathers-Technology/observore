@@ -14,6 +14,45 @@ config ARGUS_BUTTON_GPIO
         while running toggles the console SoftAP; it only enters download mode
         when held across a reset, so reusing it here is safe.
 
+comment "Wi-Fi uplink -- leave blank here and set it with menuconfig or NVS"
+
+config ARGUS_WIFI_SSID
+    string "Home network SSID (optional)"
+    default ""
+    help
+        Leave this EMPTY in sdkconfig.defaults, which is a tracked file.  Set
+        it with `idf.py menuconfig` (it lands in sdkconfig, which is
+        gitignored), or with a gitignored credentials.conf, or at runtime from
+        the console -- which stores it in NVS and never touches the repo at
+        all.  A credential set at runtime takes precedence over this one.
+
+        tools/check_no_secrets.sh fails if a value ends up in a tracked file.
+
+config ARGUS_WIFI_PASSWORD
+    string "Home network password (optional)"
+    default ""
+    help
+        Empty means an open network.  Same warning as the SSID above: never
+        commit a real value.
+
+config ARGUS_WIFI_AUTOJOIN
+    bool "Join the configured network at boot"
+    default y
+    help
+        When credentials are configured, join at boot so the console is
+        reachable on your LAN without the SoftAP.
+
+        This costs detection: the radio has one channel, so while associated
+        the Wi-Fi sniffer is suspended and only BLE scanning and AP scans
+        continue.  Turn this off to stay on full patrol and reach the uplink
+        only on demand.  If the network cannot be joined, Argus falls back to
+        patrol rather than sitting associated to nothing.
+
+config ARGUS_WIFI_CONNECT_TIMEOUT_S
+    int "Uplink connect timeout (seconds)"
+    default 15
+    range 5 60
+
 config ARGUS_BLE_SCAN_INTERVAL_MS
     int "BLE scan interval (ms)"
     default 160

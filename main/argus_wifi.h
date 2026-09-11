@@ -11,7 +11,19 @@
 typedef enum {
     ARGUS_MODE_PATROL = 0,  /* unassociated: AP scans + channel-hopping sniff */
     ARGUS_MODE_CONSOLE,     /* SoftAP + web UI; sniffing suspended */
+    ARGUS_MODE_UPLINK,      /* joined to your network; sniffing suspended */
 } argus_mode_t;
+
+const char *argus_mode_name(argus_mode_t mode);
+
+/* Join the configured network.  Blocks up to the configured timeout and
+ * returns ESP_ERR_NOT_FOUND when no credentials are set, ESP_ERR_TIMEOUT when
+ * association or DHCP did not complete.  On failure the caller is expected to
+ * fall back to patrol rather than sit associated to nothing. */
+esp_err_t argus_wifi_uplink_connect(void);
+
+/* The address acquired in uplink mode, or an empty string. */
+const char *argus_wifi_uplink_ip(void);
 
 esp_err_t argus_wifi_init(void);
 

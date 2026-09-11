@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "argus_mute.h"
+#include "argus_netcfg.h"
 #include "argus_track.h"
 #include "argus_web.h"
 #include "argus_wifi.h"
@@ -72,7 +73,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                      "\"suppressed\":%" PRIu32 ",\"counts\":{",
                      st.score, argus_level_name(st.level), st.device_count,
                      st.total_sightings, now / 1000000,
-                     argus_wifi_mode() == ARGUS_MODE_CONSOLE ? "console" : "patrol",
+                     argus_mode_name(argus_wifi_mode()),
                      argus_mute_count(), argus_mute_suppressed());
 
     for (int c = 1; c < ARGUS_CLASS_MAX && n < (int)sizeof(body); c++) {
@@ -263,6 +264,54 @@ static esp_err_t unmute_handler(httpd_req_t *req)
     return send_json(req, "{\"ok\":true}");
 }
 
+static esp_err_t netcfg_get_handler(httpd_req_t *req)
+{
+    char ssid[ARGUS_SSID_LEN] = {0};
+    bool set = argus_netcfg_ssid(ssid, sizeof(ssid));
+    char escaped[ARGUS_SSID_LEN * 2];
+    json_escape(ssid, escaped, sizeof(escaped));
+
+    char body[256];
+    /* The password is deliberately absent and there is no endpoint that can
+     * read it back.  It is write-only from outside the device. */
+    snprintf(body, sizeof(body),
+             "{\"configured\":%s,\"ssid\":\"%s\",\"mode\":\"%s\","
+             "\"ip\":\"%s\"}",
+             set ? "true" : "false", escaped,
+             argus_mode_name(argus_wifi_mode()), argus_wifi_uplink_ip());
+    return send_json(req, body);
+}
+
+static esp_err_t netcfg_set_handler(httpd_req_t *req)
+{
+    char value[16];
+    if (query_param(req, "clear", value, sizeof(value))) {
+        argus_netcfg_clear();
+        ESP_LOGI(TAG, "network credentials cleared");
+        return send_json(req, "{\"ok\":true}");
+    }
+
+    char ssid[ARGUS_SSID_LEN] = {0};
+    char password[ARGUS_PASSWORD_LEN] = {0};
+    if (!query_param(req, "ssid", ssid, sizeof(ssid))) {
+        return fail(req, "ssid is required");
+    }
+    query_param(req, "password", password, sizeof(password));
+
+    const char *why = NULL;
+    if (!argus_netcfg_valid(ssid, password, &why)) {
+        return fail(req, why);
+    }
+    esp_err_t err = argus_netcfg_set(ssid, password);
+    /* Do not leave the password sitting on this task's stack. */
+    memset(password, 0, sizeof(password));
+    if (err != ESP_OK) {
+        return fail(req, "could not store credentials");
+    }
+    ESP_LOGI(TAG, "network set to \"%s\"", ssid);
+    return send_json(req, "{\"ok\":true}");
+}
+
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     argus_track_clear();
@@ -294,6 +343,8 @@ esp_err_t argus_web_start(void)
         {.uri = "/api/mutes",    .method = HTTP_GET,  .handler = mutes_handler},
         {.uri = "/api/mute",     .method = HTTP_POST, .handler = mute_handler},
         {.uri = "/api/unmute",   .method = HTTP_POST, .handler = unmute_handler},
+        {.uri = "/api/netcfg",   .method = HTTP_GET,  .handler = netcfg_get_handler},
+        {.uri = "/api/netcfg",   .method = HTTP_POST, .handler = netcfg_set_handler},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(s_server, &routes[i]);

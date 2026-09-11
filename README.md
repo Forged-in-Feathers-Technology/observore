@@ -78,10 +78,66 @@ watch the band and serve you a web page at the same time.
 
 - **Patrol** (default) — unassociated, scanning and sniffing. No network.
 - **Console** — SoftAP up, web UI served, sniffing suspended.
+- **Uplink** — joined to your own network, web UI reachable on your LAN,
+  sniffing suspended.
 
-Hold the BOOT button for 1.5 s to toggle. BLE scanning continues in both modes;
-it is unaffected by the Wi-Fi channel, and it is where most detections come
-from.
+Hold the BOOT button for 1.5 s to cycle. Uplink is skipped when no network is
+configured. BLE scanning continues in all three modes; it is unaffected by the
+Wi-Fi channel, and it is where most detections come from.
+
+## Joining your network
+
+Uplink mode puts the console on your LAN, so you can read the log without the
+SoftAP dance. **It costs detection**: while associated, the radio is pinned to
+your AP's channel and the Wi-Fi sniffer is suspended. BLE scanning and AP scans
+continue. If the network cannot be joined, Argus falls back to patrol rather
+than sitting associated to nothing.
+
+Credentials never belong in a tracked file. There are three ways to set them,
+and the first is the one to prefer:
+
+**1. At runtime, from the console.** Hold the button, join the SoftAP, and fill
+in the **Network** panel. Stored in NVS. Nothing touches this repo at all, and
+nothing needs rebuilding to re-point a device at a different network.
+
+**2. `idf.py menuconfig`** → **Argus** → Wi-Fi uplink. This writes `sdkconfig`,
+which is gitignored.
+
+**3. A gitignored `credentials.conf`**, for reproducible or CI builds:
+
+```bash
+cp credentials.conf.example credentials.conf   # gitignored
+idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;credentials.conf" build
+```
+
+A credential in NVS wins over one compiled in, so setting it at runtime is not
+silently reverted by reflashing the same firmware.
+
+Set `ARGUS_WIFI_AUTOJOIN=n` to keep full patrol coverage and reach the uplink
+only on demand via the button.
+
+### Keeping credentials out of the repo
+
+`CONFIG_ARGUS_WIFI_SSID` and `CONFIG_ARGUS_WIFI_PASSWORD` are empty in the
+tracked `sdkconfig.defaults` and must stay that way. The easy mistake is to set
+one with menuconfig, then paste it into `sdkconfig.defaults` to make it stick —
+which is how a home network password ends up in a public repository.
+
+```bash
+tools/check_no_secrets.sh            # scan tracked files
+tools/check_no_secrets.sh --staged   # scan what is about to be committed
+```
+
+Wire it up as a pre-commit hook if you intend to push this anywhere:
+
+```bash
+printf '#!/bin/sh\nexec tools/check_no_secrets.sh --staged\n' \
+  > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+The password is write-only from outside the device: no API returns it, and the
+console never receives it, so the field stays blank even when a network is
+configured.
 
 ## Build and flash
 

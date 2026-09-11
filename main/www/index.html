@@ -103,6 +103,23 @@
 </div>
 
 <div class="panel">
+  <h2>Network <span id="netinfo" class="dim"></span></h2>
+  <div class="add">
+    <input id="ssid" placeholder="SSID" autocomplete="off">
+    <input id="password" type="password" placeholder="password (blank = open)"
+           autocomplete="new-password">
+    <button id="netsave">Save</button>
+    <button id="netclear" class="mini">Forget</button>
+  </div>
+  <p class="dim" style="margin:8px 0 0;font-size:11px">
+    Stored on the device, never in the repo. It is never sent back to this page,
+    so the field stays blank even when a network is configured.
+    While joined to a network the Wi-Fi sniffer is suspended &mdash; BLE
+    scanning continues.
+  </p>
+</div>
+
+<div class="panel">
   <h2>Ignored <span id="muteinfo" class="dim"></span></h2>
   <div class="rules" id="rules"></div>
   <div class="add">
@@ -190,6 +207,14 @@ async function refresh() {
     }
     $('empty').style.display = devices.devices.length ? 'none' : 'block';
 
+    const net = await fetch('/api/netcfg').then(r => r.json());
+    $('netinfo').textContent = net.configured
+      ? '— ' + net.ssid + (net.ip ? ' · ' + net.ip : ' · not joined')
+      : '— none configured';
+    if (net.configured && !$('ssid').matches(':focus')) {
+      $('ssid').placeholder = net.ssid;
+    }
+
     const mutes = await fetch('/api/mutes').then(r => r.json());
     $('muteinfo').textContent = mutes.rules.length
       ? '— ' + mutes.suppressed + ' sightings suppressed'
@@ -219,6 +244,27 @@ async function refresh() {
     $('updated').textContent = 'connection lost — retrying';
   }
 }
+
+$('netsave').addEventListener('click', async () => {
+  const ssid = $('ssid').value.trim();
+  if (!ssid) { $('updated').textContent = 'enter an SSID'; return; }
+  const q = '/api/netcfg?ssid=' + encodeURIComponent(ssid) +
+            '&password=' + encodeURIComponent($('password').value);
+  const out = await fetch(q, { method: 'POST' }).then(r => r.json());
+  // Clear the field either way; a password should not linger in the DOM.
+  $('password').value = '';
+  $('updated').textContent = out.ok
+    ? 'network saved — hold the button to join'
+    : 'save failed: ' + out.error;
+  refresh();
+});
+
+$('netclear').addEventListener('click', async () => {
+  await fetch('/api/netcfg?clear=1', { method: 'POST' });
+  $('ssid').value = '';
+  $('ssid').placeholder = 'SSID';
+  refresh();
+});
 
 async function mute(kind, value) {
   const res = await fetch(

@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "argus_netcfg.h"
 #include "argus_track.h"
 #include "argus_wifi.h"
 #include "esp_event.h"
@@ -9,6 +10,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -37,7 +39,17 @@ static bool               s_initialised;
  * the no-op path, and esp_wifi_start() never runs -- leaving the sniffer
  * working but every AP scan failing with ESP_ERR_WIFI_NOT_STARTED. */
 static bool               s_mode_applied;
-static uint32_t           s_sniffed_frames;   /* accepted by the parser */
+static uint32_t           s_sniffed_frames;
+static EventGroupHandle_t s_sta_events;
+static char               s_uplink_ip[16];
+static int                s_connect_attempts;
+
+#define STA_BIT_GOT_IP  BIT0
+#define STA_BIT_FAILED  BIT1
+/* Retries within one connect attempt.  A handful covers a slow AP or a
+ * transient DHCP failure; beyond that the credentials are wrong or the network
+ * is out of range, and sitting here retrying costs detection time. */
+#define STA_MAX_RETRY   4   /* accepted by the parser */
 static uint32_t           s_sniffer_calls;    /* raw callback entries */
 
 /* ------------------------------------------------------------------ */
@@ -164,9 +176,12 @@ static void run_ap_scan(void)
     };
 
     esp_err_t err = esp_wifi_scan_start(&cfg, true /* block */);
+    if (err == ESP_ERR_WIFI_STATE) {
+        ESP_LOGD(TAG, "scan skipped, radio busy");  /* transient, self-clears */
+        return;
+    }
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "scan failed in %s mode: %s",
-                 s_mode == ARGUS_MODE_PATROL ? "patrol" : "console",
+        ESP_LOGW(TAG, "scan failed in %s mode: %s", argus_mode_name(s_mode),
                  esp_err_to_name(err));
         return;
     }
@@ -194,8 +209,105 @@ static void run_ap_scan(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Station uplink                                                     */
+/* ------------------------------------------------------------------ */
+
+static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
+                              void *data)
+{
+    (void)arg;
+
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *e = data;
+        if (s_connect_attempts < STA_MAX_RETRY) {
+            s_connect_attempts++;
+            esp_wifi_connect();
+        } else {
+            /* Report the reason code: "wrong password" and "AP not found" are
+             * very different problems and both look like a silent failure. */
+            ESP_LOGW(TAG, "uplink failed, reason %d", e->reason);
+            xEventGroupSetBits(s_sta_events, STA_BIT_FAILED);
+        }
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        const ip_event_got_ip_t *e = data;
+        snprintf(s_uplink_ip, sizeof(s_uplink_ip), IPSTR, IP2STR(&e->ip_info.ip));
+        ESP_LOGI(TAG, "uplink up at %s", s_uplink_ip);
+        xEventGroupSetBits(s_sta_events, STA_BIT_GOT_IP);
+    }
+}
+
+const char *argus_wifi_uplink_ip(void)
+{
+    return s_uplink_ip;
+}
+
+esp_err_t argus_wifi_uplink_connect(void)
+{
+    argus_netcfg_t cfg;
+    if (!argus_netcfg_get(&cfg)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_stop();
+
+    /* The driver's fields are fixed-size and length-delimited, not strings, so
+     * they are filled by length.  snprintf would both warn about truncation
+     * and waste a byte on a terminator the driver does not want. */
+    wifi_config_t sta = {0};
+    memcpy(sta.sta.ssid, cfg.ssid,
+           strnlen(cfg.ssid, sizeof(sta.sta.ssid)));
+    memcpy(sta.sta.password, cfg.password,
+           strnlen(cfg.password, sizeof(sta.sta.password)));
+    /* Wipe the copy on our stack as soon as the driver has it. */
+    memset(&cfg, 0, sizeof(cfg));
+
+    s_uplink_ip[0] = '\0';
+    s_connect_attempts = 0;
+    xEventGroupClearBits(s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED);
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
+    memset(&sta, 0, sizeof(sta));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    EventBits_t bits = xEventGroupWaitBits(
+        s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED, pdFALSE, pdFALSE,
+        pdMS_TO_TICKS(CONFIG_ARGUS_WIFI_CONNECT_TIMEOUT_S * 1000));
+
+    if (bits & STA_BIT_GOT_IP) {
+        s_mode = ARGUS_MODE_UPLINK;
+        s_mode_applied = true;
+        return ESP_OK;
+    }
+    /* Stop the retry loop and tear the attempt down before returning.  s_mode
+     * is still PATROL at this point (it is only advanced on success), so the
+     * disconnect-on-leave in set_mode would not fire and the driver would keep
+     * retrying the association into the next mode -- which showed up as two
+     * patrol scans failing with ESP_ERR_WIFI_STATE and a stale failure
+     * arriving nine seconds later. */
+    s_connect_attempts = STA_MAX_RETRY;
+    esp_wifi_disconnect();
+    ESP_LOGW(TAG, "uplink did not come up within %ds",
+             CONFIG_ARGUS_WIFI_CONNECT_TIMEOUT_S);
+    return ESP_ERR_TIMEOUT;
+}
+
+/* ------------------------------------------------------------------ */
 /* Mode handling                                                      */
 /* ------------------------------------------------------------------ */
+
+const char *argus_mode_name(argus_mode_t mode)
+{
+    switch (mode) {
+        case ARGUS_MODE_CONSOLE: return "console";
+        case ARGUS_MODE_UPLINK:  return "uplink";
+        default:                 return "patrol";
+    }
+}
 
 static void derive_ap_ssid(void)
 {
@@ -247,6 +359,12 @@ esp_err_t argus_wifi_init(void)
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
+
+    s_sta_events = xEventGroupCreate();
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        WIFI_EVENT, ESP_EVENT_ANY_ID, sta_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, sta_event_handler, NULL, NULL));
     /* Nothing here needs to survive a reboot, and writing the Wi-Fi config to
      * flash on every mode change would wear it for no reason. */
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
@@ -271,8 +389,25 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
     /* Always leave promiscuous mode before touching the interface config --
      * changing mode underneath an active sniffer is how you get a driver
      * assert instead of an error code. */
+    if (s_mode == ARGUS_MODE_UPLINK) {
+        /* Disconnect explicitly before stopping, or the event handler retries
+         * the association we are deliberately leaving. */
+        s_connect_attempts = STA_MAX_RETRY;
+        esp_wifi_disconnect();
+    }
+    s_uplink_ip[0] = '\0';
+
     esp_wifi_set_promiscuous(false);
     esp_wifi_stop();
+
+    if (mode == ARGUS_MODE_UPLINK) {
+        esp_err_t err = argus_wifi_uplink_connect();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "uplink unavailable, staying on patrol");
+            return argus_wifi_set_mode(ARGUS_MODE_PATROL);
+        }
+        return ESP_OK;
+    }
 
     if (mode == ARGUS_MODE_CONSOLE) {
         wifi_config_t ap = {0};
@@ -291,9 +426,14 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
         ESP_ERROR_CHECK(esp_wifi_start());
         ESP_LOGI(TAG, "console mode: SSID \"%s\" at 192.168.4.1", s_ap_ssid);
     } else {
-        /* Station mode but never associated: that is what leaves the radio
-         * free to be retuned to any channel. */
+        /* Patrol is station mode but deliberately never associated, which is
+         * what leaves the radio free to be retuned to any channel.  The stored
+         * SSID is cleared so WIFI_EVENT_STA_START does not try to join the
+         * uplink we just left. */
+        wifi_config_t blank = {0};
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &blank));
+        s_connect_attempts = STA_MAX_RETRY;
         ESP_ERROR_CHECK(esp_wifi_start());
         /* Power save must be off to sniff.  The default WIFI_PS_MIN_MODEM
          * sleeps the receiver between beacons, which on an unassociated

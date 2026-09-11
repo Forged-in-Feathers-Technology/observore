@@ -38,3 +38,10 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Wi-Fi uplink credentials are deliberately EMPTY here -- this file is tracked
+# by git.  Set them with `idf.py menuconfig` (sdkconfig is gitignored), or with
+# a gitignored credentials.conf, or at runtime from the console.
+# See README, "Joining your network".
+CONFIG_ARGUS_WIFI_SSID=""
+CONFIG_ARGUS_WIFI_PASSWORD=""

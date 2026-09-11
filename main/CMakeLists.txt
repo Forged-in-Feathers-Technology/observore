@@ -4,6 +4,7 @@ idf_component_register(
         "argus_detect.c"
         "argus_track.c"
         "argus_mute.c"
+        "argus_netcfg.c"
         "argus_ble.c"
         "argus_wifi.c"
         "argus_web.c"
