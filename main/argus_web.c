@@ -35,6 +35,9 @@ extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
  * single task, so only one handler is ever building a response. */
 #define JSON_BUF_LEN (32 * 1024)
 
+/* Both are heap pointers, so sizeof() on them yields 4, not the buffer size.
+ * Always bound writes with JSON_BUF_LEN -- a missed conversion here silently
+ * truncated /api/devices, which the browser then refused to parse. */
 static argus_event_t *s_snap;    /* ARGUS_MAX_DEVICES entries */
 static char          *s_body;    /* JSON_BUF_LEN bytes */
 
@@ -171,7 +174,7 @@ static esp_err_t devices_handler(httpd_req_t *req)
         }
         n += written;
     }
-    snprintf(body + n, sizeof(body) - n, "]}");
+    snprintf(body + n, JSON_BUF_LEN - n, "]}");
 
     return send_json(req, body);
 }

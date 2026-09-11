@@ -171,12 +171,29 @@ function ago(s) {
   return Math.floor(s / 3600) + 'h';
 }
 
-async function refresh() {
+// Each panel is fetched independently and failures are reported per panel.
+// A single Promise.all with one try/catch meant that one malformed response
+// blanked the whole page and said only "connection lost", which hid a server
+// bug behind what looked like a network problem.
+const errors = [];
+
+async function getJSON(path, fallback) {
   try {
-    const [status, devices] = await Promise.all([
-      fetch('/api/status').then(r => r.json()),
-      fetch('/api/devices').then(r => r.json()),
-    ]);
+    const r = await fetch(path);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    errors.push(path.replace('/api/', '') + ': ' + e.message);
+    return fallback;
+  }
+}
+
+async function refresh() {
+  errors.length = 0;
+  {
+    const status = await getJSON('/api/status', null) || {
+      level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?' };
+    const devices = await getJSON('/api/devices', { devices: [] });
 
     $('banner').className = 'banner ' + status.level;
     $('level').textContent = status.level;
@@ -228,7 +245,7 @@ async function refresh() {
     }
     $('empty').style.display = devices.devices.length ? 'none' : 'block';
 
-    const near = await fetch('/api/nearby').then(r => r.json());
+    const near = await getJSON('/api/nearby', { nearby: [] });
     $('nearbyinfo').textContent = near.nearby.length
       ? '— ' + near.nearby.length + ' seen'
       : '— nothing yet';
@@ -260,7 +277,8 @@ async function refresh() {
       nrows.appendChild(tr);
     }
 
-    const net = await fetch('/api/netcfg').then(r => r.json());
+    const net = await getJSON('/api/netcfg',
+      { configured: false, ssid: '', ip: '' });
     $('netinfo').textContent = net.configured
       ? '— ' + net.ssid + (net.ip ? ' · ' + net.ip : ' · not joined')
       : '— none configured';
@@ -268,7 +286,7 @@ async function refresh() {
       $('ssid').placeholder = net.ssid;
     }
 
-    const mutes = await fetch('/api/mutes').then(r => r.json());
+    const mutes = await getJSON('/api/mutes', { rules: [], suppressed: 0 });
     $('muteinfo').textContent = mutes.rules.length
       ? '— ' + mutes.suppressed + ' sightings suppressed'
       : '— nothing ignored yet';
@@ -292,9 +310,10 @@ async function refresh() {
       el.append(k, v, x);
       rules.appendChild(el);
     }
-    $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
-  } catch (e) {
-    $('updated').textContent = 'connection lost — retrying';
+    $('updated').textContent = errors.length
+      ? 'updated ' + new Date().toLocaleTimeString() + ' — failed: ' +
+        errors.join('; ')
+      : 'updated ' + new Date().toLocaleTimeString();
   }
 }
 
