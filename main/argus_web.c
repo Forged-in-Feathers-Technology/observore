@@ -325,16 +325,6 @@ esp_err_t argus_web_start(void)
         return ESP_OK;
     }
 
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.lru_purge_enable = true;
-    cfg.stack_size = 8192;   /* the JSON handlers are not frugal */
-
-    esp_err_t err = httpd_start(&s_server, &cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
     static const httpd_uri_t routes[] = {
         {.uri = "/",             .method = HTTP_GET,  .handler = index_handler},
         {.uri = "/api/status",   .method = HTTP_GET,  .handler = status_handler},
@@ -346,8 +336,30 @@ esp_err_t argus_web_start(void)
         {.uri = "/api/netcfg",   .method = HTTP_GET,  .handler = netcfg_get_handler},
         {.uri = "/api/netcfg",   .method = HTTP_POST, .handler = netcfg_set_handler},
     };
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.lru_purge_enable = true;
+    cfg.stack_size = 8192;   /* the JSON handlers are not frugal */
+    /* Sized from the table rather than left at the default of 8.  Overflowing
+     * it makes httpd_register_uri_handler fail and the route simply not exist,
+     * which surfaces as a 405 on a route that is plainly in the source. */
+    cfg.max_uri_handlers = sizeof(routes) / sizeof(routes[0]);
+
+    esp_err_t err = httpd_start(&s_server, &cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-        httpd_register_uri_handler(s_server, &routes[i]);
+        err = httpd_register_uri_handler(s_server, &routes[i]);
+        if (err != ESP_OK) {
+            /* Never silently serve a partial API. */
+            ESP_LOGE(TAG, "could not register %s: %s", routes[i].uri,
+                     esp_err_to_name(err));
+            httpd_stop(s_server);
+            s_server = NULL;
+            return err;
+        }
     }
 
     ESP_LOGI(TAG, "console at http://192.168.4.1/ (SSID %s)", argus_wifi_ap_ssid());
