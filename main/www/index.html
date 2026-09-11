@@ -65,7 +65,11 @@
   .rule button { border: 0; background: none; color: var(--dim); cursor: pointer;
                  font: inherit; padding: 0 4px; line-height: 1; }
   .rule button:hover { color: var(--alert); }
-  .add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+  tr.going { opacity: 0.35; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .note { color: var(--dim); font-size: 11px; margin: 8px 0 0; }
+  .warn { color: var(--caution); }
   select, input {
     background: var(--bg); color: var(--fg); border: 1px solid var(--line);
     border-radius: 5px; padding: 5px 8px; font: inherit; font-size: 12px;
@@ -152,6 +156,13 @@
     <input id="value" placeholder="AA:BB:CC:DD:EE:FF">
     <button id="add">Ignore</button>
   </div>
+  <div class="add">
+    <button id="baseline">Set baseline</button>
+    <span class="note" id="baselinenote">
+      Marks everything currently in range as known and resets the score.
+      Use it somewhere you trust &mdash; it ignores detected threats too.
+    </span>
+  </div>
 </div>
 
 <footer>
@@ -206,6 +217,7 @@ async function refresh() {
     const rows = $('rows');
     rows.replaceChildren();
     for (const d of devices.devices) {
+      if (pending.has(d.mac)) continue;
       const tr = document.createElement('tr');
       const cells = [
         ['span', 'tag t-' + d.class, d.class],
@@ -232,7 +244,7 @@ async function refresh() {
           b.className = 'mini';
           b.textContent = 'ignore';
           b.title = 'Stop reporting this device';
-          b.addEventListener('click', () => mute('mac', value));
+          b.addEventListener('click', () => mute('mac', value, tr));
           td.appendChild(b);
         } else {
           td.className = cls;
@@ -252,6 +264,7 @@ async function refresh() {
     const nrows = $('nearbyrows');
     nrows.replaceChildren();
     for (const d of near.nearby) {
+      if (pending.has(d.mac)) continue;
       const tr = document.createElement('tr');
       for (const [cls, value] of [
         ['', d.name || '—'],
@@ -271,7 +284,7 @@ async function refresh() {
       const b = document.createElement('button');
       b.className = 'mini';
       b.textContent = 'ignore';
-      b.addEventListener('click', () => mute('mac', d.mac));
+      b.addEventListener('click', () => mute('mac', d.mac, tr));
       td.appendChild(b);
       tr.appendChild(td);
       nrows.appendChild(tr);
@@ -287,6 +300,10 @@ async function refresh() {
     }
 
     const mutes = await getJSON('/api/mutes', { rules: [], suppressed: 0 });
+    // Stop filtering anything the server now reports as muted.
+    for (const r of mutes.rules) {
+      if (r.kind === 'mac') pending.delete(r.value);
+    }
     $('muteinfo').textContent = mutes.rules.length
       ? '— ' + mutes.suppressed + ' sightings suppressed'
       : '— nothing ignored yet';
@@ -338,13 +355,31 @@ $('netclear').addEventListener('click', async () => {
   refresh();
 });
 
-async function mute(kind, value) {
-  const res = await fetch(
-    '/api/mute?' + kind + '=' + encodeURIComponent(value), { method: 'POST' });
-  const out = await res.json();
-  if (!out.ok) {
-    $('updated').textContent = 'ignore failed: ' + out.error;
-    return;
+// MACs whose mute is in flight. The 2 s poll would otherwise repaint a row
+// that has already been clicked away, making the button feel unresponsive.
+const pending = new Set();
+
+async function mute(kind, value, row) {
+  if (kind === 'mac') pending.add(value);
+  if (row) {
+    row.classList.add('going');
+    row.querySelectorAll('button').forEach(b => (b.disabled = true));
+  }
+  try {
+    const res = await fetch(
+      '/api/mute?' + kind + '=' + encodeURIComponent(value), { method: 'POST' });
+    const out = await res.json();
+    if (!out.ok) throw new Error(out.error);
+    if (row) row.remove();
+    $('updated').textContent = 'ignoring ' + value;
+  } catch (e) {
+    // Put it back rather than leaving a row that looks handled but is not.
+    pending.delete(value);
+    if (row) {
+      row.classList.remove('going');
+      row.querySelectorAll('button').forEach(b => (b.disabled = false));
+    }
+    $('updated').textContent = 'ignore failed: ' + e.message;
   }
   refresh();
 }
@@ -361,6 +396,41 @@ $('kind').addEventListener('change', () => {
 $('add').addEventListener('click', () => {
   const v = $('value').value.trim();
   if (v) { mute($('kind').value, v); $('value').value = ''; }
+});
+
+$('baseline').addEventListener('click', async () => {
+  const b = $('baseline');
+  if (b.dataset.armed !== '1') {
+    // One deliberate confirmation: this silences real detections too.
+    b.dataset.armed = '1';
+    b.textContent = 'Confirm baseline';
+    b.classList.add('warn');
+    setTimeout(() => {
+      b.dataset.armed = '';
+      b.textContent = 'Set baseline';
+      b.classList.remove('warn');
+    }, 5000);
+    return;
+  }
+  b.dataset.armed = '';
+  b.textContent = 'Set baseline';
+  b.classList.remove('warn');
+  b.disabled = true;
+  try {
+    const out = await fetch('/api/baseline', { method: 'POST' })
+      .then(r => r.json());
+    $('baselinenote').textContent =
+      out.added + ' of ' + out.seen + ' devices now ignored' +
+      (out.already ? ', ' + out.already + ' already were' : '') +
+      (out.rotating
+        ? '. ' + out.rotating + ' use rotating addresses and will reappear'
+        : '') +
+      (out.no_room ? '. ' + out.no_room + ' did not fit' : '') + '.';
+  } catch (e) {
+    $('baselinenote').textContent = 'baseline failed: ' + e.message;
+  }
+  b.disabled = false;
+  refresh();
 });
 
 $('unmuteall').addEventListener('click', async () => {

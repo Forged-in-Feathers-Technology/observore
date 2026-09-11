@@ -249,7 +249,24 @@ POST /api/unmute?all=1
 ```
 
 Each row in the device table also has an **ignore** button, which is the usual
-way to add one.
+way to add one. The row disappears on click rather than on the next poll, and
+comes back with an error if the device rejects it.
+
+### Set baseline
+
+**Set baseline** marks everything currently in range as known and resets the
+score, so the device starts watching for what changes from *here* rather than
+reporting the whole neighbourhood. Run it somewhere you trust — at home, or in
+your own car — and what it flags afterwards is genuinely new.
+
+It mutes detected threats too, which is the point: your own doorbell camera is
+exactly the thing you want silenced. It asks for confirmation once, and
+**Clear ignores** undoes all of it.
+
+It reports what it did, including how many of the addresses it just muted are
+rotating ones. Those will reappear under a different MAC within the hour, so a
+baseline in a room full of phones is worth less than the count suggests — the
+UI says so rather than implying a permanent result. Up to 128 rules are stored.
 
 ## A note on internal RAM
 

@@ -405,6 +405,54 @@ static esp_err_t nearby_handler(httpd_req_t *req)
     return send_json(req, body);
 }
 
+/* Mark everything currently in range as known, then start watching for what
+ * changes from here.  Both classified and unclassified devices are muted: at
+ * home your own doorbell camera is exactly the thing you want silenced, and
+ * the action is fully reversible from the same panel. */
+static esp_err_t baseline_handler(httpd_req_t *req)
+{
+    argus_event_t *snap = s_snap;
+    size_t count = argus_track_all(snap, ARGUS_MAX_DEVICES);
+
+    size_t added = 0, existing = 0, full = 0, rotating = 0;
+    for (size_t i = 0; i < count; i++) {
+        argus_mute_rule_t rule = {.kind = ARGUS_MUTE_MAC};
+        memcpy(rule.mac, snap[i].mac, ARGUS_MAC_LEN);
+
+        size_t before = argus_mute_count();
+        esp_err_t err = argus_mute_add(&rule);
+        if (err == ESP_ERR_NO_MEM) {
+            full++;
+        } else if (err != ESP_OK) {
+            continue;
+        } else if (argus_mute_count() == before) {
+            existing++;
+        } else {
+            added++;
+            /* A rotating address will be back under a different MAC within
+             * the hour, so the rule covering it is temporary.  Counted so the
+             * UI can say so rather than implying a permanent result. */
+            if (snap[i].addr_random) {
+                rotating++;
+            }
+        }
+    }
+
+    /* Everything in range is now known, so the score and the log start from
+     * a clean slate -- that is what makes it a baseline rather than just a
+     * bulk mute. */
+    argus_track_clear();
+
+    char body[256];
+    snprintf(body, sizeof(body),
+             "{\"ok\":true,\"seen\":%zu,\"added\":%zu,\"already\":%zu,"
+             "\"rotating\":%zu,\"no_room\":%zu,\"rules\":%zu}",
+             count, added, existing, rotating, full, argus_mute_count());
+    ESP_LOGI(TAG, "baseline: %zu seen, %zu muted (%zu rotating), %zu no room",
+             count, added, rotating, full);
+    return send_json(req, body);
+}
+
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     argus_track_clear();
@@ -427,6 +475,7 @@ esp_err_t argus_web_start(void)
         {.uri = "/api/mutes",    .method = HTTP_GET,  .handler = mutes_handler},
         {.uri = "/api/mute",     .method = HTTP_POST, .handler = mute_handler},
         {.uri = "/api/unmute",   .method = HTTP_POST, .handler = unmute_handler},
+        {.uri = "/api/baseline", .method = HTTP_POST, .handler = baseline_handler},
         {.uri = "/api/netcfg",   .method = HTTP_GET,  .handler = netcfg_get_handler},
         {.uri = "/api/netcfg",   .method = HTTP_POST, .handler = netcfg_set_handler},
     };

@@ -65,6 +65,10 @@ size_t argus_track_snapshot(argus_event_t *out, size_t max, int64_t now_us);
  * heuristic -- your own phone, your own speakers, the neighbour's TV. */
 size_t argus_track_nearby(argus_event_t *out, size_t max, int64_t now_us);
 
+/* Every device currently tracked, classified or not.  Used to take a
+ * baseline: mark everything in range as known. */
+size_t argus_track_all(argus_event_t *out, size_t max);
+
 size_t argus_track_drain_new(argus_event_t *out, size_t max);
 
 void argus_track_clear(void);

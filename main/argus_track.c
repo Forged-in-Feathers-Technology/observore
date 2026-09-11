@@ -337,6 +337,22 @@ size_t argus_track_nearby(argus_event_t *out, size_t max, int64_t now_us)
     return n;
 }
 
+size_t argus_track_all(argus_event_t *out, size_t max)
+{
+    if (!out || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    ARGUS_LOCK();
+    for (size_t i = 0; i < ARGUS_MAX_DEVICES && n < max; i++) {
+        if (s_devices[i].in_use) {
+            out[n++] = s_devices[i].ev;
+        }
+    }
+    ARGUS_UNLOCK();
+    return n;
+}
+
 size_t argus_track_drain_new(argus_event_t *out, size_t max)
 {
     if (!out || max == 0) {

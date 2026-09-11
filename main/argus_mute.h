@@ -21,7 +21,7 @@ typedef int esp_err_t;
  * harmless can be muted -- and the rules survive a reboot, because re-muting
  * your own street every time you power on is the same problem again. */
 
-#define ARGUS_MUTE_MAX      64
+#define ARGUS_MUTE_MAX      128
 #define ARGUS_MUTE_SSID_LEN 33
 
 typedef enum {
