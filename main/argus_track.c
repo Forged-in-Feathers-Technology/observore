@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "argus_mute.h"
 #include "argus_track.h"
 
 #ifdef ARGUS_HOST_TEST
@@ -140,6 +141,15 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
 
     argus_event_t classified;
     bool is_classified = argus_classify(obs, &classified);
+
+    /* Suppress before the table is touched, not after.  A muted device that
+     * still occupied a slot would keep being promoted by the follower
+     * heuristic and keep evicting things you do care about. */
+    if (argus_mute_matches(obs->mac,
+                           is_classified ? classified.cls : ARGUS_CLASS_UNKNOWN,
+                           obs->ssid)) {
+        return false;
+    }
 
     ARGUS_LOCK();
     apply_decay(now_us);

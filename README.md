@@ -127,6 +127,40 @@ python3 tools/gen_oui_table.py
 The vendor-to-category mapping lives in `tools/gen_oui_table.py` — add vendors
 there, not to the generated header.
 
+## Ignoring what you already know about
+
+A detector that cries wolf at your own doorbell every day is one you stop
+reading. Anything already judged harmless can be muted, on either radio, at
+four levels of breadth:
+
+| Rule | Ignores | Use it for |
+|---|---|---|
+| `mac` | one exact address | your own phone, your own tag |
+| `oui` | a whole vendor prefix | a neighbour's camera brand |
+| `class` | an entire class | every `camera` on a busy street |
+| `ssid` | an SSID substring, case-insensitive | a building's camera network |
+
+Muted sightings are suppressed before they reach the device table: they are not
+logged, not scored, and cannot be promoted by the follower heuristic. A `class`
+rule deliberately never matches unclassified traffic, so muting `camera` does
+not quietly switch off follower detection.
+
+Rules are stored in NVS and survive a reboot. Manage them from the **Ignored**
+panel in the console, or over the API:
+
+```
+GET  /api/mutes
+POST /api/mute?mac=AA:BB:CC:DD:EE:FF
+POST /api/mute?oui=AA:BB:CC
+POST /api/mute?class=camera
+POST /api/mute?ssid=lobby
+POST /api/unmute?index=0
+POST /api/unmute?all=1
+```
+
+Each row in the device table also has an **ignore** button, which is the usual
+way to add one.
+
 ## Limitations
 
 Read these before trusting it.

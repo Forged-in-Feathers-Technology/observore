@@ -52,7 +52,25 @@
   }
   button:hover { border-color: var(--dim); }
   footer { margin-top: 14px; display: flex; justify-content: space-between;
-           align-items: center; color: var(--dim); font-size: 11px; }
+           align-items: center; color: var(--dim); font-size: 11px; gap: 10px; }
+  .mini { padding: 2px 8px; font-size: 11px; }
+  .panel { margin-top: 16px; border: 1px solid var(--line); border-radius: 6px;
+           background: var(--panel); padding: 12px 14px; }
+  .panel h2 { font-size: 11px; margin: 0 0 10px; color: var(--dim);
+              text-transform: uppercase; letter-spacing: 0.06em; }
+  .rules { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rule { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+          border: 1px solid var(--line); border-radius: 12px; padding: 2px 4px 2px 9px; }
+  .rule .k { color: var(--dim); }
+  .rule button { border: 0; background: none; color: var(--dim); cursor: pointer;
+                 font: inherit; padding: 0 4px; line-height: 1; }
+  .rule button:hover { color: var(--alert); }
+  .add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  select, input {
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 5px; padding: 5px 8px; font: inherit; font-size: 12px;
+  }
+  input { min-width: 190px; }
 </style>
 </head>
 <body>
@@ -76,7 +94,7 @@
     <thead>
       <tr>
         <th>class</th><th>label</th><th>mac</th><th>detail</th>
-        <th>rssi</th><th>via</th><th>evidence</th><th>hits</th><th>last</th>
+        <th>rssi</th><th>via</th><th>evidence</th><th>hits</th><th>last</th><th></th>
       </tr>
     </thead>
     <tbody id="rows"></tbody>
@@ -84,9 +102,27 @@
   <div class="empty" id="empty">Nothing detected yet.</div>
 </div>
 
+<div class="panel">
+  <h2>Ignored <span id="muteinfo" class="dim"></span></h2>
+  <div class="rules" id="rules"></div>
+  <div class="add">
+    <select id="kind">
+      <option value="mac">this MAC</option>
+      <option value="oui">this vendor prefix</option>
+      <option value="class">this whole class</option>
+      <option value="ssid">SSID containing</option>
+    </select>
+    <input id="value" placeholder="AA:BB:CC:DD:EE:FF">
+    <button id="add">Ignore</button>
+  </div>
+</div>
+
 <footer>
   <span id="updated">connecting…</span>
-  <button id="clear">Clear log</button>
+  <span>
+    <button class="mini" id="unmuteall">Clear ignores</button>
+    <button class="mini" id="clear">Clear log</button>
+  </span>
 </footer>
 
 <script>
@@ -127,6 +163,7 @@ async function refresh() {
         ['text', 'dim', d.evidence],
         ['text', 'dim', String(d.hits)],
         ['text', 'dim', ago(d.last_seen_s) + ' ago'],
+        ['mute', '', d.mac],
       ];
       for (const [kind, cls, value] of cells) {
         const td = document.createElement('td');
@@ -135,6 +172,13 @@ async function refresh() {
           s.className = cls;
           s.textContent = value;
           td.appendChild(s);
+        } else if (kind === 'mute') {
+          const b = document.createElement('button');
+          b.className = 'mini';
+          b.textContent = 'ignore';
+          b.title = 'Stop reporting this device';
+          b.addEventListener('click', () => mute('mac', value));
+          td.appendChild(b);
         } else {
           td.className = cls;
           td.textContent = value;   // textContent, never innerHTML: these are
@@ -145,11 +189,66 @@ async function refresh() {
       rows.appendChild(tr);
     }
     $('empty').style.display = devices.devices.length ? 'none' : 'block';
+
+    const mutes = await fetch('/api/mutes').then(r => r.json());
+    $('muteinfo').textContent = mutes.rules.length
+      ? '— ' + mutes.suppressed + ' sightings suppressed'
+      : '— nothing ignored yet';
+    const rules = $('rules');
+    rules.replaceChildren();
+    for (const r of mutes.rules) {
+      const el = document.createElement('span');
+      el.className = 'rule';
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = r.kind;
+      const v = document.createElement('span');
+      v.textContent = r.value;
+      const x = document.createElement('button');
+      x.textContent = '×';
+      x.title = 'Stop ignoring';
+      x.addEventListener('click', async () => {
+        await fetch('/api/unmute?index=' + r.index, { method: 'POST' });
+        refresh();
+      });
+      el.append(k, v, x);
+      rules.appendChild(el);
+    }
     $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     $('updated').textContent = 'connection lost — retrying';
   }
 }
+
+async function mute(kind, value) {
+  const res = await fetch(
+    '/api/mute?' + kind + '=' + encodeURIComponent(value), { method: 'POST' });
+  const out = await res.json();
+  if (!out.ok) {
+    $('updated').textContent = 'ignore failed: ' + out.error;
+    return;
+  }
+  refresh();
+}
+
+$('kind').addEventListener('change', () => {
+  $('value').placeholder = {
+    mac: 'AA:BB:CC:DD:EE:FF',
+    oui: 'AA:BB:CC',
+    class: 'camera',
+    ssid: 'part of an SSID',
+  }[$('kind').value];
+});
+
+$('add').addEventListener('click', () => {
+  const v = $('value').value.trim();
+  if (v) { mute($('kind').value, v); $('value').value = ''; }
+});
+
+$('unmuteall').addEventListener('click', async () => {
+  await fetch('/api/unmute?all=1', { method: 'POST' });
+  refresh();
+});
 
 $('clear').addEventListener('click', async () => {
   await fetch('/api/clear', { method: 'POST' });

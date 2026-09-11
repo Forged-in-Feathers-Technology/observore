@@ -2,7 +2,8 @@
 CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra -Werror -O1 -g -DARGUS_HOST_TEST
 INCS     = -I../main
-SRCS     = test_detect.c ../main/argus_detect.c ../main/argus_track.c
+SRCS     = test_detect.c ../main/argus_detect.c ../main/argus_track.c \
+           ../main/argus_mute.c
 
 run: $(SRCS) ../main/argus_oui_table.h
 	$(CC) $(CFLAGS) $(INCS) $(SRCS) -o run

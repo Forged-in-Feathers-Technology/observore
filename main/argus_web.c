@@ -1,7 +1,9 @@
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "argus_mute.h"
 #include "argus_track.h"
 #include "argus_web.h"
 #include "argus_wifi.h"
@@ -66,10 +68,12 @@ static esp_err_t status_handler(httpd_req_t *req)
     int n = snprintf(body, sizeof(body),
                      "{\"score\":%u,\"level\":\"%s\",\"devices\":%u,"
                      "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
-                     ",\"mode\":\"%s\",\"counts\":{",
+                     ",\"mode\":\"%s\",\"muted\":%zu,"
+                     "\"suppressed\":%" PRIu32 ",\"counts\":{",
                      st.score, argus_level_name(st.level), st.device_count,
                      st.total_sightings, now / 1000000,
-                     argus_wifi_mode() == ARGUS_MODE_CONSOLE ? "console" : "patrol");
+                     argus_wifi_mode() == ARGUS_MODE_CONSOLE ? "console" : "patrol",
+                     argus_mute_count(), argus_mute_suppressed());
 
     for (int c = 1; c < ARGUS_CLASS_MAX && n < (int)sizeof(body); c++) {
         n += snprintf(body + n, sizeof(body) - n, "%s\"%s\":%" PRIu32,
@@ -123,6 +127,142 @@ static esp_err_t devices_handler(httpd_req_t *req)
     return send_json(req, body);
 }
 
+/* Read one query parameter.  Returns false when absent. */
+static bool query_param(httpd_req_t *req, const char *key, char *out, size_t len)
+{
+    char query[256];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return false;
+    }
+    if (httpd_query_key_value(query, key, out, len) != ESP_OK) {
+        return false;
+    }
+    /* Values arrive percent-encoded; SSIDs routinely contain spaces. */
+    char *w = out;
+    for (char *r = out; *r; r++) {
+        if (*r == '+') {
+            *w++ = ' ';
+        } else if (*r == '%' && r[1] && r[2]) {
+            int hi = (r[1] <= '9') ? r[1] - '0' : (r[1] | 0x20) - 'a' + 10;
+            int lo = (r[2] <= '9') ? r[2] - '0' : (r[2] | 0x20) - 'a' + 10;
+            if (hi >= 0 && hi < 16 && lo >= 0 && lo < 16) {
+                *w++ = (char)((hi << 4) | lo);
+                r += 2;
+            } else {
+                *w++ = *r;
+            }
+        } else {
+            *w++ = *r;
+        }
+    }
+    *w = '\0';
+    return true;
+}
+
+static esp_err_t fail(httpd_req_t *req, const char *why)
+{
+    httpd_resp_set_status(req, "400 Bad Request");
+    char body[160];
+    char safe[96];
+    json_escape(why, safe, sizeof(safe));
+    snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", safe);
+    return send_json(req, body);
+}
+
+static esp_err_t mutes_handler(httpd_req_t *req)
+{
+    static argus_mute_rule_t rules[ARGUS_MUTE_MAX];
+    size_t n = argus_mute_list(rules, ARGUS_MUTE_MAX);
+
+    char body[4096];
+    int w = snprintf(body, sizeof(body), "{\"suppressed\":%" PRIu32 ",\"rules\":[",
+                     argus_mute_suppressed());
+    for (size_t i = 0; i < n; i++) {
+        const argus_mute_rule_t *r = &rules[i];
+        char value[ARGUS_MUTE_SSID_LEN * 2];
+
+        switch (r->kind) {
+            case ARGUS_MUTE_MAC:
+                snprintf(value, sizeof(value), "%02X:%02X:%02X:%02X:%02X:%02X",
+                         r->mac[0], r->mac[1], r->mac[2],
+                         r->mac[3], r->mac[4], r->mac[5]);
+                break;
+            case ARGUS_MUTE_OUI:
+                snprintf(value, sizeof(value), "%02X:%02X:%02X",
+                         r->mac[0], r->mac[1], r->mac[2]);
+                break;
+            case ARGUS_MUTE_CLASS:
+                snprintf(value, sizeof(value), "%s", argus_class_name(r->cls));
+                break;
+            default:
+                json_escape(r->ssid, value, sizeof(value));
+                break;
+        }
+        w += snprintf(body + w, sizeof(body) - w,
+                      "%s{\"index\":%zu,\"kind\":\"%s\",\"value\":\"%s\"}",
+                      i ? "," : "", i, argus_mute_kind_name(r->kind), value);
+    }
+    snprintf(body + w, sizeof(body) - w, "]}");
+    return send_json(req, body);
+}
+
+static esp_err_t mute_handler(httpd_req_t *req)
+{
+    argus_mute_rule_t rule;
+    memset(&rule, 0, sizeof(rule));
+    char value[ARGUS_MUTE_SSID_LEN];
+
+    if (query_param(req, "mac", value, sizeof(value))) {
+        if (!argus_mute_parse_mac(value, rule.mac, ARGUS_MAC_LEN)) {
+            return fail(req, "mac must be AA:BB:CC:DD:EE:FF");
+        }
+        rule.kind = ARGUS_MUTE_MAC;
+    } else if (query_param(req, "oui", value, sizeof(value))) {
+        if (!argus_mute_parse_mac(value, rule.mac, 3)) {
+            return fail(req, "oui must be AA:BB:CC");
+        }
+        rule.kind = ARGUS_MUTE_OUI;
+    } else if (query_param(req, "class", value, sizeof(value))) {
+        argus_class_t cls;
+        if (!argus_mute_parse_class(value, &cls)) {
+            return fail(req, "unknown class");
+        }
+        rule.kind = ARGUS_MUTE_CLASS;
+        rule.cls = (uint8_t)cls;
+    } else if (query_param(req, "ssid", value, sizeof(value))) {
+        rule.kind = ARGUS_MUTE_SSID;
+        snprintf(rule.ssid, sizeof(rule.ssid), "%s", value);
+    } else {
+        return fail(req, "expected one of mac, oui, class, ssid");
+    }
+
+    esp_err_t err = argus_mute_add(&rule);
+    if (err == ESP_ERR_NO_MEM) {
+        return fail(req, "mute list is full");
+    }
+    if (err != ESP_OK) {
+        return fail(req, "invalid rule");
+    }
+    ESP_LOGI(TAG, "muted %s", argus_mute_kind_name(rule.kind));
+    return send_json(req, "{\"ok\":true}");
+}
+
+static esp_err_t unmute_handler(httpd_req_t *req)
+{
+    char value[16];
+    if (query_param(req, "all", value, sizeof(value))) {
+        argus_mute_clear();
+        return send_json(req, "{\"ok\":true}");
+    }
+    if (!query_param(req, "index", value, sizeof(value))) {
+        return fail(req, "expected index or all=1");
+    }
+    if (argus_mute_remove((size_t)strtoul(value, NULL, 10)) != ESP_OK) {
+        return fail(req, "no such rule");
+    }
+    return send_json(req, "{\"ok\":true}");
+}
+
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     argus_track_clear();
@@ -151,6 +291,9 @@ esp_err_t argus_web_start(void)
         {.uri = "/api/status",   .method = HTTP_GET,  .handler = status_handler},
         {.uri = "/api/devices",  .method = HTTP_GET,  .handler = devices_handler},
         {.uri = "/api/clear",    .method = HTTP_POST, .handler = clear_handler},
+        {.uri = "/api/mutes",    .method = HTTP_GET,  .handler = mutes_handler},
+        {.uri = "/api/mute",     .method = HTTP_POST, .handler = mute_handler},
+        {.uri = "/api/unmute",   .method = HTTP_POST, .handler = unmute_handler},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(s_server, &routes[i]);

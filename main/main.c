@@ -10,6 +10,7 @@
 
 #include "argus_ble.h"
 #include "argus_led.h"
+#include "argus_mute.h"
 #include "argus_track.h"
 #include "argus_web.h"
 #include "argus_wifi.h"
@@ -82,7 +83,10 @@ void app_main(void)
     argus_track_init();
     argus_led_init();
 
+    /* NVS is brought up by argus_wifi_init(); the mute store reads from it. */
     ESP_ERROR_CHECK(argus_wifi_init());
+    argus_mute_init();
+    ESP_LOGI(TAG, "%zu mute rules loaded", argus_mute_count());
     ESP_ERROR_CHECK(argus_ble_start());
 
     xTaskCreate(button_task, "argus_btn", 3072, NULL, 3, NULL);

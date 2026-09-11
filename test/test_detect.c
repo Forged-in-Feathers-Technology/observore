@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "argus_detect.h"
+#include "argus_mute.h"
 #include "argus_track.h"
 
 static int g_failures;
@@ -402,6 +403,135 @@ static void test_wifi_remote_id(void)
     CHECK(ev.cls == ARGUS_CLASS_CAMERA, "should fall back to camera");
 }
 
+static void test_mute(void)
+{
+    banner("mute rules");
+
+    argus_mute_init();
+    argus_track_init();
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+
+    const uint8_t ring[6]  = {0x54, 0xE0, 0x19, 0x01, 0x02, 0x03}; /* camera  */
+    const uint8_t ring2[6] = {0x54, 0xE0, 0x19, 0x09, 0x09, 0x09}; /* same OUI */
+    const uint8_t axon[6]  = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03}; /* bodycam */
+
+    argus_observation_t o_ring  = {.mac = ring,  .src = ARGUS_SRC_BLE, .rssi = -50,
+                                   .adv = boring, .adv_len = sizeof(boring)};
+    argus_observation_t o_ring2 = {.mac = ring2, .src = ARGUS_SRC_BLE, .rssi = -50,
+                                   .adv = boring, .adv_len = sizeof(boring)};
+    argus_observation_t o_axon  = {.mac = axon,  .src = ARGUS_SRC_BLE, .rssi = -50,
+                                   .adv = boring, .adv_len = sizeof(boring)};
+
+    /* Baseline: both report. */
+    CHECK(argus_track_observe(&o_ring, SECS(0)), "ring should report");
+    CHECK(argus_track_observe(&o_axon, SECS(0)), "axon should report");
+
+    /* Mute one exact address.  Its neighbour on the same OUI must survive. */
+    argus_track_init();
+    argus_mute_rule_t r = {.kind = ARGUS_MUTE_MAC};
+    memcpy(r.mac, ring, 6);
+    CHECK(argus_mute_add(&r) == ESP_OK, "add mac rule");
+    CHECK(!argus_track_observe(&o_ring, SECS(0)), "muted mac must be suppressed");
+    CHECK(argus_track_observe(&o_ring2, SECS(0)), "a different mac must survive");
+
+    argus_status_t st;
+    argus_track_status(&st, SECS(0));
+    CHECK(st.score == argus_class_points(ARGUS_CLASS_CAMERA),
+          "only the unmuted device should have scored, got %u", st.score);
+
+    /* Muting the vendor prefix takes both. */
+    argus_mute_clear();
+    argus_track_init();
+    r = (argus_mute_rule_t){.kind = ARGUS_MUTE_OUI};
+    memcpy(r.mac, ring, 3);
+    CHECK(argus_mute_add(&r) == ESP_OK, "add oui rule");
+    CHECK(!argus_track_observe(&o_ring, SECS(0)), "oui rule should suppress");
+    CHECK(!argus_track_observe(&o_ring2, SECS(0)), "oui rule should suppress");
+    CHECK(argus_track_observe(&o_axon, SECS(0)), "a different vendor must survive");
+
+    /* Muting a class takes the class and nothing else. */
+    argus_mute_clear();
+    argus_track_init();
+    r = (argus_mute_rule_t){.kind = ARGUS_MUTE_CLASS, .cls = ARGUS_CLASS_CAMERA};
+    CHECK(argus_mute_add(&r) == ESP_OK, "add class rule");
+    CHECK(!argus_track_observe(&o_ring, SECS(0)), "camera class muted");
+    CHECK(argus_track_observe(&o_axon, SECS(0)), "bodycam must still report");
+
+    /* A class rule must not swallow unclassified traffic, or muting cameras
+     * would quietly disable the follower heuristic too. */
+    const uint8_t stranger[6] = {0x4A, 0x11, 0x22, 0x33, 0x44, 0x55};
+    argus_observation_t o_unknown = {.mac = stranger, .src = ARGUS_SRC_BLE,
+                                     .rssi = -60, .addr_random = true,
+                                     .adv = boring, .adv_len = sizeof(boring)};
+    argus_track_observe(&o_unknown, SECS(0));
+    argus_track_observe(&o_unknown, SECS(10));
+    argus_track_observe(&o_unknown, SECS(20));
+    CHECK(argus_track_observe(&o_unknown, SECS(400)),
+          "follower heuristic must survive a class mute");
+
+    /* SSID substring, case-insensitively. */
+    argus_mute_clear();
+    argus_track_init();
+    r = (argus_mute_rule_t){.kind = ARGUS_MUTE_SSID};
+    snprintf(r.ssid, sizeof(r.ssid), "lobby");
+    CHECK(argus_mute_add(&r) == ESP_OK, "add ssid rule");
+    const uint8_t ap[6] = {0x00, 0x00, 0x00, 0x01, 0x02, 0x03};
+    argus_observation_t o_ap = {.mac = ap, .src = ARGUS_SRC_WIFI_SCAN,
+                                .rssi = -50, .ssid = "Lobby-CCTV-2"};
+    CHECK(!argus_track_observe(&o_ap, SECS(0)), "ssid rule should suppress");
+    o_ap.ssid = "Garage-CCTV-2";
+    CHECK(argus_track_observe(&o_ap, SECS(0)), "a different ssid must survive");
+
+    /* List hygiene. */
+    argus_mute_clear();
+    r = (argus_mute_rule_t){.kind = ARGUS_MUTE_CLASS, .cls = ARGUS_CLASS_CAMERA};
+    CHECK(argus_mute_add(&r) == ESP_OK, "first add");
+    CHECK(argus_mute_add(&r) == ESP_OK, "duplicate add should succeed");
+    CHECK(argus_mute_count() == 1, "duplicates must not accumulate, got %zu",
+          argus_mute_count());
+
+    /* Rules that would match everything are refused. */
+    argus_mute_rule_t empty_ssid = {.kind = ARGUS_MUTE_SSID};
+    CHECK(argus_mute_add(&empty_ssid) == ESP_ERR_INVALID_ARG,
+          "an empty ssid rule matches everything and must be refused");
+    argus_mute_rule_t bad_class = {.kind = ARGUS_MUTE_CLASS,
+                                   .cls = ARGUS_CLASS_UNKNOWN};
+    CHECK(argus_mute_add(&bad_class) == ESP_ERR_INVALID_ARG,
+          "muting the unknown class must be refused");
+
+    CHECK(argus_mute_remove(99) == ESP_ERR_NOT_FOUND, "out of range remove");
+    CHECK(argus_mute_remove(0) == ESP_OK, "in range remove");
+    CHECK(argus_mute_count() == 0, "list should be empty");
+
+    argus_mute_clear();
+}
+
+static void test_mac_parsing(void)
+{
+    banner("mac parsing");
+
+    uint8_t mac[6];
+    CHECK(argus_mute_parse_mac("AA:BB:CC:DD:EE:FF", mac, 6), "colon form");
+    CHECK(mac[0] == 0xAA && mac[5] == 0xFF, "wrong bytes");
+    CHECK(argus_mute_parse_mac("aabbccddeeff", mac, 6), "bare form");
+    CHECK(mac[0] == 0xAA && mac[5] == 0xFF, "wrong bytes");
+    CHECK(argus_mute_parse_mac("AA-BB-CC", mac, 3), "dash form, 3 bytes");
+
+    /* A typo must be an error, not a rule that silently matches the wrong
+     * device.  Trailing rubbish is the dangerous case. */
+    CHECK(!argus_mute_parse_mac("AA:BB:CC:DD:EE:FF:00", mac, 6), "too long");
+    CHECK(!argus_mute_parse_mac("AA:BB:CC", mac, 6), "too short");
+    CHECK(!argus_mute_parse_mac("ZZ:BB:CC:DD:EE:FF", mac, 6), "non-hex");
+    CHECK(!argus_mute_parse_mac("", mac, 6), "empty");
+
+    argus_class_t cls;
+    CHECK(argus_mute_parse_class("bodycam", &cls), "class name");
+    CHECK(cls == ARGUS_CLASS_BODYCAM, "wrong class");
+    CHECK(!argus_mute_parse_class("nonsense", &cls), "unknown class");
+    CHECK(!argus_mute_parse_class("unknown", &cls),
+          "the unknown class must not be addressable by name");
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -415,6 +545,8 @@ int main(void)
     test_table_pressure();
     test_snapshot_order();
     test_wifi_remote_id();
+    test_mute();
+    test_mac_parsing();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
