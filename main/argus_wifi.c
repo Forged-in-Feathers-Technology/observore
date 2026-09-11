@@ -32,6 +32,13 @@ static argus_mode_t       s_mode = ARGUS_MODE_PATROL;
 static esp_netif_t       *s_ap_netif;
 static char               s_ap_ssid[32];
 static bool               s_initialised;
+/* s_mode is only meaningful once it has been pushed into the driver.  Without
+ * this, the first set_mode(PATROL) matches the initial value of s_mode, takes
+ * the no-op path, and esp_wifi_start() never runs -- leaving the sniffer
+ * working but every AP scan failing with ESP_ERR_WIFI_NOT_STARTED. */
+static bool               s_mode_applied;
+static uint32_t           s_sniffed_frames;   /* accepted by the parser */
+static uint32_t           s_sniffer_calls;    /* raw callback entries */
 
 /* ------------------------------------------------------------------ */
 /* Promiscuous sniffing                                               */
@@ -98,6 +105,7 @@ static bool parse_ies(const uint8_t *ies, size_t len, char *ssid, size_t ssid_le
 
 static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 {
+    s_sniffer_calls++;
     if (type != WIFI_PKT_MGMT) {
         return;
     }
@@ -133,6 +141,7 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         .ssid      = ssid[0] ? ssid : NULL,
         .remote_id = odid,
     };
+    s_sniffed_frames++;
     argus_track_observe(&obs, esp_timer_get_time());
 }
 
@@ -148,12 +157,17 @@ static void run_ap_scan(void)
         .channel = 0,           /* all channels */
         .show_hidden = true,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time.active = {.min = 60, .max = 120},
+        /* scan_time is deliberately left at zero.  With Bluetooth enabled the
+         * driver rejects custom active-scan timing outright ("Should use
+         * default active scan time parameter") and the scan returns nothing,
+         * so the coexistence arbiter picks the dwell instead. */
     };
 
     esp_err_t err = esp_wifi_scan_start(&cfg, true /* block */);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "scan failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "scan failed in %s mode: %s",
+                 s_mode == ARGUS_MODE_PATROL ? "patrol" : "console",
+                 esp_err_to_name(err));
         return;
     }
 
@@ -176,7 +190,7 @@ static void run_ap_scan(void)
         };
         argus_track_observe(&obs, now);
     }
-    ESP_LOGD(TAG, "scan: %u APs", count);
+    ESP_LOGI(TAG, "scan: %u APs", count);
 }
 
 /* ------------------------------------------------------------------ */
@@ -191,6 +205,16 @@ static void derive_ap_ssid(void)
      * are distinguishable, and deliberately does not say "argus". */
     snprintf(s_ap_ssid, sizeof(s_ap_ssid), CONFIG_ARGUS_AP_SSID_PREFIX "-%02X%02X%02X",
              mac[3], mac[4], mac[5]);
+}
+
+uint32_t argus_wifi_sniffed_frames(void)
+{
+    return s_sniffed_frames;
+}
+
+uint32_t argus_wifi_sniffer_calls(void)
+{
+    return s_sniffer_calls;
 }
 
 const char *argus_wifi_ap_ssid(void)
@@ -230,13 +254,6 @@ esp_err_t argus_wifi_init(void)
     derive_ap_ssid();
     s_initialised = true;
 
-    /* Filter the sniffer down to management frames in the driver rather than
-     * in the callback: data frames are the overwhelming majority of the air
-     * and dropping them early is what keeps the callback cheap. */
-    wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(sniffer_cb));
-
     return argus_wifi_set_mode(ARGUS_MODE_PATROL);
 }
 
@@ -247,7 +264,7 @@ argus_mode_t argus_wifi_mode(void)
 
 esp_err_t argus_wifi_set_mode(argus_mode_t mode)
 {
-    if (s_initialised && mode == s_mode) {
+    if (s_mode_applied && mode == s_mode) {
         return ESP_OK;
     }
 
@@ -278,10 +295,15 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
          * free to be retuned to any channel. */
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
+        /* Power save must be off to sniff.  The default WIFI_PS_MIN_MODEM
+         * sleeps the receiver between beacons, which on an unassociated
+         * station means it is asleep for nearly all of the sweep. */
+        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
         ESP_LOGI(TAG, "patrol mode: scanning and sniffing");
     }
 
     s_mode = mode;
+    s_mode_applied = true;
     return ESP_OK;
 }
 
@@ -298,6 +320,19 @@ void argus_wifi_patrol_cycle(void)
      * anything under about 120 ms per channel starts missing APs outright. */
     const int channels = ARGUS_CHANNEL_MAX - ARGUS_CHANNEL_MIN + 1;
     const int dwell_ms = ARGUS_SNIFF_MS / channels;
+
+    /* Register the filter and callback here, immediately before enabling
+     * promiscuous mode, rather than once at init.  Registering them on a
+     * stopped driver silently does not survive the esp_wifi_stop()/start()
+     * that a mode change performs, and the symptom is a sniffer that reports
+     * ic_enable_sniffer and then never delivers a single frame.
+     *
+     * The filter drops everything but management frames in the driver: data
+     * frames are the overwhelming majority of the air, and rejecting them
+     * before the callback is what keeps this cheap. */
+    wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(sniffer_cb));
 
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     for (int ch = ARGUS_CHANNEL_MIN; ch <= ARGUS_CHANNEL_MAX; ch++) {

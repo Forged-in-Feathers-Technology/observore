@@ -13,6 +13,11 @@ typedef struct {
     int8_t          rssi;
     uint8_t         channel;
 
+    /* BLE reports whether the advertiser address is random directly.  A
+     * random address carries no vendor information, so a prefix lookup on one
+     * is not merely useless but actively misleading. */
+    bool            addr_random;
+
     /* BLE: the raw advertising payload, still in length/type/value form. */
     const uint8_t  *adv;
     size_t          adv_len;

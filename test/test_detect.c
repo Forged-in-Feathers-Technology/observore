@@ -145,6 +145,18 @@ static void test_ble_signatures(void)
     CHECK(ev.cls == ARGUS_CLASS_ALPR, "Flock name should be ALPR");
     CHECK(ev.evidence == ARGUS_EVIDENCE_NAME, "expected name evidence");
 
+    /* A bare Samsung company ID must NOT be reported.  Every Samsung phone,
+     * watch and earbud advertises 0x0075; matching the vendor alone turns a
+     * crowded room into a wall of phantom trackers.  Observed live. */
+    uint8_t samsung[] = {0x05, 0xFF, 0x75, 0x00, 0x42, 0x01, 0x00};
+    CHECK(!classify_ble(mac, samsung, sizeof(samsung), &ev),
+          "bare Samsung company ID must not be flagged as a tracker");
+
+    /* The actual SmartTag signature is its 0xFD5A service data. */
+    uint8_t smarttag[] = {0x05, 0x16, 0x5A, 0xFD, 0x01, 0x02};
+    CHECK(classify_ble(mac, smarttag, sizeof(smarttag), &ev), "SmartTag missed");
+    CHECK(ev.cls == ARGUS_CLASS_TRACKER, "SmartTag should be a tracker");
+
     /* Nothing at all. */
     uint8_t boring[] = {0x02, 0x01, 0x06};
     CHECK(!classify_ble(mac, boring, sizeof(boring), &ev),
@@ -156,6 +168,29 @@ static void test_ble_signatures(void)
     CHECK(classify_ble(ring_mac, findmy, sizeof(findmy), &ev), "no match");
     CHECK(ev.cls == ARGUS_CLASS_TRACKER,
           "Find My payload should override the Ring OUI");
+}
+
+static void test_random_address(void)
+{
+    banner("ble random addresses");
+
+    /* A random BLE address that happens to collide with a real vendor prefix
+     * must not be attributed to that vendor.  BLE reports the address type on
+     * the wire, so there is no need to guess from the MAC bits. */
+    const uint8_t looks_like_ring[6] = {0x54, 0xE0, 0x19, 0x01, 0x02, 0x03};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    argus_observation_t obs = {
+        .mac = looks_like_ring, .src = ARGUS_SRC_BLE, .rssi = -50,
+        .addr_random = true, .adv = boring, .adv_len = sizeof(boring),
+    };
+    argus_event_t ev;
+    CHECK(!argus_classify(&obs, &ev),
+          "a random address must not resolve to a vendor prefix");
+
+    /* The same address reported as public does resolve. */
+    obs.addr_random = false;
+    CHECK(argus_classify(&obs, &ev), "public address should match the OUI");
+    CHECK(ev.cls == ARGUS_CLASS_CAMERA, "should be a camera");
 }
 
 static void test_ssid(void)
@@ -372,6 +407,7 @@ int main(void)
     test_oui_lookup();
     test_adv_parsing();
     test_ble_signatures();
+    test_random_address();
     test_ssid();
     test_follower();
     test_scoring();

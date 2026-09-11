@@ -332,12 +332,10 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
             set_label(ev, "Find My tracker");
             return true;
         }
-        if (company == COMPANY_SAMSUNG) {
-            ev->cls = ARGUS_CLASS_TRACKER;
-            ev->evidence = ARGUS_EVIDENCE_MFG_DATA;
-            set_label(ev, "Samsung tracker");
-            return true;
-        }
+        /* Note there is deliberately no bare COMPANY_SAMSUNG rule here.
+         * Every Samsung phone, watch and earbud advertises 0x0075, so matching
+         * the company ID alone reports a crowded room as four trackers.  The
+         * SmartTag is identified by its 0xFD5A service data below instead. */
         if (company == COMPANY_META || company == COMPANY_META_TECH) {
             ev->cls = ARGUS_CLASS_SMARTGLASSES;
             ev->evidence = ARGUS_EVIDENCE_MFG_DATA;
@@ -394,8 +392,10 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
     bool matched = false;
 
     /* Vendor prefix first: it is the strongest signal available and applies to
-     * every source.  Randomised MACs are skipped inside the lookup. */
-    const argus_oui_t *oui = argus_oui_lookup(obs->mac);
+     * every source.  BLE reports the address type on the wire, which is
+     * authoritative; the locally-administered bit is only a fallback for
+     * Wi-Fi, where no such field exists. */
+    const argus_oui_t *oui = obs->addr_random ? NULL : argus_oui_lookup(obs->mac);
     if (oui) {
         ev.cls = oui->cls;
         ev.evidence = ARGUS_EVIDENCE_OUI;

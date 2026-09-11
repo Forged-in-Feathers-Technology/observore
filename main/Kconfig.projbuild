@@ -14,6 +14,23 @@ config ARGUS_BUTTON_GPIO
         while running toggles the console SoftAP; it only enters download mode
         when held across a reset, so reusing it here is safe.
 
+config ARGUS_BLE_SCAN_INTERVAL_MS
+    int "BLE scan interval (ms)"
+    default 160
+    range 20 1000
+
+config ARGUS_BLE_SCAN_WINDOW_MS
+    int "BLE scan window (ms)"
+    default 60
+    range 10 1000
+    help
+        Must not exceed the interval.  BLE and Wi-Fi share one radio and the
+        coexistence arbiter divides it by this duty cycle, sharply and
+        non-linearly: at a 100% duty cycle the Wi-Fi sniffer receives almost
+        nothing at all (2 frames in 40 s, measured), while 37.5% still yields
+        around 200.  The default trades roughly a third of BLE throughput for
+        a sniffer that functions.
+
 config ARGUS_AP_SSID_PREFIX
     string "Console SoftAP SSID prefix"
     default "console"

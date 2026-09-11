@@ -53,6 +53,23 @@ it away while sustained presence keeps it lit.
 Adverts weaker than −90 dBm are discarded; they are far enough away to be
 someone else's problem and they dominate the false-positive rate.
 
+### The radio is shared, and it shows
+
+BLE and Wi-Fi share one radio. The coexistence arbiter divides it by the BLE
+duty cycle, and the relationship is sharply non-linear. Measured on a XIAO
+ESP32S3 over 40 s in a flat with 15 APs in range:
+
+| BLE window/interval | duty | BLE sightings | Wi-Fi frames sniffed |
+|---|---|---|---|
+| 100/100 ms | 100% | 1490 | **2** |
+| 60/160 ms | 37.5% | 925 | 199 |
+| 45/160 ms | 28% | 747 | 223 |
+| 30/160 ms | 18.75% | 608 | 278 |
+
+A continuously-open BLE receiver does not slow the sniffer down, it starves it
+outright. The default (60/160) gives up about a third of BLE throughput to get
+a sniffer that works. Both values are tunable under `menuconfig` → **Argus**.
+
 ## Why there are modes
 
 The ESP32-S3 has one radio on one channel. Channel-hopping to sniff and staying

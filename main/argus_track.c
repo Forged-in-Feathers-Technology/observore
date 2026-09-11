@@ -21,6 +21,7 @@ typedef struct {
     bool          classified;
     bool          has_scored;   /* distinct from last_scored_us == 0, which is
                                  * a legitimate timestamp at boot */
+    bool          reported;     /* already emitted to the serial event log */
 } argus_slot_t;
 
 static argus_slot_t s_devices[ARGUS_MAX_DEVICES];
@@ -266,6 +267,24 @@ size_t argus_track_snapshot(argus_event_t *out, size_t max, int64_t now_us)
         }
         out[j] = key;
     }
+    return n;
+}
+
+size_t argus_track_drain_new(argus_event_t *out, size_t max)
+{
+    if (!out || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    ARGUS_LOCK();
+    for (size_t i = 0; i < ARGUS_MAX_DEVICES && n < max; i++) {
+        if (s_devices[i].in_use && s_devices[i].classified &&
+            !s_devices[i].reported) {
+            s_devices[i].reported = true;
+            out[n++] = s_devices[i].ev;
+        }
+    }
+    ARGUS_UNLOCK();
     return n;
 }
 

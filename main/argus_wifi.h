@@ -24,5 +24,15 @@ argus_mode_t argus_wifi_mode(void);
  * ARGUS_SCAN_MS + ARGUS_SNIFF_MS.  No-op outside patrol mode. */
 void argus_wifi_patrol_cycle(void);
 
+/* Management frames accepted by the sniffer since boot.  A patrol cycle that
+ * leaves this unchanged means the sniffer is not hearing air, which looks
+ * exactly like a quiet neighbourhood unless you can see the number. */
+uint32_t argus_wifi_sniffed_frames(void);
+
+/* Raw callback entries, before any parsing.  Compared against the accepted
+ * count this says whether a silent sniffer is not receiving or is being
+ * rejected by our own frame handling. */
+uint32_t argus_wifi_sniffer_calls(void);
+
 const char *argus_wifi_ap_ssid(void);
 const char *argus_wifi_ap_password(void);

@@ -57,6 +57,11 @@ void argus_track_status(argus_status_t *out, int64_t now_us);
  * ones exist purely to feed the follower heuristic. */
 size_t argus_track_snapshot(argus_event_t *out, size_t max, int64_t now_us);
 
+/* Collect devices classified since the last call and mark them reported.
+ * This is the serial event log: each detection is printed once, when it is
+ * first identified, rather than on every repeat sighting. */
+size_t argus_track_drain_new(argus_event_t *out, size_t max);
+
 void argus_track_clear(void);
 
 const char *argus_level_name(argus_level_t level);
