@@ -1,0 +1,156 @@
+# Argus
+
+A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/).
+
+It tells you what is watching you. It listens for the radio signatures of body
+cameras, licence-plate readers, IP cameras, Bluetooth trackers, smart glasses
+and Remote ID drones, scores what it finds, and shows you the log on a web page
+you raise on demand.
+
+Named for Argus Panoptes, who had a hundred eyes and was set to watch.
+
+## What it does
+
+**It listens, and it does not answer.** BLE scanning is passive — the radio
+never emits a `SCAN_REQ`, so nothing it observes can observe it back. Wi-Fi
+sniffing is receive-only. The device transmits exactly once: when you hold the
+button to raise the console, and only for as long as you leave it up.
+
+Detection runs across three phases:
+
+| Phase | What it catches |
+|---|---|
+| BLE passive scan (continuous) | trackers, body cameras, smart glasses, Remote ID drones, followers |
+| Wi-Fi active scan (~3 s/cycle) | camera and ALPR vendor APs, camera-keyword SSIDs |
+| Wi-Fi promiscuous sniff (~5 s/cycle, ch 1–13) | Remote ID beacons, hidden and non-broadcasting APs |
+
+Classification uses four independent kinds of evidence, and the UI tells you
+which one fired so you can judge a hit rather than just trust it:
+
+- **OUI** — 209 vendor prefixes generated from the IEEE MA-L registry
+  (bodycam, ALPR, camera, fleet-telematics, drone).
+- **Payload signatures** — Apple Find My (`0x004C`/type `0x12`), Samsung,
+  Tile (`0xFEED`), Galaxy SmartTag (`0xFD5A`), Google Fast Pair (`0xFE2C`),
+  ASTM F3411 Remote ID over BLE (`0xFFFA`/`0x0D`) and over Wi-Fi
+  (vendor IE `FA:0B:BC`/`0x0D`).
+- **Name and SSID keywords** — for hardware that announces itself.
+- **Persistence** — the follower heuristic: an unclassified BLE address seen
+  3+ times spanning 5+ minutes is reported as following you. This is the part
+  that catches hardware with no signature at all, and it is the reason to
+  build the thing.
+
+### Scoring
+
+Each hit adds points by class (bodycam and ALPR 5, follower 4, tracker/drone/
+glasses 3, telematics 2, camera 1). The score decays one point per minute and
+each device can only re-score every 120 seconds, so one loud beacon cannot run
+it away while sustained presence keeps it lit.
+
+- **0–2 clear** — LED winks once every 5 s
+- **3–5 caution** — LED pulses once a second
+- **6+ alert** — LED flutters
+
+Adverts weaker than −90 dBm are discarded; they are far enough away to be
+someone else's problem and they dominate the false-positive rate.
+
+## Why there are modes
+
+The ESP32-S3 has one radio on one channel. Channel-hopping to sniff and staying
+associated to an access point are mutually exclusive — so Argus cannot both
+watch the band and serve you a web page at the same time.
+
+- **Patrol** (default) — unassociated, scanning and sniffing. No network.
+- **Console** — SoftAP up, web UI served, sniffing suspended.
+
+Hold the BOOT button for 1.5 s to toggle. BLE scanning continues in both modes;
+it is unaffected by the Wi-Fi channel, and it is where most detections come
+from.
+
+## Build and flash
+
+Needs [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.5 or later.
+
+```bash
+. ~/esp/esp-idf/export.sh
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
+`/dev/ttyACM0`, not `/dev/ttyUSB0`.
+
+Configure the LED pin, button pin and console SoftAP credentials under
+`idf.py menuconfig` → **Argus**. **Change the default console password.**
+
+### Reading the log
+
+Hold the button, join the `console-XXXXXX` network, open
+<http://192.168.4.1/>. The page lists every classified device with its class,
+MAC, signal, evidence and how long ago it was last heard.
+
+### Tests
+
+The classification, parsing and scoring logic builds and runs on the host with
+no hardware and no ESP-IDF:
+
+```bash
+make -C test test
+```
+
+### Regenerating the OUI table
+
+`main/argus_oui_table.h` is generated, not hand-maintained. Vendors get new
+prefixes; refresh it with:
+
+```bash
+python3 tools/gen_oui_table.py
+```
+
+The vendor-to-category mapping lives in `tools/gen_oui_table.py` — add vendors
+there, not to the generated header.
+
+## Limitations
+
+Read these before trusting it.
+
+- **MAC randomisation defeats the follower heuristic.** Modern phones and
+  most trackers in separated mode rotate their Bluetooth address every ~15
+  minutes. A follower that rotates will never accumulate 3 sightings under one
+  address. Argus catches devices with static or slowly-rotating addresses; it
+  will miss a well-behaved rotating one.
+- **Absence of evidence is not evidence of absence.** Wired cameras, cellular
+  ALPR units with the radio off, and anything on 5 GHz are invisible to it.
+  A clear reading means nothing was detected, not that nothing is there.
+- **Vendor prefixes identify manufacturers, not purpose.** A Ring OUI is a
+  Ring device; it is a doorbell far more often than it is surveillance aimed
+  at you. Camera-class hits are scored at 1 point for this reason.
+- **Some signatures are inferred, not documented.** The Meta company IDs and
+  several name keywords are derived from public reporting rather than vendor
+  specification, and are unverified against hardware. Treat a
+  `smart-glasses` hit as a lead.
+- **Fast Pair is noisy.** Ordinary headphones advertise `0xFE2C`. It is
+  reported because Google's Find Hub trackers use it too.
+- **2.4 GHz only.** The sniffer sweeps channels 1–13.
+
+## Legal note
+
+Argus is a receiver. It observes broadcasts that are, by design, transmitted
+publicly and unencrypted. It does not deauthenticate, inject, jam, associate,
+crack, or interfere with anything. Passive reception of broadcast frames is
+lawful in most jurisdictions — but "most" is not "all", and what you do with a
+log is a separate question from how you gathered it. Check your local law.
+
+## Credit
+
+The concept — passive BLE plus Wi-Fi surveillance detection with a decaying
+threat score on a pocket-sized ESP32 — comes from
+[simeononsecurity/eye-spy](https://github.com/simeononsecurity/eye-spy)
+(Apache-2.0). Argus is an independent implementation for different hardware:
+ESP-IDF rather than Arduino, a web console rather than an RGB LED, and vendor
+tables generated from the IEEE registry rather than maintained by hand. No code
+was taken from it.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

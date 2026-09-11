@@ -1,0 +1,31 @@
+menu "Argus"
+
+config ARGUS_LED_GPIO
+    int "User LED GPIO"
+    default 21
+    help
+        The XIAO ESP32S3 user LED is GPIO21 and is active low.
+
+config ARGUS_BUTTON_GPIO
+    int "Mode button GPIO"
+    default 0
+    help
+        GPIO0 is the BOOT button on the XIAO ESP32S3, active low.  Holding it
+        while running toggles the console SoftAP; it only enters download mode
+        when held across a reset, so reusing it here is safe.
+
+config ARGUS_AP_SSID_PREFIX
+    string "Console SoftAP SSID prefix"
+    default "console"
+    help
+        The last three bytes of the MAC are appended.  The default deliberately
+        does not advertise what the device is.
+
+config ARGUS_AP_PASSWORD
+    string "Console SoftAP password"
+    default "argus-console"
+    help
+        Must be at least 8 characters for WPA2; a shorter value leaves the
+        SoftAP open.  Change it.
+
+endmenu

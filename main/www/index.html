@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argus</title>
+<style>
+  :root {
+    --bg: #0d0f12; --panel: #16191f; --line: #262b33;
+    --fg: #e6e9ef; --dim: #8b93a1;
+    --clear: #3fb950; --caution: #d29922; --alert: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 16px; max-width: 900px; margin-inline: auto;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: 0.12em; text-transform: uppercase; }
+  .sub { color: var(--dim); font-size: 12px; }
+  .banner {
+    border: 1px solid var(--line); border-left-width: 4px;
+    background: var(--panel); border-radius: 6px;
+    padding: 14px 16px; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .banner.clear   { border-left-color: var(--clear); }
+  .banner.caution { border-left-color: var(--caution); }
+  .banner.alert   { border-left-color: var(--alert); }
+  .level { font-size: 20px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+  .clear .level { color: var(--clear); }
+  .caution .level { color: var(--caution); }
+  .alert .level { color: var(--alert); }
+  .stats { display: flex; gap: 20px; flex-wrap: wrap; color: var(--dim); font-size: 12px; }
+  .stats b { color: var(--fg); font-weight: 600; }
+  .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { background: var(--panel); color: var(--dim); font-weight: 600; font-size: 11px;
+       text-transform: uppercase; letter-spacing: 0.06em; position: sticky; top: 0; }
+  tr:last-child td { border-bottom: 0; }
+  .tag { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--line); }
+  .t-bodycam, .t-alpr, .t-follower { color: var(--alert); border-color: var(--alert); }
+  .t-tracker, .t-drone, .t-smart-glasses { color: var(--caution); border-color: var(--caution); }
+  .t-camera, .t-fleet-telematics { color: var(--dim); }
+  .dim { color: var(--dim); }
+  .empty { padding: 28px; text-align: center; color: var(--dim); }
+  button {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--dim); }
+  footer { margin-top: 14px; display: flex; justify-content: space-between;
+           align-items: center; color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Argus</h1>
+  <span class="sub" id="uptime"></span>
+</header>
+
+<div class="banner clear" id="banner">
+  <span class="level" id="level">—</span>
+  <div class="stats">
+    <span>score <b id="score">0</b></span>
+    <span>devices <b id="devices">0</b></span>
+    <span>sightings <b id="sightings">0</b></span>
+    <span>mode <b id="mode">—</b></span>
+  </div>
+</div>
+
+<div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>class</th><th>label</th><th>mac</th><th>detail</th>
+        <th>rssi</th><th>via</th><th>evidence</th><th>hits</th><th>last</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="empty" id="empty">Nothing detected yet.</div>
+</div>
+
+<footer>
+  <span id="updated">connecting…</span>
+  <button id="clear">Clear log</button>
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function ago(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  return Math.floor(s / 3600) + 'h';
+}
+
+async function refresh() {
+  try {
+    const [status, devices] = await Promise.all([
+      fetch('/api/status').then(r => r.json()),
+      fetch('/api/devices').then(r => r.json()),
+    ]);
+
+    $('banner').className = 'banner ' + status.level;
+    $('level').textContent = status.level;
+    $('score').textContent = status.score;
+    $('devices').textContent = status.devices;
+    $('sightings').textContent = status.sightings;
+    $('mode').textContent = status.mode;
+    $('uptime').textContent = 'up ' + ago(status.uptime_s);
+
+    const rows = $('rows');
+    rows.replaceChildren();
+    for (const d of devices.devices) {
+      const tr = document.createElement('tr');
+      const cells = [
+        ['span', 'tag t-' + d.class, d.class],
+        ['text', '', d.label],
+        ['text', 'dim', d.mac],
+        ['text', '', d.detail],
+        ['text', '', d.rssi + ' dBm'],
+        ['text', 'dim', d.source],
+        ['text', 'dim', d.evidence],
+        ['text', 'dim', String(d.hits)],
+        ['text', 'dim', ago(d.last_seen_s) + ' ago'],
+      ];
+      for (const [kind, cls, value] of cells) {
+        const td = document.createElement('td');
+        if (kind === 'span') {
+          const s = document.createElement('span');
+          s.className = cls;
+          s.textContent = value;
+          td.appendChild(s);
+        } else {
+          td.className = cls;
+          td.textContent = value;   // textContent, never innerHTML: these are
+                                    // strings a stranger's radio chose
+        }
+        tr.appendChild(td);
+      }
+      rows.appendChild(tr);
+    }
+    $('empty').style.display = devices.devices.length ? 'none' : 'block';
+    $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('updated').textContent = 'connection lost — retrying';
+  }
+}
+
+$('clear').addEventListener('click', async () => {
+  await fetch('/api/clear', { method: 'POST' });
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
