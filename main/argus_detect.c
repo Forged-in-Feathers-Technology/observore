@@ -177,6 +177,14 @@ const argus_oui_t *argus_oui_lookup(const uint8_t mac[ARGUS_MAC_LEN])
     return NULL;
 }
 
+bool argus_obs_is_random(const argus_observation_t *obs)
+{
+    if (!obs || !obs->mac) {
+        return true;   /* nothing known means nothing may be claimed */
+    }
+    return obs->addr_random || argus_mac_is_random(obs->mac);
+}
+
 const char *argus_vendor_lookup(const uint8_t mac[ARGUS_MAC_LEN])
 {
     if (!mac || argus_mac_is_random(mac)) {
@@ -417,7 +425,8 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
      * every source.  BLE reports the address type on the wire, which is
      * authoritative; the locally-administered bit is only a fallback for
      * Wi-Fi, where no such field exists. */
-    const argus_oui_t *oui = obs->addr_random ? NULL : argus_oui_lookup(obs->mac);
+    const argus_oui_t *oui = argus_obs_is_random(obs) ? NULL
+                                                     : argus_oui_lookup(obs->mac);
     if (oui) {
         ev.cls = oui->cls;
         ev.evidence = ARGUS_EVIDENCE_OUI;

@@ -13,9 +13,10 @@ typedef struct {
     int8_t          rssi;
     uint8_t         channel;
 
-    /* BLE reports whether the advertiser address is random directly.  A
-     * random address carries no vendor information, so a prefix lookup on one
-     * is not merely useless but actively misleading. */
+    /* Whether the transport reported the address as random.  BLE supplies
+     * this; Wi-Fi has no such field and leaves it false.  Do not read it
+     * directly -- use argus_obs_is_random(), which also consults the
+     * locally-administered bit. */
     bool            addr_random;
 
     /* BLE: the raw advertising payload, still in length/type/value form. */
@@ -45,6 +46,16 @@ const argus_oui_t *argus_oui_lookup(const uint8_t mac[ARGUS_MAC_LEN]);
 const char *argus_vendor_lookup(const uint8_t mac[ARGUS_MAC_LEN]);
 bool argus_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len);
 bool argus_mac_is_random(const uint8_t mac[ARGUS_MAC_LEN]);
+
+/* Whether an address carries no usable vendor information.
+ *
+ * Measured on real air, the two available signals disagree in BOTH
+ * directions: the ESP32-S3 controller reported 9E:.., CB:.. and 27:.. as
+ * BLE_ADDR_PUBLIC even though their locally-administered bit is set, and
+ * reported 20:7C:3A and FD:93:05 as BLE_ADDR_RANDOM even though theirs is
+ * clear.  Neither signal is trustworthy alone, so this is the union: if
+ * either says random, no vendor can be claimed. */
+bool argus_obs_is_random(const argus_observation_t *obs);
 
 /* Walk a BLE advertising payload and return the first field of `type`.
  * Returns NULL when absent.  *len_out receives the value length. */

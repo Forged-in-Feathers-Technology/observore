@@ -93,7 +93,7 @@
   <table>
     <thead>
       <tr>
-        <th>class</th><th>label</th><th>vendor</th><th>mac</th><th>detail</th>
+        <th>class</th><th>label</th><th>vendor</th><th>mac</th><th>name / ssid</th>
         <th>rssi</th><th>via</th><th>evidence</th><th>hits</th><th>last</th><th></th>
       </tr>
     </thead>
@@ -115,7 +115,7 @@
   <div class="wrap">
     <table>
       <thead>
-        <tr><th>vendor</th><th>mac</th><th>via</th><th>rssi</th><th>hits</th><th>last</th><th></th></tr>
+        <tr><th>name / ssid</th><th>vendor</th><th>mac</th><th>via</th><th>rssi</th><th>hits</th><th>last</th><th></th></tr>
       </thead>
       <tbody id="nearbyrows"></tbody>
     </table>
@@ -237,7 +237,8 @@ async function refresh() {
     for (const d of near.nearby) {
       const tr = document.createElement('tr');
       for (const [cls, value] of [
-        ['', d.vendor || (d.random ? 'random MAC' : 'unknown')],
+        ['', d.name || '—'],
+        ['dim', d.vendor || (d.random ? 'random MAC' : 'unknown')],
         ['dim', d.mac],
         ['dim', d.source],
         ['dim', d.rssi + ' dBm'],

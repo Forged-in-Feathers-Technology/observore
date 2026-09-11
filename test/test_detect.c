@@ -150,6 +150,75 @@ static void test_vendor_labelling(void)
     CHECK(n == 0, "a classified device must leave the nearby list, got %zu", n);
 }
 
+static void test_name_capture(void)
+{
+    banner("name and ssid capture");
+
+    argus_mute_init();
+    argus_track_init();
+
+    /* An unclassified BLE device that broadcasts a name must carry it, even
+     * though nothing about it classified. */
+    const uint8_t mac[6] = {0xA4, 0xB1, 0x97, 0x01, 0x02, 0x03};
+    uint8_t named[] = {0x02, 0x01, 0x06,
+                       0x06, 0x09, 'S', 'h', 'e', 'l', 'f'};
+    argus_observation_t obs = {.mac = mac, .src = ARGUS_SRC_BLE, .rssi = -50,
+                               .adv = named, .adv_len = sizeof(named)};
+    CHECK(!argus_track_observe(&obs, SECS(0)), "must not classify");
+
+    argus_event_t nearby[8];
+    size_t n = argus_track_nearby(nearby, 8, SECS(0));
+    CHECK(n == 1 && strcmp(nearby[0].detail, "Shelf") == 0,
+          "name not captured, got '%s'", n ? nearby[0].detail : "");
+
+    /* BLE names often arrive in a scan response, several sightings after the
+     * device first appears.  A later nameless advert from the same address
+     * must not wipe the name we already learned. */
+    uint8_t nameless[] = {0x02, 0x01, 0x06};
+    obs.adv = nameless;
+    obs.adv_len = sizeof(nameless);
+    argus_track_observe(&obs, SECS(5));
+    n = argus_track_nearby(nearby, 8, SECS(5));
+    CHECK(n == 1 && strcmp(nearby[0].detail, "Shelf") == 0,
+          "a nameless advert erased the learned name, got '%s'",
+          n ? nearby[0].detail : "");
+
+    /* And the reverse: a name arriving late is picked up. */
+    argus_track_init();
+    obs.adv = nameless;
+    obs.adv_len = sizeof(nameless);
+    argus_track_observe(&obs, SECS(0));
+    n = argus_track_nearby(nearby, 8, SECS(0));
+    CHECK(n == 1 && nearby[0].detail[0] == '\0', "should start nameless");
+    obs.adv = named;
+    obs.adv_len = sizeof(named);
+    argus_track_observe(&obs, SECS(1));
+    n = argus_track_nearby(nearby, 8, SECS(1));
+    CHECK(n == 1 && strcmp(nearby[0].detail, "Shelf") == 0,
+          "a late name was not learned, got '%s'", n ? nearby[0].detail : "");
+
+    /* Wi-Fi carries the SSID the same way. */
+    argus_track_init();
+    const uint8_t ap[6] = {0x90, 0x41, 0xB2, 0x01, 0x02, 0x03};
+    argus_observation_t wifi = {.mac = ap, .src = ARGUS_SRC_WIFI_SCAN,
+                                .rssi = -50, .ssid = "42-Guest"};
+    argus_track_observe(&wifi, SECS(0));
+    n = argus_track_nearby(nearby, 8, SECS(0));
+    CHECK(n == 1 && strcmp(nearby[0].detail, "42-Guest") == 0,
+          "ssid not captured, got '%s'", n ? nearby[0].detail : "");
+    CHECK(n == 1 && nearby[0].vendor && strcmp(nearby[0].vendor, "Ubiquiti") == 0,
+          "vendor should still resolve alongside the ssid");
+
+    /* A hidden AP reports an empty SSID and must simply stay nameless. */
+    argus_track_init();
+    wifi.ssid = "";
+    argus_track_observe(&wifi, SECS(0));
+    n = argus_track_nearby(nearby, 8, SECS(0));
+    CHECK(n == 1 && nearby[0].detail[0] == '\0',
+          "a hidden AP should stay nameless, got '%s'",
+          n ? nearby[0].detail : "");
+}
+
 static void test_adv_parsing(void)
 {
     banner("advert parsing");
@@ -283,6 +352,53 @@ static void test_random_address(void)
     obs.addr_random = false;
     CHECK(argus_classify(&obs, &ev), "public address should match the OUI");
     CHECK(ev.cls == ARGUS_CLASS_CAMERA, "should be a camera");
+}
+
+static void test_random_signals_disagree(void)
+{
+    banner("random-address signals disagreeing");
+
+    /* Measured on real air: the controller reports some addresses as public
+     * whose locally-administered bit is set, and some as random whose bit is
+     * clear.  Either signal alone mislabels half the traffic. */
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+
+    /* Controller says public, LAA bit says random (CB:1F:FE, observed). */
+    const uint8_t laa_only[6] = {0xCB, 0x1F, 0xFE, 0x3B, 0xB1, 0xAA};
+    argus_observation_t a = {.mac = laa_only, .src = ARGUS_SRC_BLE, .rssi = -50,
+                             .addr_random = false,
+                             .adv = boring, .adv_len = sizeof(boring)};
+    CHECK(argus_obs_is_random(&a), "LAA bit alone must count as random");
+
+    /* Controller says random, LAA bit says universal (20:7C:3A, observed). */
+    const uint8_t type_only[6] = {0x20, 0x7C, 0x3A, 0x7D, 0x1A, 0x20};
+    argus_observation_t b = {.mac = type_only, .src = ARGUS_SRC_BLE, .rssi = -50,
+                             .addr_random = true,
+                             .adv = boring, .adv_len = sizeof(boring)};
+    CHECK(argus_obs_is_random(&b), "the transport flag alone must count too");
+    CHECK(!argus_mac_is_random(type_only),
+          "this address's LAA bit is clear -- that is the point of the test");
+
+    /* A genuinely public address is still usable. */
+    const uint8_t real[6] = {0x90, 0x41, 0xB2, 0x01, 0x02, 0x03};
+    argus_observation_t c = {.mac = real, .src = ARGUS_SRC_BLE, .rssi = -50,
+                             .addr_random = false,
+                             .adv = boring, .adv_len = sizeof(boring)};
+    CHECK(!argus_obs_is_random(&c), "a public address must stay usable");
+
+    /* The flag reaches the tracker, so the UI can say "random MAC" rather
+     * than "unknown vendor" -- different facts. */
+    argus_mute_init();
+    argus_track_init();
+    argus_track_observe(&a, SECS(0));
+    argus_event_t nearby[4];
+    size_t n = argus_track_nearby(nearby, 4, SECS(0));
+    CHECK(n == 1 && nearby[0].addr_random,
+          "tracker should record the address as random");
+    CHECK(n == 1 && nearby[0].vendor == NULL,
+          "a random address must not carry a vendor");
+
+    CHECK(argus_obs_is_random(NULL), "NULL must be treated as unknowable");
 }
 
 static void test_ssid(void)
@@ -628,9 +744,11 @@ int main(void)
     test_oui_lookup();
     test_vendor_lookup();
     test_vendor_labelling();
+    test_name_capture();
     test_adv_parsing();
     test_ble_signatures();
     test_random_address();
+    test_random_signals_disagree();
     test_ssid();
     test_follower();
     test_scoring();

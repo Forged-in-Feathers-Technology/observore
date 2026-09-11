@@ -322,7 +322,7 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
     static argus_event_t snap[ARGUS_MAX_DEVICES];
-    static char body[8192];
+    static char body[12288];   /* names and SSIDs push each row to ~200 bytes */
 
     int64_t now = esp_timer_get_time();
     size_t count = argus_track_nearby(snap, ARGUS_MAX_DEVICES, now);
@@ -333,14 +333,19 @@ static esp_err_t nearby_handler(httpd_req_t *req)
     int n = snprintf(body, sizeof(body), "{\"nearby\":[");
     for (size_t i = 0; i < count; i++) {
         const argus_event_t *e = &snap[i];
+        /* The name is chosen by whoever owns the radio, so it is escaped on
+         * the way out exactly like every other remote-controlled string. */
+        char name[sizeof(e->detail) * 2 + 1];
+        json_escape(e->detail, name, sizeof(name));
+
         int written = snprintf(
             body + n, sizeof(body) - n,
             "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\","
-            "\"random\":%s,\"source\":\"%s\","
+            "\"name\":\"%s\",\"random\":%s,\"source\":\"%s\","
             "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
             i ? "," : "",
             e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
-            e->vendor ? e->vendor : "",
+            e->vendor ? e->vendor : "", name,
             e->addr_random ? "true" : "false", argus_source_name(e->src),
             e->rssi, e->hits, (now - e->last_seen_us) / 1000000);
         if (written < 0 || n + written >= (int)sizeof(body) - 4) {

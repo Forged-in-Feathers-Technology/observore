@@ -165,9 +165,9 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
         /* Name the vendor once, for every device -- this is what lets an
          * unrecognised MAC be read as "my own handset" and muted, and what
          * gives a follower hit something to go on. */
-        slot->ev.addr_random = obs->addr_random;
-        slot->ev.vendor = obs->addr_random ? NULL
-                                           : argus_vendor_lookup(obs->mac);
+        slot->ev.addr_random = argus_obs_is_random(obs);
+        slot->ev.vendor = slot->ev.addr_random ? NULL
+                                               : argus_vendor_lookup(obs->mac);
     }
 
     slot->ev.hits++;
@@ -178,6 +178,26 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
      * number that matters when deciding whether something is on you. */
     if (obs->rssi != 0 && (slot->ev.rssi == 0 || obs->rssi > slot->ev.rssi)) {
         slot->ev.rssi = obs->rssi;
+    }
+
+    /* Learn the device's own name for everything, not just for things that
+     * classified -- an unidentified box called "Living Room TV" is far easier
+     * to recognise and ignore than a bare MAC with a vendor beside it.
+     *
+     * Sticky once learned: BLE names frequently arrive in a scan response
+     * rather than the first advert, so the name may show up several sightings
+     * after the device does, and must not then be overwritten by a later
+     * nameless advert from the same address. */
+    if (slot->ev.detail[0] == '\0') {
+        if (obs->src == ARGUS_SRC_BLE) {
+            char name[sizeof(slot->ev.detail)];
+            if (argus_adv_name(obs->adv, obs->adv_len, name, sizeof(name)) &&
+                name[0] != '\0') {
+                snprintf(slot->ev.detail, sizeof(slot->ev.detail), "%s", name);
+            }
+        } else if (obs->ssid && obs->ssid[0]) {
+            snprintf(slot->ev.detail, sizeof(slot->ev.detail), "%s", obs->ssid);
+        }
     }
 
     if (is_classified) {
@@ -199,9 +219,9 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
             slot->ev.evidence = ARGUS_EVIDENCE_PERSISTENCE;
             slot->ev.points = argus_class_points(ARGUS_CLASS_FOLLOWER);
             snprintf(slot->ev.label, sizeof(slot->ev.label), "persistent %s",
-                     slot->ev.vendor ? slot->ev.vendor
-                     : (obs->addr_random || argus_mac_is_random(obs->mac))
-                           ? "(random MAC)" : "device");
+                     slot->ev.vendor        ? slot->ev.vendor
+                     : slot->ev.addr_random ? "(random MAC)"
+                                            : "device");
             slot->classified = true;
         }
     }
