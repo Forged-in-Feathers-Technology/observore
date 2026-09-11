@@ -76,6 +76,9 @@ typedef struct {
      * Distinct from "vendor lookup missed": one is deliberate anonymity, the
      * other is a gap in our table, and conflating them makes the UI lie. */
     bool             addr_random;
+    /* Stable-advert fingerprint; 0 for Wi-Fi and for adverts with nothing
+     * stable in them. */
+    uint32_t         fingerprint;
     int64_t          first_seen_us;
     int64_t          last_seen_us;
     uint32_t         hits;

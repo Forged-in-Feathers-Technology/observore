@@ -151,7 +151,7 @@
       <option value="mac">this MAC</option>
       <option value="oui">this vendor prefix</option>
       <option value="class">this whole class</option>
-      <option value="ssid">SSID containing</option>
+      <option value="name">name / SSID containing</option>
     </select>
     <input id="value" placeholder="AA:BB:CC:DD:EE:FF">
     <button id="add">Ignore</button>
@@ -160,6 +160,8 @@
     <button id="baseline">Set baseline</button>
     <span class="note" id="baselinenote">
       Marks everything currently in range as known and resets the score.
+      Prefers rules that survive address rotation &mdash; the advertised name,
+      then the advert's shape, and only then the MAC.
       Use it somewhere you trust &mdash; it ignores detected threats too.
     </span>
   </div>
@@ -266,6 +268,7 @@ async function refresh() {
     for (const d of near.nearby) {
       if (pending.has(d.mac)) continue;
       const tr = document.createElement('tr');
+      tr.dataset.mac = d.mac;
       for (const [cls, value] of [
         ['', d.name || '—'],
         ['dim', d.vendor || (d.random ? 'random MAC' : 'unknown')],
@@ -284,7 +287,18 @@ async function refresh() {
       const b = document.createElement('button');
       b.className = 'mini';
       b.textContent = 'ignore';
-      b.addEventListener('click', () => mute('mac', d.mac, tr));
+      // Prefer a rule that outlives the address: the name if it broadcasts
+      // one, else the advert's shape, else the MAC.
+      if (d.name) {
+        b.title = 'Ignore by name — survives address rotation';
+        b.addEventListener('click', () => mute('name', d.name, tr));
+      } else if (d.fingerprint && d.fingerprint !== '00000000') {
+        b.title = 'Ignore by advert shape — survives address rotation';
+        b.addEventListener('click', () => mute('fingerprint', d.fingerprint, tr));
+      } else {
+        b.title = 'Ignore this address (rotating devices will return)';
+        b.addEventListener('click', () => mute('mac', d.mac, tr));
+      }
       td.appendChild(b);
       tr.appendChild(td);
       nrows.appendChild(tr);
@@ -361,6 +375,7 @@ const pending = new Set();
 
 async function mute(kind, value, row) {
   if (kind === 'mac') pending.add(value);
+  else if (row && row.dataset.mac) pending.add(row.dataset.mac);
   if (row) {
     row.classList.add('going');
     row.querySelectorAll('button').forEach(b => (b.disabled = true));
@@ -389,7 +404,7 @@ $('kind').addEventListener('change', () => {
     mac: 'AA:BB:CC:DD:EE:FF',
     oui: 'AA:BB:CC',
     class: 'camera',
-    ssid: 'part of an SSID',
+    name: 'part of a name or SSID',
   }[$('kind').value];
 });
 
@@ -421,9 +436,12 @@ $('baseline').addEventListener('click', async () => {
       .then(r => r.json());
     $('baselinenote').textContent =
       out.added + ' of ' + out.seen + ' devices now ignored' +
-      (out.already ? ', ' + out.already + ' already were' : '') +
-      (out.rotating
-        ? '. ' + out.rotating + ' use rotating addresses and will reappear'
+      (out.already ? ', ' + out.already + ' already were' : '') + ' — ' +
+      out.by_name + ' by name, ' + out.by_fingerprint + ' by advert, ' +
+      out.by_mac + ' by MAC' +
+      (out.temporary
+        ? '. ' + out.temporary + ' of those rotate their address and will ' +
+          'reappear within the hour'
         : '') +
       (out.no_room ? '. ' + out.no_room + ' did not fit' : '') + '.';
   } catch (e) {

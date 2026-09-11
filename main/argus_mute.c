@@ -119,8 +119,26 @@ static bool contains_ci(const char *hay, const char *needle)
     return false;
 }
 
+bool argus_mute_class_is_protected(argus_class_t cls)
+{
+    /* The classes where silencing a whole kind of device could hide a real
+     * threat.  Cameras and fleet telematics are excluded: those are street
+     * furniture, and being able to mute a whole brand of them is the point. */
+    switch (cls) {
+        case ARGUS_CLASS_TRACKER:
+        case ARGUS_CLASS_BODYCAM:
+        case ARGUS_CLASS_ALPR:
+        case ARGUS_CLASS_DRONE:
+        case ARGUS_CLASS_SMARTGLASSES:
+        case ARGUS_CLASS_FOLLOWER:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool argus_mute_matches(const uint8_t mac[ARGUS_MAC_LEN], argus_class_t cls,
-                        const char *ssid)
+                        const char *name, uint32_t fingerprint)
 {
     if (!mac) {
         return false;
@@ -142,8 +160,15 @@ bool argus_mute_matches(const uint8_t mac[ARGUS_MAC_LEN], argus_class_t cls,
                  * muting "camera" would also disable the follower heuristic. */
                 hit = cls != ARGUS_CLASS_UNKNOWN && r->cls == (uint8_t)cls;
                 break;
-            case ARGUS_MUTE_SSID:
-                hit = ssid && contains_ci(ssid, r->ssid);
+            case ARGUS_MUTE_NAME:
+                hit = name && contains_ci(name, r->ssid);
+                break;
+            case ARGUS_MUTE_FINGERPRINT:
+                /* The safety rule, enforced here rather than left to the
+                 * caller: a fingerprint identifies a kind of device, so it
+                 * must never be able to silence a threat. */
+                hit = fingerprint != 0 && r->fingerprint == fingerprint &&
+                      !argus_mute_class_is_protected(cls);
                 break;
             default:
                 break;
@@ -169,7 +194,8 @@ static bool same_rule(const argus_mute_rule_t *a, const argus_mute_rule_t *b)
         case ARGUS_MUTE_MAC:   return memcmp(a->mac, b->mac, ARGUS_MAC_LEN) == 0;
         case ARGUS_MUTE_OUI:   return memcmp(a->mac, b->mac, 3) == 0;
         case ARGUS_MUTE_CLASS: return a->cls == b->cls;
-        case ARGUS_MUTE_SSID:  return strcmp(a->ssid, b->ssid) == 0;
+        case ARGUS_MUTE_NAME:  return strcmp(a->ssid, b->ssid) == 0;
+        case ARGUS_MUTE_FINGERPRINT: return a->fingerprint == b->fingerprint;
         default:               return false;
     }
 }
@@ -179,8 +205,12 @@ esp_err_t argus_mute_add(const argus_mute_rule_t *rule)
     if (!rule || rule->kind >= ARGUS_MUTE_KIND_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (rule->kind == ARGUS_MUTE_SSID && rule->ssid[0] == '\0') {
+    if (rule->kind == ARGUS_MUTE_NAME && rule->ssid[0] == '\0') {
         /* An empty substring matches everything. */
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (rule->kind == ARGUS_MUTE_FINGERPRINT && rule->fingerprint == 0) {
+        /* 0 means "no fingerprint", so such a rule would be meaningless. */
         return ESP_ERR_INVALID_ARG;
     }
     if (rule->kind == ARGUS_MUTE_CLASS &&
@@ -268,7 +298,8 @@ const char *argus_mute_kind_name(argus_mute_kind_t kind)
         case ARGUS_MUTE_MAC:   return "mac";
         case ARGUS_MUTE_OUI:   return "oui";
         case ARGUS_MUTE_CLASS: return "class";
-        case ARGUS_MUTE_SSID:  return "ssid";
+        case ARGUS_MUTE_NAME:  return "name";
+        case ARGUS_MUTE_FINGERPRINT: return "fingerprint";
         default:               return "?";
     }
 }

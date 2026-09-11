@@ -66,5 +66,18 @@ const uint8_t *argus_adv_field(const uint8_t *adv, size_t adv_len, uint8_t type,
  * the advert carries no name. */
 bool argus_adv_name(const uint8_t *adv, size_t adv_len, char *buf, size_t buf_len);
 
+/* A fingerprint of the STABLE parts of a BLE advertisement: which AD fields
+ * are present and how long they are, the manufacturer's company ID, the
+ * service UUIDs, and the local name.  Deliberately excludes the variable
+ * payload -- a Find My advert rotates its key on every address change, and
+ * hashing that would produce a fingerprint as short-lived as the MAC.
+ *
+ * This identifies a KIND of device, not an individual one: two identical
+ * trackers produce the same fingerprint.  That is why a fingerprint mute is
+ * never allowed to silence a threat class -- see argus_mute_matches().
+ *
+ * Returns 0 when there is nothing stable to hash. */
+uint32_t argus_fingerprint(const uint8_t *adv, size_t adv_len);
+
 /* Points a class contributes to the threat score on each scored sighting. */
 uint8_t argus_class_points(argus_class_t cls);

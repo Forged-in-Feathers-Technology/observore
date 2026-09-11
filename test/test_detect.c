@@ -713,6 +713,151 @@ static void test_mute(void)
     argus_mute_clear();
 }
 
+static void test_fingerprint(void)
+{
+    banner("advert fingerprinting");
+
+    /* A Find My advert rotates its key on every address change.  The
+     * fingerprint must survive that, or it is no better than the MAC. */
+    uint8_t a[31] = {0};
+    a[0] = 0x1E; a[1] = 0xFF; a[2] = 0x4C; a[3] = 0x00;
+    a[4] = 0x12; a[5] = 0x19; a[6] = 0x10;
+    for (int i = 7; i < 31; i++) {
+        a[i] = (uint8_t)(i * 7);          /* today's key */
+    }
+    uint8_t b[31];
+    memcpy(b, a, sizeof(b));
+    for (int i = 7; i < 31; i++) {
+        b[i] = (uint8_t)(i * 13);         /* tomorrow's key */
+    }
+
+    uint32_t fa = argus_fingerprint(a, sizeof(a));
+    uint32_t fb = argus_fingerprint(b, sizeof(b));
+    CHECK(fa != 0, "fingerprint should not be zero");
+    CHECK(fa == fb, "a rotated payload must not change the fingerprint");
+
+    /* A different company ID is a different kind of device. */
+    uint8_t c[31];
+    memcpy(c, a, sizeof(c));
+    c[2] = 0x75; c[3] = 0x00;             /* Samsung instead of Apple */
+    CHECK(argus_fingerprint(c, sizeof(c)) != fa,
+          "a different company ID must change the fingerprint");
+
+    /* So is a different name. */
+    uint8_t n1[] = {0x02, 0x01, 0x06, 0x05, 0x09, 'T', 'V', '-', '1'};
+    uint8_t n2[] = {0x02, 0x01, 0x06, 0x05, 0x09, 'T', 'V', '-', '2'};
+    CHECK(argus_fingerprint(n1, sizeof(n1)) != argus_fingerprint(n2, sizeof(n2)),
+          "different names must fingerprint differently");
+
+    /* Nothing to hash yields zero, which means "no fingerprint". */
+    CHECK(argus_fingerprint(NULL, 0) == 0, "NULL advert");
+    uint8_t empty[] = {0x00, 0x00};
+    CHECK(argus_fingerprint(empty, sizeof(empty)) == 0, "padding-only advert");
+}
+
+static void test_fingerprint_safety(void)
+{
+    banner("fingerprint rules cannot silence a threat");
+
+    argus_mute_init();
+    argus_track_init();
+
+    /* An AirTag-shaped advert on a rotating address. */
+    uint8_t findmy[31] = {0};
+    findmy[0] = 0x1E; findmy[1] = 0xFF; findmy[2] = 0x4C; findmy[3] = 0x00;
+    findmy[4] = 0x12; findmy[5] = 0x19; findmy[6] = 0x10;
+
+    const uint8_t mine[6]  = {0x4A, 0x11, 0x22, 0x33, 0x44, 0x55};
+    argus_observation_t obs = {.mac = mine, .src = ARGUS_SRC_BLE, .rssi = -50,
+                               .addr_random = true,
+                               .adv = findmy, .adv_len = sizeof(findmy)};
+
+    argus_mute_rule_t fp = {.kind = ARGUS_MUTE_FINGERPRINT,
+                            .fingerprint = argus_fingerprint(findmy,
+                                                             sizeof(findmy))};
+    CHECK(argus_mute_add(&fp) == ESP_OK, "fingerprint rule should be accepted");
+
+    /* Muting your own tracker by fingerprint would silence a stranger's too,
+     * so the rule must not apply to a tracker at all. */
+    CHECK(argus_track_observe(&obs, SECS(0)),
+          "a tracker must still report despite a matching fingerprint rule");
+    argus_status_t st;
+    argus_track_status(&st, SECS(0));
+    CHECK(st.class_counts[ARGUS_CLASS_TRACKER] == 1, "tracker should be counted");
+
+    /* The same rule does work on an unprotected class. */
+    CHECK(argus_mute_class_is_protected(ARGUS_CLASS_TRACKER), "tracker protected");
+    CHECK(argus_mute_class_is_protected(ARGUS_CLASS_BODYCAM), "bodycam protected");
+    CHECK(argus_mute_class_is_protected(ARGUS_CLASS_FOLLOWER),
+          "follower protected -- it is the anti-stalking case");
+    CHECK(!argus_mute_class_is_protected(ARGUS_CLASS_CAMERA),
+          "cameras are street furniture and may be muted wholesale");
+
+    argus_mute_clear();
+    argus_track_init();
+    uint8_t plain[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0xAA, 0xBB};
+    argus_observation_t un = {.mac = mine, .src = ARGUS_SRC_BLE, .rssi = -50,
+                              .addr_random = true,
+                              .adv = plain, .adv_len = sizeof(plain)};
+    argus_mute_rule_t fp2 = {.kind = ARGUS_MUTE_FINGERPRINT,
+                             .fingerprint = argus_fingerprint(plain,
+                                                              sizeof(plain))};
+    CHECK(argus_mute_add(&fp2) == ESP_OK, "add");
+
+    /* Unclassified traffic IS suppressed, including across a MAC change --
+     * that is the whole point of fingerprinting. */
+    argus_track_observe(&un, SECS(0));
+    const uint8_t rotated[6] = {0x4A, 0x99, 0x88, 0x77, 0x66, 0x55};
+    argus_observation_t un2 = un;
+    un2.mac = rotated;
+    argus_track_observe(&un2, SECS(10));
+    argus_event_t nearby[8];
+    CHECK(argus_track_nearby(nearby, 8, SECS(10)) == 0,
+          "a fingerprint rule must suppress the device under any address");
+
+    /* A zero fingerprint rule would match every nameless advert. */
+    argus_mute_rule_t zero = {.kind = ARGUS_MUTE_FINGERPRINT, .fingerprint = 0};
+    CHECK(argus_mute_add(&zero) == ESP_ERR_INVALID_ARG,
+          "a zero fingerprint rule must be refused");
+}
+
+static void test_name_rule_matches_ble(void)
+{
+    banner("name rules across a MAC rotation");
+
+    argus_mute_init();
+    argus_track_init();
+
+    /* A named BLE device that changes address must stay muted -- this is what
+     * a MAC rule could never do. */
+    uint8_t named[] = {0x02, 0x01, 0x06,
+                       0x08, 0x09, 'E', 'n', 'c', 'h', 'a', 'r', 'g'};
+    argus_mute_rule_t r = {.kind = ARGUS_MUTE_NAME};
+    snprintf(r.ssid, sizeof(r.ssid), "Encharg");
+    CHECK(argus_mute_add(&r) == ESP_OK, "add name rule");
+
+    const uint8_t mac1[6] = {0x4A, 0x01, 0x02, 0x03, 0x04, 0x05};
+    const uint8_t mac2[6] = {0x4A, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
+    argus_observation_t o = {.mac = mac1, .src = ARGUS_SRC_BLE, .rssi = -50,
+                             .addr_random = true,
+                             .adv = named, .adv_len = sizeof(named)};
+    CHECK(!argus_track_observe(&o, SECS(0)), "named device should be muted");
+    o.mac = mac2;
+    CHECK(!argus_track_observe(&o, SECS(60)),
+          "still muted after the address rotates");
+
+    argus_event_t nearby[8];
+    CHECK(argus_track_nearby(nearby, 8, SECS(60)) == 0,
+          "neither address should be tracked");
+
+    /* And it still works for Wi-Fi SSIDs, which is where it started. */
+    argus_track_init();
+    const uint8_t ap[6] = {0x90, 0x41, 0xB2, 0x01, 0x02, 0x03};
+    argus_observation_t w = {.mac = ap, .src = ARGUS_SRC_WIFI_SCAN,
+                             .rssi = -50, .ssid = "Encharger-Guest"};
+    CHECK(!argus_track_observe(&w, SECS(0)), "ssid should match the name rule");
+}
+
 static void test_mac_parsing(void)
 {
     banner("mac parsing");
@@ -757,6 +902,9 @@ int main(void)
     test_snapshot_order();
     test_wifi_remote_id();
     test_mute();
+    test_fingerprint();
+    test_fingerprint_safety();
+    test_name_rule_matches_ble();
     test_mac_parsing();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

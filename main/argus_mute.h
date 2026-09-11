@@ -28,15 +28,22 @@ typedef enum {
     ARGUS_MUTE_MAC = 0,  /* one exact address */
     ARGUS_MUTE_OUI,      /* a whole vendor prefix */
     ARGUS_MUTE_CLASS,    /* an entire class, e.g. every camera on the street */
-    ARGUS_MUTE_SSID,     /* SSID substring, case-insensitive */
+    ARGUS_MUTE_NAME,     /* advertised name or SSID, substring, case-insensitive */
+    ARGUS_MUTE_FINGERPRINT, /* stable shape of a BLE advert */
     ARGUS_MUTE_KIND_MAX
 } argus_mute_kind_t;
 
+/* Kept for the wire format and the existing API spelling; a name rule matches
+ * a Wi-Fi SSID and a BLE local name alike, since both end up in the same
+ * field. */
+#define ARGUS_MUTE_SSID ARGUS_MUTE_NAME
+
 typedef struct {
-    uint8_t kind;                        /* argus_mute_kind_t */
-    uint8_t mac[ARGUS_MAC_LEN];          /* MAC and OUI kinds */
-    uint8_t cls;                         /* CLASS kind */
-    char    ssid[ARGUS_MUTE_SSID_LEN];   /* SSID kind */
+    uint8_t  kind;                       /* argus_mute_kind_t */
+    uint8_t  mac[ARGUS_MAC_LEN];         /* MAC and OUI kinds */
+    uint8_t  cls;                        /* CLASS kind */
+    char     ssid[ARGUS_MUTE_SSID_LEN];  /* NAME kind */
+    uint32_t fingerprint;                /* FINGERPRINT kind */
 } argus_mute_rule_t;
 
 /* Loads persisted rules.  Safe to call before NVS holds anything. */
@@ -45,8 +52,18 @@ void argus_mute_init(void);
 /* True when this sighting should be suppressed entirely: kept out of the
  * device table, unscored, and -- because it never reaches the table -- unable
  * to be promoted by the follower heuristic either. */
+/* `name` is the device's advertised name or SSID, and `fingerprint` the
+ * stable shape of its advert (0 if none).
+ *
+ * SAFETY: a FINGERPRINT rule identifies a kind of device rather than an
+ * individual, so it is never allowed to suppress a threat class.  Muting your
+ * own AirTag by fingerprint would otherwise silence a stranger's too, which is
+ * precisely the thing this device exists to notice. */
 bool argus_mute_matches(const uint8_t mac[ARGUS_MAC_LEN], argus_class_t cls,
-                        const char *ssid);
+                        const char *name, uint32_t fingerprint);
+
+/* True for classes a fingerprint rule must never silence. */
+bool argus_mute_class_is_protected(argus_class_t cls);
 
 /* Adding a rule that already exists succeeds without duplicating it. */
 esp_err_t argus_mute_add(const argus_mute_rule_t *rule);

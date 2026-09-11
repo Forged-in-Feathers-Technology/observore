@@ -264,6 +264,77 @@ bool argus_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_le
     return false;
 }
 
+/* FNV-1a, 32-bit. */
+static void fnv(uint32_t *h, const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        *h ^= data[i];
+        *h *= 16777619u;
+    }
+}
+
+static void fnv_byte(uint32_t *h, uint8_t b)
+{
+    fnv(h, &b, 1);
+}
+
+uint32_t argus_fingerprint(const uint8_t *adv, size_t adv_len)
+{
+    if (!adv || adv_len == 0) {
+        return 0;
+    }
+
+    uint32_t h = 2166136261u;
+    bool any = false;
+    size_t i = 0;
+
+    while (i < adv_len) {
+        uint8_t field_len = adv[i];
+        if (field_len == 0 || i + 1 + field_len > adv_len) {
+            break;
+        }
+        uint8_t type = adv[i + 1];
+        const uint8_t *val = &adv[i + 2];
+        size_t val_len = field_len - 1;
+
+        /* Structure alone is a signal: which fields, in what order, how big. */
+        fnv_byte(&h, type);
+        fnv_byte(&h, (uint8_t)val_len);
+        any = true;
+
+        switch (type) {
+            case AD_TYPE_FLAGS:
+                fnv(&h, val, val_len < 1 ? val_len : 1);
+                break;
+            case AD_TYPE_UUID16_PARTIAL:
+            case AD_TYPE_UUID16_COMPLETE:
+                fnv(&h, val, val_len);          /* UUIDs are stable */
+                break;
+            case AD_TYPE_SERVICE_DATA_16:
+                fnv(&h, val, val_len < 2 ? val_len : 2);  /* the UUID only */
+                break;
+            case AD_TYPE_MFG_DATA:
+                /* Company ID only.  Everything after it is where the rotating
+                 * key or counter lives. */
+                fnv(&h, val, val_len < 2 ? val_len : 2);
+                break;
+            case AD_TYPE_NAME_SHORT:
+            case AD_TYPE_NAME_COMPLETE:
+                fnv(&h, val, val_len);
+                break;
+            default:
+                break;                           /* type and length only */
+        }
+        i += 1 + field_len;
+    }
+
+    if (!any) {
+        return 0;
+    }
+    /* Never return 0 for a real fingerprint -- 0 means "none". */
+    return h ? h : 1u;
+}
+
 uint8_t argus_class_points(argus_class_t cls)
 {
     switch (cls) {

@@ -139,6 +139,18 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
         return false;
     }
 
+    /* The name and the advert fingerprint are what survive a MAC rotation, so
+     * both are computed before the mute check rather than after. */
+    char name[ARGUS_LABEL_LEN + 8] = {0};
+    if (obs->src == ARGUS_SRC_BLE) {
+        argus_adv_name(obs->adv, obs->adv_len, name, sizeof(name));
+    } else if (obs->ssid) {
+        snprintf(name, sizeof(name), "%s", obs->ssid);
+    }
+    uint32_t fingerprint = (obs->src == ARGUS_SRC_BLE)
+                               ? argus_fingerprint(obs->adv, obs->adv_len)
+                               : 0;
+
     argus_event_t classified;
     bool is_classified = argus_classify(obs, &classified);
 
@@ -147,7 +159,7 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
      * heuristic and keep evicting things you do care about. */
     if (argus_mute_matches(obs->mac,
                            is_classified ? classified.cls : ARGUS_CLASS_UNKNOWN,
-                           obs->ssid)) {
+                           name[0] ? name : NULL, fingerprint)) {
         return false;
     }
 
@@ -166,6 +178,7 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
          * unrecognised MAC be read as "my own handset" and muted, and what
          * gives a follower hit something to go on. */
         slot->ev.addr_random = argus_obs_is_random(obs);
+        slot->ev.fingerprint = fingerprint;
         slot->ev.vendor = slot->ev.addr_random ? NULL
                                                : argus_vendor_lookup(obs->mac);
     }
@@ -188,16 +201,12 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
      * rather than the first advert, so the name may show up several sightings
      * after the device does, and must not then be overwritten by a later
      * nameless advert from the same address. */
-    if (slot->ev.detail[0] == '\0') {
-        if (obs->src == ARGUS_SRC_BLE) {
-            char name[sizeof(slot->ev.detail)];
-            if (argus_adv_name(obs->adv, obs->adv_len, name, sizeof(name)) &&
-                name[0] != '\0') {
-                snprintf(slot->ev.detail, sizeof(slot->ev.detail), "%s", name);
-            }
-        } else if (obs->ssid && obs->ssid[0]) {
-            snprintf(slot->ev.detail, sizeof(slot->ev.detail), "%s", obs->ssid);
-        }
+    if (slot->ev.detail[0] == '\0' && name[0]) {
+        snprintf(slot->ev.detail, sizeof(slot->ev.detail), "%s", name);
+    }
+    /* A fingerprint can arrive late for the same reason a name can. */
+    if (slot->ev.fingerprint == 0 && fingerprint != 0) {
+        slot->ev.fingerprint = fingerprint;
     }
 
     if (is_classified) {

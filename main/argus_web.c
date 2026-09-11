@@ -246,6 +246,9 @@ static esp_err_t mutes_handler(httpd_req_t *req)
             case ARGUS_MUTE_CLASS:
                 snprintf(value, sizeof(value), "%s", argus_class_name(r->cls));
                 break;
+            case ARGUS_MUTE_FINGERPRINT:
+                snprintf(value, sizeof(value), "%08" PRIx32, r->fingerprint);
+                break;
             default:
                 json_escape(r->ssid, value, sizeof(value));
                 break;
@@ -281,11 +284,19 @@ static esp_err_t mute_handler(httpd_req_t *req)
         }
         rule.kind = ARGUS_MUTE_CLASS;
         rule.cls = (uint8_t)cls;
-    } else if (query_param(req, "ssid", value, sizeof(value))) {
-        rule.kind = ARGUS_MUTE_SSID;
+    } else if (query_param(req, "name", value, sizeof(value)) ||
+               query_param(req, "ssid", value, sizeof(value))) {
+        rule.kind = ARGUS_MUTE_NAME;
         snprintf(rule.ssid, sizeof(rule.ssid), "%s", value);
+    } else if (query_param(req, "fingerprint", value, sizeof(value))) {
+        unsigned long fp = strtoul(value, NULL, 16);
+        if (fp == 0 || fp > 0xFFFFFFFFUL) {
+            return fail(req, "fingerprint must be non-zero hex");
+        }
+        rule.kind = ARGUS_MUTE_FINGERPRINT;
+        rule.fingerprint = (uint32_t)fp;
     } else {
-        return fail(req, "expected one of mac, oui, class, ssid");
+        return fail(req, "expected one of mac, oui, class, name, fingerprint");
     }
 
     esp_err_t err = argus_mute_add(&rule);
@@ -390,11 +401,13 @@ static esp_err_t nearby_handler(httpd_req_t *req)
             body + n, JSON_BUF_LEN - n,
             "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\","
             "\"name\":\"%s\",\"random\":%s,\"source\":\"%s\","
+            "\"fingerprint\":\"%08" PRIx32 "\","
             "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
             i ? "," : "",
             e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
             e->vendor ? e->vendor : "", name,
             e->addr_random ? "true" : "false", argus_source_name(e->src),
+            e->fingerprint,
             e->rssi, e->hits, (now - e->last_seen_us) / 1000000);
         if (written < 0 || n + written >= JSON_BUF_LEN - 4) {
             break;
@@ -414,27 +427,60 @@ static esp_err_t baseline_handler(httpd_req_t *req)
     argus_event_t *snap = s_snap;
     size_t count = argus_track_all(snap, ARGUS_MAX_DEVICES);
 
-    size_t added = 0, existing = 0, full = 0, rotating = 0;
+    size_t added = 0, existing = 0, full = 0, temporary = 0;
+    size_t by_name = 0, by_fp = 0, by_mac = 0;
+
     for (size_t i = 0; i < count; i++) {
-        argus_mute_rule_t rule = {.kind = ARGUS_MUTE_MAC};
-        memcpy(rule.mac, snap[i].mac, ARGUS_MAC_LEN);
+        const argus_event_t *e = &snap[i];
+        argus_mute_rule_t rule;
+        memset(&rule, 0, sizeof(rule));
+
+        /* Pick the most durable rule this device supports.
+         *
+         * A name is best: it survives address rotation and is specific enough
+         * to mean one device ("Encharg/492232007683").
+         *
+         * Otherwise a fingerprint, which also survives rotation -- but it
+         * matches a KIND of device, so it is not used for the classes where
+         * that could hide a real threat.
+         *
+         * Otherwise the MAC, which for a rotating address buys only an hour
+         * or so.  Counted as temporary and reported as such. */
+        if (e->detail[0] != '\0') {
+            rule.kind = ARGUS_MUTE_NAME;
+            snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
+        } else if (e->fingerprint != 0 &&
+                   !argus_mute_class_is_protected(e->cls)) {
+            rule.kind = ARGUS_MUTE_FINGERPRINT;
+            rule.fingerprint = e->fingerprint;
+        } else {
+            rule.kind = ARGUS_MUTE_MAC;
+            memcpy(rule.mac, e->mac, ARGUS_MAC_LEN);
+        }
 
         size_t before = argus_mute_count();
         esp_err_t err = argus_mute_add(&rule);
         if (err == ESP_ERR_NO_MEM) {
             full++;
-        } else if (err != ESP_OK) {
             continue;
-        } else if (argus_mute_count() == before) {
+        }
+        if (err != ESP_OK) {
+            continue;
+        }
+        if (argus_mute_count() == before) {
             existing++;
-        } else {
-            added++;
-            /* A rotating address will be back under a different MAC within
-             * the hour, so the rule covering it is temporary.  Counted so the
-             * UI can say so rather than implying a permanent result. */
-            if (snap[i].addr_random) {
-                rotating++;
-            }
+            continue;
+        }
+        added++;
+        switch (rule.kind) {
+            case ARGUS_MUTE_NAME:        by_name++; break;
+            case ARGUS_MUTE_FINGERPRINT: by_fp++;   break;
+            default:
+                by_mac++;
+                if (e->addr_random) {
+                    temporary++;   /* this one will be back under a new MAC */
+                }
+                break;
         }
     }
 
@@ -446,10 +492,13 @@ static esp_err_t baseline_handler(httpd_req_t *req)
     char body[256];
     snprintf(body, sizeof(body),
              "{\"ok\":true,\"seen\":%zu,\"added\":%zu,\"already\":%zu,"
-             "\"rotating\":%zu,\"no_room\":%zu,\"rules\":%zu}",
-             count, added, existing, rotating, full, argus_mute_count());
-    ESP_LOGI(TAG, "baseline: %zu seen, %zu muted (%zu rotating), %zu no room",
-             count, added, rotating, full);
+             "\"by_name\":%zu,\"by_fingerprint\":%zu,\"by_mac\":%zu,"
+             "\"temporary\":%zu,\"no_room\":%zu,\"rules\":%zu}",
+             count, added, existing, by_name, by_fp, by_mac, temporary, full,
+             argus_mute_count());
+    ESP_LOGI(TAG, "baseline: %zu seen, %zu muted (%zu by name, %zu by "
+                  "fingerprint, %zu by MAC of which %zu temporary), %zu no room",
+             count, added, by_name, by_fp, by_mac, temporary, full);
     return send_json(req, body);
 }
 

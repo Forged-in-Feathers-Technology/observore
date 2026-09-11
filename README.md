@@ -223,12 +223,33 @@ A detector that cries wolf at your own doorbell every day is one you stop
 reading. Anything already judged harmless can be muted, on either radio, at
 four levels of breadth:
 
-| Rule | Ignores | Use it for |
-|---|---|---|
-| `mac` | one exact address | your own phone, your own tag |
-| `oui` | a whole vendor prefix | a neighbour's camera brand |
-| `class` | an entire class | every `camera` on a busy street |
-| `ssid` | an SSID substring, case-insensitive | a building's camera network |
+| Rule | Ignores | Survives MAC rotation | Use it for |
+|---|---|---|---|
+| `name` | a name or SSID substring | **yes** | anything that broadcasts a name |
+| `fingerprint` | the stable shape of a BLE advert | **yes** | nameless BLE devices |
+| `mac` | one exact address | no | a device with a fixed address |
+| `oui` | a whole vendor prefix | n/a | a neighbour's camera brand |
+| `class` | an entire class | n/a | every `camera` on a busy street |
+
+**Why rotation matters.** Most BLE devices change their address every few
+minutes to an hour, so a `mac` rule silences a device only until it rotates.
+Measured here, all fourteen nearby BLE devices used rotating addresses — a
+MAC-based baseline would have been worthless within the hour.
+
+A **fingerprint** hashes only the parts of an advert that survive rotation:
+which AD fields are present and how long they are, the manufacturer's company
+ID, the service UUIDs, and the local name. The variable payload is excluded, so
+a Find My advert fingerprints identically before and after it rotates its key.
+It is not perfectly stable — a device that varies its advert *structure* gets a
+new fingerprint — but it holds for the large majority.
+
+**A fingerprint identifies a kind of device, not an individual one.** Two
+identical trackers fingerprint the same. So a fingerprint rule is never allowed
+to silence a `tracker`, `bodycam`, `alpr`, `drone`, `smart-glasses` or
+`follower` — muting your own AirTag that way would silence a stranger's too,
+which is the exact thing this device exists to notice. The rule is enforced
+inside `argus_mute_matches()` rather than left to callers, and there is a test
+pinning it.
 
 Muted sightings are suppressed before they reach the device table: they are not
 logged, not scored, and cannot be promoted by the follower heuristic. A `class`
@@ -263,10 +284,16 @@ It mutes detected threats too, which is the point: your own doorbell camera is
 exactly the thing you want silenced. It asks for confirmation once, and
 **Clear ignores** undoes all of it.
 
-It reports what it did, including how many of the addresses it just muted are
-rotating ones. Those will reappear under a different MAC within the hour, so a
-baseline in a room full of phones is worth less than the count suggests — the
-UI says so rather than implying a permanent result. Up to 128 rules are stored.
+Baseline picks the most durable rule each device supports: its name if it
+broadcasts one, else its advert fingerprint, else — only as a last resort — its
+MAC. It reports the breakdown, and counts how many rules are merely temporary
+because they had to fall back to a rotating address.
+
+Measured on real air: fourteen devices in range, all of them rotating their
+addresses, produced three name rules and ten fingerprint rules and **zero**
+MAC rules. A minute later, after rotation, the score was still zero.
+
+Up to 128 rules are stored, in NVS, surviving reboots.
 
 ## A note on internal RAM
 
