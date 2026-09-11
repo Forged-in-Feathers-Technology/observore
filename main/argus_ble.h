@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 /* Starts the NimBLE host and an indefinite passive scan.  Passive is the whole

@@ -16,6 +16,7 @@
 #include "argus_web.h"
 #include "argus_wifi.h"
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -27,7 +28,7 @@ static const char *TAG = "argus";
 #define BUTTON_GPIO        ((gpio_num_t)CONFIG_ARGUS_BUTTON_GPIO)
 #define BUTTON_HOLD_MS     1500
 #define BUTTON_POLL_MS     50
-#define HEARTBEAT_US       (30 * 1000000LL)
+#define HEARTBEAT_US       (15 * 1000000LL)
 
 /* One button, so it cycles rather than toggles.  Uplink is skipped when no
  * network is configured -- offering a mode that cannot work would just look
@@ -186,10 +187,14 @@ void app_main(void)
         if (now - last_heartbeat_us >= HEARTBEAT_US) {
             last_heartbeat_us = now;
             ESP_LOGI(TAG, "%s | score %u | %u devices | %" PRIu32 " sightings | "
-                          "%" PRIu32 "/%" PRIu32 " frames sniffed",
+                          "%" PRIu32 "/%" PRIu32 " frames | heap %u free, "
+                          "%u min, %u largest",
                      argus_level_name(st.level), st.score, st.device_count,
                      st.total_sightings, argus_wifi_sniffed_frames(),
-                     argus_wifi_sniffer_calls());
+                     argus_wifi_sniffer_calls(),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         }
 
         if (argus_wifi_mode() == ARGUS_MODE_PATROL) {

@@ -8,6 +8,7 @@
 #include "argus_track.h"
 #include "argus_web.h"
 #include "argus_wifi.h"
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -19,10 +20,54 @@ static httpd_handle_t s_server;
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
 
-/* The page is served from flash and the JSON is built on the stack, so the
- * response buffer is the only sizeable allocation here.  192 devices at ~150
- * bytes of JSON each needs room to spare. */
+/* Scratch space for building responses.  This MUST NOT live in internal RAM.
+ *
+ * It was originally two static snapshots plus two static JSON buffers -- 84 KB
+ * of a device that has about 180 KB of DRAM, on top of the 20 KB device table.
+ * Wi-Fi and lwip were left starved: internal free heap fell to 1.4 KB with a
+ * largest free block of 768 bytes, at which point the SoftAP could still beacon
+ * but could no longer allocate a buffer to answer an ARP request.  The console
+ * loaded once after boot and then went dead, looking for all the world like a
+ * network problem.
+ *
+ * The buffers now come from PSRAM, of which there are 8 MB doing nothing, and
+ * are shared between handlers: esp_http_server dispatches requests from a
+ * single task, so only one handler is ever building a response. */
 #define JSON_BUF_LEN (32 * 1024)
+
+static argus_event_t *s_snap;    /* ARGUS_MAX_DEVICES entries */
+static char          *s_body;    /* JSON_BUF_LEN bytes */
+
+static bool scratch_alloc(void)
+{
+    if (s_snap && s_body) {
+        return true;
+    }
+    s_snap = heap_caps_malloc(sizeof(argus_event_t) * ARGUS_MAX_DEVICES,
+                              MALLOC_CAP_SPIRAM);
+    s_body = heap_caps_malloc(JSON_BUF_LEN, MALLOC_CAP_SPIRAM);
+    if (!s_snap || !s_body) {
+        /* Without PSRAM there is no safe place for this, so refuse to start
+         * rather than quietly starve the network stack again. */
+        ESP_LOGE(TAG, "could not allocate %d KB of PSRAM scratch",
+                 (int)((sizeof(argus_event_t) * ARGUS_MAX_DEVICES +
+                        JSON_BUF_LEN) / 1024));
+        free(s_snap);
+        free(s_body);
+        s_snap = NULL;
+        s_body = NULL;
+        return false;
+    }
+    return true;
+}
+
+static void scratch_free(void)
+{
+    free(s_snap);
+    free(s_body);
+    s_snap = NULL;
+    s_body = NULL;
+}
 
 /* Escape a string for embedding in JSON.  Inputs here are advertised names and
  * SSIDs -- remote-controlled bytes -- so this is not optional.  The upstream
@@ -87,13 +132,13 @@ static esp_err_t status_handler(httpd_req_t *req)
 
 static esp_err_t devices_handler(httpd_req_t *req)
 {
-    static argus_event_t snap[ARGUS_MAX_DEVICES];
-    static char body[JSON_BUF_LEN];
+    argus_event_t *snap = s_snap;
+    char *body = s_body;
 
     int64_t now = esp_timer_get_time();
     size_t count = argus_track_snapshot(snap, ARGUS_MAX_DEVICES, now);
 
-    int n = snprintf(body, sizeof(body), "{\"devices\":[");
+    int n = snprintf(body, JSON_BUF_LEN, "{\"devices\":[");
     for (size_t i = 0; i < count; i++) {
         const argus_event_t *e = &snap[i];
         char detail[sizeof(e->detail) * 2 + 1];
@@ -103,7 +148,7 @@ static esp_err_t devices_handler(httpd_req_t *req)
         const char *vendor = e->vendor ? e->vendor : "";
 
         int written = snprintf(
-            body + n, sizeof(body) - n,
+            body + n, JSON_BUF_LEN - n,
             "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"class\":\"%s\","
             "\"label\":\"%s\",\"vendor\":\"%s\",\"random\":%s,"
             "\"detail\":\"%s\",\"evidence\":\"%s\","
@@ -118,7 +163,7 @@ static esp_err_t devices_handler(httpd_req_t *req)
             (now - e->first_seen_us) / 1000000,
             (now - e->last_seen_us) / 1000000);
 
-        if (written < 0 || n + written >= (int)sizeof(body) - 4) {
+        if (written < 0 || n + written >= JSON_BUF_LEN - 4) {
             /* Out of room: close the array honestly rather than emitting
              * truncated JSON the browser cannot parse. */
             ESP_LOGW(TAG, "device list truncated at %zu of %zu", i, count);
@@ -321,8 +366,8 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
 
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
-    static argus_event_t snap[ARGUS_MAX_DEVICES];
-    static char body[12288];   /* names and SSIDs push each row to ~200 bytes */
+    argus_event_t *snap = s_snap;
+    char *body = s_body;
 
     int64_t now = esp_timer_get_time();
     size_t count = argus_track_nearby(snap, ARGUS_MAX_DEVICES, now);
@@ -330,7 +375,7 @@ static esp_err_t nearby_handler(httpd_req_t *req)
         count = NEARBY_MAX;
     }
 
-    int n = snprintf(body, sizeof(body), "{\"nearby\":[");
+    int n = snprintf(body, JSON_BUF_LEN, "{\"nearby\":[");
     for (size_t i = 0; i < count; i++) {
         const argus_event_t *e = &snap[i];
         /* The name is chosen by whoever owns the radio, so it is escaped on
@@ -339,7 +384,7 @@ static esp_err_t nearby_handler(httpd_req_t *req)
         json_escape(e->detail, name, sizeof(name));
 
         int written = snprintf(
-            body + n, sizeof(body) - n,
+            body + n, JSON_BUF_LEN - n,
             "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\","
             "\"name\":\"%s\",\"random\":%s,\"source\":\"%s\","
             "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
@@ -348,12 +393,12 @@ static esp_err_t nearby_handler(httpd_req_t *req)
             e->vendor ? e->vendor : "", name,
             e->addr_random ? "true" : "false", argus_source_name(e->src),
             e->rssi, e->hits, (now - e->last_seen_us) / 1000000);
-        if (written < 0 || n + written >= (int)sizeof(body) - 4) {
+        if (written < 0 || n + written >= JSON_BUF_LEN - 4) {
             break;
         }
         n += written;
     }
-    snprintf(body + n, sizeof(body) - n, "]}");
+    snprintf(body + n, JSON_BUF_LEN - n, "]}");
     return send_json(req, body);
 }
 
@@ -382,6 +427,10 @@ esp_err_t argus_web_start(void)
         {.uri = "/api/netcfg",   .method = HTTP_GET,  .handler = netcfg_get_handler},
         {.uri = "/api/netcfg",   .method = HTTP_POST, .handler = netcfg_set_handler},
     };
+    if (!scratch_alloc()) {
+        return ESP_ERR_NO_MEM;
+    }
+
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
     cfg.stack_size = 8192;   /* the JSON handlers are not frugal */
@@ -393,6 +442,7 @@ esp_err_t argus_web_start(void)
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        scratch_free();
         return err;
     }
 
@@ -404,6 +454,7 @@ esp_err_t argus_web_start(void)
                      esp_err_to_name(err));
             httpd_stop(s_server);
             s_server = NULL;
+            scratch_free();
             return err;
         }
     }
@@ -419,5 +470,6 @@ esp_err_t argus_web_stop(void)
     }
     esp_err_t err = httpd_stop(s_server);
     s_server = NULL;
+    scratch_free();
     return err;
 }

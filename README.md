@@ -251,6 +251,25 @@ POST /api/unmute?all=1
 Each row in the device table also has an **ignore** button, which is the usual
 way to add one.
 
+## A note on internal RAM
+
+The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,
+and Wi-Fi and lwip allocate from it. Argus therefore builds its JSON responses
+in **PSRAM**, not in static internal buffers.
+
+This is not premature tuning. An earlier version used static internal scratch
+(two 20 KB device snapshots plus 32 KB and 12 KB response buffers) and drove
+free internal heap down to 1.4 KB with a largest free block of 768 bytes. At
+that point the SoftAP still beaconed and still accepted associations, but could
+no longer allocate a buffer to answer an ARP request — the console loaded once
+after boot and then went dead, looking exactly like a network fault. The
+heartbeat now reports free, minimum-ever and largest-block internal heap for
+this reason; if the console ever goes quiet again, read that line first.
+
+```
+clear | score 0 | 0 devices | 227 sightings | 0/0 frames | heap 103687 free, 42568 min, 31744 largest
+```
+
 ## Limitations
 
 Read these before trusting it.

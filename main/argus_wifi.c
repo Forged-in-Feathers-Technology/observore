@@ -426,6 +426,9 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
         ESP_ERROR_CHECK(esp_wifi_start());
+        /* The SoftAP needs the receiver up continuously too, for the same
+         * reason patrol does. */
+        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
         ESP_LOGI(TAG, "console mode: SSID \"%s\" at 192.168.4.1", s_ap_ssid);
     } else {
         /* Patrol is station mode but deliberately never associated, which is
