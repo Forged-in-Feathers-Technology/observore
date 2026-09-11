@@ -147,6 +147,7 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 
     argus_observation_t obs = {
         .mac       = hdr->addr2,
+        .addr_random = argus_mac_is_random(hdr->addr2),
         .src       = ARGUS_SRC_WIFI_SNIFF,
         .rssi      = (int8_t)pkt->rx_ctrl.rssi,
         .channel   = pkt->rx_ctrl.channel,
@@ -198,6 +199,7 @@ static void run_ap_scan(void)
     for (uint16_t i = 0; i < count; i++) {
         argus_observation_t obs = {
             .mac     = records[i].bssid,
+            .addr_random = argus_mac_is_random(records[i].bssid),
             .src     = ARGUS_SRC_WIFI_SCAN,
             .rssi    = records[i].rssi,
             .channel = records[i].primary,

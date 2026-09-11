@@ -100,16 +100,19 @@ static esp_err_t devices_handler(httpd_req_t *req)
         char label[sizeof(e->label) * 2 + 1];
         json_escape(e->detail, detail, sizeof(detail));
         json_escape(e->label, label, sizeof(label));
+        const char *vendor = e->vendor ? e->vendor : "";
 
         int written = snprintf(
             body + n, sizeof(body) - n,
             "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"class\":\"%s\","
-            "\"label\":\"%s\",\"detail\":\"%s\",\"evidence\":\"%s\","
+            "\"label\":\"%s\",\"vendor\":\"%s\",\"random\":%s,"
+            "\"detail\":\"%s\",\"evidence\":\"%s\","
             "\"source\":\"%s\",\"rssi\":%d,\"channel\":%u,\"hits\":%" PRIu32 ","
             "\"first_seen_s\":%" PRId64 ",\"last_seen_s\":%" PRId64 "}",
             i ? "," : "",
             e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
-            argus_class_name(e->cls), label, detail,
+            argus_class_name(e->cls), label, vendor,
+            e->addr_random ? "true" : "false", detail,
             argus_evidence_name(e->evidence), argus_source_name(e->src),
             e->rssi, e->channel, e->hits,
             (now - e->first_seen_us) / 1000000,
@@ -312,6 +315,43 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
     return send_json(req, "{\"ok\":true}");
 }
 
+/* Unclassified devices, so known gear can be recognised and muted before it
+ * ever trips the follower heuristic. */
+#define NEARBY_MAX 40
+
+static esp_err_t nearby_handler(httpd_req_t *req)
+{
+    static argus_event_t snap[ARGUS_MAX_DEVICES];
+    static char body[8192];
+
+    int64_t now = esp_timer_get_time();
+    size_t count = argus_track_nearby(snap, ARGUS_MAX_DEVICES, now);
+    if (count > NEARBY_MAX) {
+        count = NEARBY_MAX;
+    }
+
+    int n = snprintf(body, sizeof(body), "{\"nearby\":[");
+    for (size_t i = 0; i < count; i++) {
+        const argus_event_t *e = &snap[i];
+        int written = snprintf(
+            body + n, sizeof(body) - n,
+            "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\","
+            "\"random\":%s,\"source\":\"%s\","
+            "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
+            i ? "," : "",
+            e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
+            e->vendor ? e->vendor : "",
+            e->addr_random ? "true" : "false", argus_source_name(e->src),
+            e->rssi, e->hits, (now - e->last_seen_us) / 1000000);
+        if (written < 0 || n + written >= (int)sizeof(body) - 4) {
+            break;
+        }
+        n += written;
+    }
+    snprintf(body + n, sizeof(body) - n, "]}");
+    return send_json(req, body);
+}
+
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     argus_track_clear();
@@ -329,6 +369,7 @@ esp_err_t argus_web_start(void)
         {.uri = "/",             .method = HTTP_GET,  .handler = index_handler},
         {.uri = "/api/status",   .method = HTTP_GET,  .handler = status_handler},
         {.uri = "/api/devices",  .method = HTTP_GET,  .handler = devices_handler},
+        {.uri = "/api/nearby",   .method = HTTP_GET,  .handler = nearby_handler},
         {.uri = "/api/clear",    .method = HTTP_POST, .handler = clear_handler},
         {.uri = "/api/mutes",    .method = HTTP_GET,  .handler = mutes_handler},
         {.uri = "/api/mute",     .method = HTTP_POST, .handler = mute_handler},

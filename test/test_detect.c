@@ -59,6 +59,97 @@ static void test_oui_lookup(void)
     CHECK(argus_oui_lookup(nobody) == NULL, "unassigned prefix must miss");
 }
 
+static void test_vendor_lookup(void)
+{
+    banner("benign vendor lookup");
+
+    /* A4:B1:97 is Apple in the IEEE MA-L registry. */
+    const uint8_t apple[6] = {0xA4, 0xB1, 0x97, 0x01, 0x02, 0x03};
+    const char *v = argus_vendor_lookup(apple);
+    CHECK(v != NULL && strcmp(v, "Apple") == 0, "expected Apple, got '%s'",
+          v ? v : "(null)");
+
+    /* 90:41:B2 is Ubiquiti -- observed live on real access points. */
+    const uint8_t ubnt[6] = {0x90, 0x41, 0xB2, 0x01, 0x02, 0x03};
+    v = argus_vendor_lookup(ubnt);
+    CHECK(v != NULL && strcmp(v, "Ubiquiti") == 0, "expected Ubiquiti, got '%s'",
+          v ? v : "(null)");
+
+    /* A randomised address carries no vendor, and a virtual BSSID with the
+     * locally-administered bit set must not be attributed to whoever happens
+     * to own the matching universal prefix.  9A:41:B2 is the guest-SSID BSSID
+     * of a 90:41:B2 Ubiquiti radio -- observed live. */
+    const uint8_t virt[6] = {0x9A, 0x41, 0xB2, 0x01, 0x02, 0x03};
+    CHECK(argus_mac_is_random(virt), "0x9A has the LAA bit set");
+    CHECK(argus_vendor_lookup(virt) == NULL,
+          "a locally-administered BSSID must not resolve to a vendor");
+
+    /* An unassigned prefix misses cleanly rather than returning rubbish. */
+    const uint8_t nobody[6] = {0x28, 0x1F, 0x7D, 0x01, 0x02, 0x03};
+    CHECK(argus_vendor_lookup(nobody) == NULL, "unassigned prefix must miss");
+    CHECK(argus_vendor_lookup(NULL) == NULL, "NULL must be handled");
+
+    /* The benign table must never classify or score.  This is the whole
+     * reason it is a separate table. */
+    argus_event_t ev;
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    argus_observation_t obs = {.mac = apple, .src = ARGUS_SRC_BLE, .rssi = -50,
+                               .adv = boring, .adv_len = sizeof(boring)};
+    CHECK(!argus_classify(&obs, &ev),
+          "a benign vendor must not produce a detection");
+
+    /* And a threat prefix must still win: Ring is in the threat table, so it
+     * classifies even though Amazon-family kit is otherwise benign. */
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x01, 0x02, 0x03};
+    obs.mac = ring;
+    CHECK(argus_classify(&obs, &ev), "Ring must still classify");
+    CHECK(ev.cls == ARGUS_CLASS_CAMERA, "Ring should be a camera");
+    CHECK(argus_vendor_lookup(ring) == NULL,
+          "a prefix claimed as a threat must not also appear as benign");
+}
+
+static void test_vendor_labelling(void)
+{
+    banner("vendor labelling in the tracker");
+
+    argus_mute_init();
+    argus_track_init();
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+
+    /* An unclassified device still gets a vendor name, which is what makes it
+     * recognisable enough to ignore. */
+    const uint8_t apple[6] = {0xA4, 0xB1, 0x97, 0x0A, 0x0B, 0x0C};
+    argus_observation_t obs = {.mac = apple, .src = ARGUS_SRC_BLE, .rssi = -50,
+                               .adv = boring, .adv_len = sizeof(boring)};
+    CHECK(!argus_track_observe(&obs, SECS(0)), "must not be reportable");
+
+    argus_event_t nearby[8];
+    size_t n = argus_track_nearby(nearby, 8, SECS(0));
+    CHECK(n == 1, "expected 1 nearby device, got %zu", n);
+    CHECK(n == 1 && nearby[0].vendor && strcmp(nearby[0].vendor, "Apple") == 0,
+          "nearby device should be labelled Apple");
+
+    argus_status_t st;
+    argus_track_status(&st, SECS(0));
+    CHECK(st.score == 0, "labelling must not score, got %u", st.score);
+    CHECK(st.device_count == 0, "labelling must not create a detection");
+
+    /* A follower gets the vendor in its label, which is the difference between
+     * "something is following you" and "a Samsung is following you". */
+    argus_track_observe(&obs, SECS(10));
+    argus_track_observe(&obs, SECS(20));
+    CHECK(argus_track_observe(&obs, SECS(400)), "follower not promoted");
+    argus_event_t snap[4];
+    n = argus_track_snapshot(snap, 4, SECS(400));
+    CHECK(n == 1 && strstr(snap[0].label, "Apple") != NULL,
+          "follower label should name the vendor, got '%s'",
+          n ? snap[0].label : "");
+
+    /* Nearby must exclude anything already classified. */
+    n = argus_track_nearby(nearby, 8, SECS(400));
+    CHECK(n == 0, "a classified device must leave the nearby list, got %zu", n);
+}
+
 static void test_adv_parsing(void)
 {
     banner("advert parsing");
@@ -535,6 +626,8 @@ static void test_mac_parsing(void)
 int main(void)
 {
     test_oui_lookup();
+    test_vendor_lookup();
+    test_vendor_labelling();
     test_adv_parsing();
     test_ble_signatures();
     test_random_address();

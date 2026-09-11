@@ -48,6 +48,14 @@ typedef struct {
     const char      *label;
 } argus_oui_t;
 
+/* Benign vendor prefix.  Four bytes per entry, which is what makes it
+ * affordable to carry ten thousand of them: the name is an index into a
+ * shared table rather than a pointer per row. */
+typedef struct {
+    uint8_t oui[3];
+    uint8_t vendor;
+} argus_vendor_oui_t;
+
 #define ARGUS_LABEL_LEN 24
 
 /* One classified sighting. */
@@ -61,6 +69,13 @@ typedef struct {
     uint8_t          points;       /* score contribution */
     char             label[ARGUS_LABEL_LEN];
     char             detail[32];   /* BLE name or SSID, when present */
+    /* Benign vendor name, or NULL.  Always points into the generated table in
+     * flash, so copying an event around stays safe and free. */
+    const char      *vendor;
+    /* The advertiser used a randomised address, so no vendor can be known.
+     * Distinct from "vendor lookup missed": one is deliberate anonymity, the
+     * other is a gap in our table, and conflating them makes the UI lie. */
+    bool             addr_random;
     int64_t          first_seen_us;
     int64_t          last_seen_us;
     uint32_t         hits;

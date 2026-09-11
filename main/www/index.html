@@ -93,13 +93,33 @@
   <table>
     <thead>
       <tr>
-        <th>class</th><th>label</th><th>mac</th><th>detail</th>
+        <th>class</th><th>label</th><th>vendor</th><th>mac</th><th>detail</th>
         <th>rssi</th><th>via</th><th>evidence</th><th>hits</th><th>last</th><th></th>
       </tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
   <div class="empty" id="empty">Nothing detected yet.</div>
+</div>
+
+<div class="panel">
+  <h2>Nearby, unidentified <span id="nearbyinfo" class="dim"></span></h2>
+  <p class="dim" style="margin:0 0 10px;font-size:11px">
+    Devices that matched no threat signature. Naming the vendor is usually
+    enough to recognise your own gear &mdash; ignore it here and it stops
+    counting toward the follower heuristic. Most phones and trackers rotate
+    their Bluetooth address, and a rotating address carries no vendor at all;
+    those show as <em>random MAC</em>, and ignoring one only holds until it
+    rotates.
+  </p>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>vendor</th><th>mac</th><th>via</th><th>rssi</th><th>hits</th><th>last</th><th></th></tr>
+      </thead>
+      <tbody id="nearbyrows"></tbody>
+    </table>
+  </div>
 </div>
 
 <div class="panel">
@@ -173,6 +193,7 @@ async function refresh() {
       const cells = [
         ['span', 'tag t-' + d.class, d.class],
         ['text', '', d.label],
+        ['text', 'dim', d.vendor || (d.random ? 'random MAC' : '')],
         ['text', 'dim', d.mac],
         ['text', '', d.detail],
         ['text', '', d.rssi + ' dBm'],
@@ -206,6 +227,37 @@ async function refresh() {
       rows.appendChild(tr);
     }
     $('empty').style.display = devices.devices.length ? 'none' : 'block';
+
+    const near = await fetch('/api/nearby').then(r => r.json());
+    $('nearbyinfo').textContent = near.nearby.length
+      ? '— ' + near.nearby.length + ' seen'
+      : '— nothing yet';
+    const nrows = $('nearbyrows');
+    nrows.replaceChildren();
+    for (const d of near.nearby) {
+      const tr = document.createElement('tr');
+      for (const [cls, value] of [
+        ['', d.vendor || (d.random ? 'random MAC' : 'unknown')],
+        ['dim', d.mac],
+        ['dim', d.source],
+        ['dim', d.rssi + ' dBm'],
+        ['dim', String(d.hits)],
+        ['dim', ago(d.last_seen_s) + ' ago'],
+      ]) {
+        const td = document.createElement('td');
+        td.className = cls;
+        td.textContent = value;   // textContent: a stranger's radio chose this
+        tr.appendChild(td);
+      }
+      const td = document.createElement('td');
+      const b = document.createElement('button');
+      b.className = 'mini';
+      b.textContent = 'ignore';
+      b.addEventListener('click', () => mute('mac', d.mac));
+      td.appendChild(b);
+      tr.appendChild(td);
+      nrows.appendChild(tr);
+    }
 
     const net = await fetch('/api/netcfg').then(r => r.json());
     $('netinfo').textContent = net.configured

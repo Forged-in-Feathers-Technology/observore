@@ -60,6 +60,11 @@ size_t argus_track_snapshot(argus_event_t *out, size_t max, int64_t now_us);
 /* Collect devices classified since the last call and mark them reported.
  * This is the serial event log: each detection is printed once, when it is
  * first identified, rather than on every repeat sighting. */
+/* Snapshot the devices that were NOT classified, busiest first.  These are
+ * the ones worth naming and muting before they ever trip the follower
+ * heuristic -- your own phone, your own speakers, the neighbour's TV. */
+size_t argus_track_nearby(argus_event_t *out, size_t max, int64_t now_us);
+
 size_t argus_track_drain_new(argus_event_t *out, size_t max);
 
 void argus_track_clear(void);

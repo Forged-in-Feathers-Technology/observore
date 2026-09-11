@@ -38,6 +38,11 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out);
 
 /* Exposed for host-side tests and for the follower tracker. */
 const argus_oui_t *argus_oui_lookup(const uint8_t mac[ARGUS_MAC_LEN]);
+
+/* Benign vendor name for a prefix, or NULL.  LABELLING ONLY -- this never
+ * classifies a device and never contributes to the score.  Returns NULL for
+ * randomised addresses, which carry no vendor information. */
+const char *argus_vendor_lookup(const uint8_t mac[ARGUS_MAC_LEN]);
 bool argus_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len);
 bool argus_mac_is_random(const uint8_t mac[ARGUS_MAC_LEN]);
 

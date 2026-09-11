@@ -177,6 +177,28 @@ const argus_oui_t *argus_oui_lookup(const uint8_t mac[ARGUS_MAC_LEN])
     return NULL;
 }
 
+const char *argus_vendor_lookup(const uint8_t mac[ARGUS_MAC_LEN])
+{
+    if (!mac || argus_mac_is_random(mac)) {
+        return NULL;
+    }
+    size_t lo = 0, hi = ARGUS_VENDOR_OUIS_LEN;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int cmp = memcmp(ARGUS_VENDOR_OUIS[mid].oui, mac, 3);
+        if (cmp == 0) {
+            uint8_t v = ARGUS_VENDOR_OUIS[mid].vendor;
+            return (v < ARGUS_VENDOR_NAMES_LEN) ? ARGUS_VENDOR_NAMES[v] : NULL;
+        }
+        if (cmp < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return NULL;
+}
+
 const uint8_t *argus_adv_field(const uint8_t *adv, size_t adv_len, uint8_t type,
                                size_t *len_out)
 {

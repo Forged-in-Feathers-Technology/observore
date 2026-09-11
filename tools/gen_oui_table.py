@@ -77,6 +77,63 @@ EXTRA = [
     # (oui, category, label)
 ]
 
+# Benign vendors, for LABELLING ONLY.  A match here never classifies a device,
+# never scores, and never raises the threat level -- it only puts a name beside
+# a MAC so you can tell your own phone from something you have never seen, and
+# mute it in one click.
+#
+# Keeping this separate from CATEGORIES is the point: mixing "this is a
+# surveillance camera" and "this is a Samsung" into one table is how a detector
+# starts crying wolf at its owner's handset.
+#
+# Add vendors freely -- each prefix costs 4 bytes of flash.  Anything already
+# claimed as a threat above keeps that claim.
+VENDORS = OrderedDict([
+    ("Apple",        [r"\bapple, inc"]),
+    ("Samsung",      [r"\bsamsung\b"]),
+    ("Google",       [r"\bgoogle\b"]),
+    ("Huawei",       [r"\bhuawei\b"]),
+    ("Xiaomi",       [r"\bxiaomi\b"]),
+    ("Intel",        [r"\bintel corporate"]),
+    ("Cisco",        [r"\bcisco systems"]),
+    ("Espressif",    [r"\bespressif\b"]),
+    ("Amazon",       [r"\bamazon tech"]),
+    ("Microsoft",    [r"\bmicrosoft\b"]),
+    ("Sony",         [r"\bsony\b"]),
+    ("LG",           [r"\blg electronics\b"]),
+    ("TP-Link",      [r"\btp-link\b"]),
+    ("Texas Instr",  [r"texas instruments"]),
+    ("HP",           [r"\bhewlett packard\b", r"\bhp inc\b"]),
+    ("Dell",         [r"\bdell inc\b"]),
+    ("Lenovo",       [r"\blenovo\b"]),
+    ("Hon Hai",      [r"\bhon hai\b"]),
+    ("Silicon Labs", [r"silicon lab"]),
+    ("Nintendo",     [r"\bnintendo\b"]),
+    ("ASUS",         [r"\basustek\b"]),
+    ("AzureWave",    [r"\bazurewave\b"]),
+    ("Murata",       [r"\bmurata\b"]),
+    ("Netgear",      [r"\bnetgear\b"]),
+    ("Liteon",       [r"\bliteon\b"]),
+    ("Ubiquiti",     [r"\bubiquiti\b"]),
+    ("Tuya",         [r"\btuya\b"]),
+    ("Roku",         [r"\broku\b"]),
+    ("Sonos",        [r"\bsonos\b"]),
+    ("Belkin",       [r"\bbelkin\b"]),
+    ("Bose",         [r"\bbose\b"]),
+    ("Logitech",     [r"\blogitech\b"]),
+    ("Garmin",       [r"garmin international"]),
+    ("Fitbit",       [r"\bfitbit\b"]),
+    ("Broadcom",     [r"\bbroadcom\b"]),
+    ("Qualcomm",     [r"\bqualcomm\b"]),
+    ("MediaTek",     [r"\bmediatek\b"]),
+    ("Realtek",      [r"\brealtek\b"]),
+    ("Nordic Semi",  [r"nordic semiconductor"]),
+    ("Raspberry Pi", [r"raspberry pi"]),
+    ("Philips",      [r"\bsignify\b", r"\bphilips lighting\b"]),
+    ("IKEA",         [r"\bikea\b"]),
+    ("Tesla",        [r"\btesla,? inc", r"tesla motors"]),
+])
+
 
 def fetch(path):
     if path:
@@ -112,8 +169,8 @@ def main():
 
     rows = []
     claimed = set()
-    reader = csv.DictReader(io.StringIO(fetch(args.csv)))
-    for row in reader:
+    rows_raw = list(csv.DictReader(io.StringIO(fetch(args.csv))))
+    for row in rows_raw:
         if row.get("Registry") != "MA-L":
             continue
         oui = (row.get("Assignment") or "").strip().upper()
@@ -130,6 +187,25 @@ def main():
         if oui not in claimed:
             rows.append((oui, cat, label))
             claimed.add(oui)
+
+    # Benign vendors, second pass.  Threat claims above always win.
+    vendor_names = list(VENDORS.keys())
+    vendor_pats = [(i, [re.compile(p, re.I) for p in pats])
+                   for i, pats in enumerate(VENDORS.values())]
+    vendor_rows = []
+    for row in rows_raw:
+        if row.get("Registry") != "MA-L":
+            continue
+        oui = (row.get("Assignment") or "").strip().upper()
+        org = row.get("Organization Name") or ""
+        if len(oui) != 6 or oui in claimed:
+            continue
+        for idx, pats in vendor_pats:
+            if any(p.search(org) for p in pats):
+                vendor_rows.append((oui, idx))
+                claimed.add(oui)
+                break
+    vendor_rows.sort(key=lambda r: r[0])
 
     rows.sort(key=lambda r: r[0])
 
@@ -155,9 +231,35 @@ def main():
         fh.write("#define ARGUS_OUI_TABLE_LEN "
                  "(sizeof(ARGUS_OUI_TABLE) / sizeof(ARGUS_OUI_TABLE[0]))\n")
 
-    sys.stderr.write("wrote %s: %d prefixes (%s)\n" % (
+        fh.write("\n/* Benign vendors -- LABELLING ONLY.  A match here never\n"
+                 " * classifies, never scores, and never raises the threat\n"
+                 " * level.  It exists so an unknown MAC can be recognised as\n"
+                 " * your own handset and muted in one click.\n"
+                 " */\n")
+        fh.write("static const char *const ARGUS_VENDOR_NAMES[] = {\n")
+        for name in vendor_names:
+            fh.write('    "%s",\n' % name)
+        fh.write("};\n\n")
+        fh.write("#define ARGUS_VENDOR_NAMES_LEN "
+                 "(sizeof(ARGUS_VENDOR_NAMES) / sizeof(ARGUS_VENDOR_NAMES[0]))"
+                 "\n\n")
+        fh.write("/* %d prefixes, 4 bytes each (%.1f KB of flash). */\n"
+                 % (len(vendor_rows), len(vendor_rows) * 4 / 1024))
+        fh.write("static const argus_vendor_oui_t ARGUS_VENDOR_OUIS[] = {\n")
+        for oui, idx in vendor_rows:
+            fh.write("    {{0x%s, 0x%s, 0x%s}, %d},\n"
+                     % (oui[0:2], oui[2:4], oui[4:6], idx))
+        fh.write("};\n\n")
+        fh.write("#define ARGUS_VENDOR_OUIS_LEN "
+                 "(sizeof(ARGUS_VENDOR_OUIS) / sizeof(ARGUS_VENDOR_OUIS[0]))\n")
+
+    sys.stderr.write("wrote %s: %d threat prefixes (%s)\n" % (
         args.out, len(rows),
         ", ".join("%s=%d" % (c, n) for c, n in counts.items())))
+    sys.stderr.write("  plus %d benign vendor prefixes across %d vendors "
+                     "(%.1f KB)\n"
+                     % (len(vendor_rows), len(vendor_names),
+                        len(vendor_rows) * 4 / 1024))
 
 
 if __name__ == "__main__":

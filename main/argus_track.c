@@ -162,6 +162,12 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
         slot->in_use = true;
         memcpy(slot->ev.mac, obs->mac, ARGUS_MAC_LEN);
         slot->ev.first_seen_us = now_us;
+        /* Name the vendor once, for every device -- this is what lets an
+         * unrecognised MAC be read as "my own handset" and muted, and what
+         * gives a follower hit something to go on. */
+        slot->ev.addr_random = obs->addr_random;
+        slot->ev.vendor = obs->addr_random ? NULL
+                                           : argus_vendor_lookup(obs->mac);
     }
 
     slot->ev.hits++;
@@ -193,7 +199,9 @@ bool argus_track_observe(const argus_observation_t *obs, int64_t now_us)
             slot->ev.evidence = ARGUS_EVIDENCE_PERSISTENCE;
             slot->ev.points = argus_class_points(ARGUS_CLASS_FOLLOWER);
             snprintf(slot->ev.label, sizeof(slot->ev.label), "persistent %s",
-                     argus_mac_is_random(obs->mac) ? "(random MAC)" : "device");
+                     slot->ev.vendor ? slot->ev.vendor
+                     : (obs->addr_random || argus_mac_is_random(obs->mac))
+                           ? "(random MAC)" : "device");
             slot->classified = true;
         }
     }
@@ -272,6 +280,35 @@ size_t argus_track_snapshot(argus_event_t *out, size_t max, int64_t now_us)
         argus_event_t key = out[i];
         size_t j = i;
         while (j > 0 && out[j - 1].last_seen_us < key.last_seen_us) {
+            out[j] = out[j - 1];
+            j--;
+        }
+        out[j] = key;
+    }
+    return n;
+}
+
+size_t argus_track_nearby(argus_event_t *out, size_t max, int64_t now_us)
+{
+    (void)now_us;
+    if (!out || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    ARGUS_LOCK();
+    for (size_t i = 0; i < ARGUS_MAX_DEVICES && n < max; i++) {
+        if (s_devices[i].in_use && !s_devices[i].classified) {
+            out[n++] = s_devices[i].ev;
+        }
+    }
+    ARGUS_UNLOCK();
+
+    /* Busiest first: the things you see most are the things worth naming and
+     * muting, and a long tail of one-off sightings is noise. */
+    for (size_t i = 1; i < n; i++) {
+        argus_event_t key = out[i];
+        size_t j = i;
+        while (j > 0 && out[j - 1].hits < key.hits) {
             out[j] = out[j - 1];
             j--;
         }

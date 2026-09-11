@@ -34,6 +34,13 @@ which one fired so you can judge a hit rather than just trust it:
   ASTM F3411 Remote ID over BLE (`0xFFFA`/`0x0D`) and over Wi-Fi
   (vendor IE `FA:0B:BC`/`0x0D`).
 - **Name and SSID keywords** — for hardware that announces itself.
+- **Vendor labelling** — 10,348 benign vendor prefixes across 43 common
+  manufacturers (Apple, Samsung, Ubiquiti, Espressif, Google, …), also
+  generated from the IEEE registry. These **never classify and never score**.
+  They exist so an anonymous MAC reads as "Apple" and you can recognise your
+  own gear at a glance. Kept in a table entirely separate from the threat
+  prefixes, because mixing "this is a surveillance camera" with "this is a
+  Samsung" is how a detector starts crying wolf at its owner's phone.
 - **Persistence** — the follower heuristic: an unclassified BLE address seen
   3+ times spanning 5+ minutes is reported as following you. This is the part
   that catches hardware with no signature at all, and it is the reason to
@@ -180,10 +187,37 @@ prefixes; refresh it with:
 python3 tools/gen_oui_table.py
 ```
 
-The vendor-to-category mapping lives in `tools/gen_oui_table.py` — add vendors
-there, not to the generated header.
+Both tables live in that one generated header. The threat categories are in
+`CATEGORIES` and the benign vendor list is in `VENDORS` — add vendors there,
+not to the generated header. A prefix claimed as a threat is never also listed
+as benign.
+
+Each benign prefix costs 4 bytes of flash (the name is an index into a shared
+table, not a pointer per row). The 43 vendors shipped cost about 40 KB, taking
+the firmware from 973 KB to 1032 KB — roughly 4% of the app partition. Adding
+more is cheap; trimming `VENDORS` is the way to claw it back.
 
 ## Ignoring what you already know about
+
+The console's **Nearby, unidentified** panel lists everything that matched no
+threat signature, busiest first, with a vendor name where one is known and an
+**ignore** button on each row. That is the intended workflow: name your own
+gear once, ignore it, and let what remains stand out.
+
+How well vendor naming works depends entirely on the radio:
+
+| Source | Vendor resolution | Why |
+|---|---|---|
+| Wi-Fi AP BSSIDs | good | access points use their real assigned MAC |
+| Wi-Fi virtual BSSIDs | none | guest/IoT SSIDs use locally-administered addresses |
+| Wi-Fi clients | usually none | modern devices randomise when probing |
+| BLE | mostly none | phones and trackers rotate their address |
+
+A blank vendor is reported honestly as either **random MAC** (the device is
+deliberately anonymous, and ignoring it only holds until it rotates) or
+**unknown** (a genuine gap in the table). Conflating those two would make the
+UI lie about what it knows.
+
 
 A detector that cries wolf at your own doorbell every day is one you stop
 reading. Anything already judged harmless can be muted, on either radio, at
