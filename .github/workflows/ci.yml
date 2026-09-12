@@ -45,23 +45,22 @@ jobs:
           esp_idf_version: v5.5
           target: esp32s3
 
-  # The vendor and threat tables are generated, so a change to the generator
-  # that alters its output should be committed, not discovered later.
-  generated-tables:
-    name: OUI table is in sync with its generator
+  # Validates the generated table against the invariants the firmware relies
+  # on -- sorted, no duplicates, the two tables disjoint, indices in range.
+  #
+  # It deliberately does NOT download the IEEE registry to diff against.  That
+  # was the first attempt and it was wrong twice over: the registry is
+  # unreachable from GitHub's runners, and even when reachable it publishes new
+  # assignments constantly, so the job would go red for reasons that have
+  # nothing to do with this repository being correct.  Regenerating stays a
+  # deliberate manual step.
+  oui-table:
+    name: OUI table invariants
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Regenerate and diff
-        run: |
-          python3 tools/gen_oui_table.py
-          if ! git diff --quiet -- main/observore_oui_table.h; then
-            echo "::error::main/observore_oui_table.h differs from what tools/gen_oui_table.py produces."
-            echo "Either the generator changed without regenerating, or the IEEE registry moved on."
-            git diff --stat -- main/observore_oui_table.h
-            exit 1
-          fi
-          echo "in sync"
+      - name: Validate the generated table
+        run: python3 tools/check_oui_table.py

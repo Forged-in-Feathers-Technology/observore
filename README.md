@@ -306,8 +306,15 @@ make -C test test
 ```
 
 CI runs these on every push, alongside the credential scan, an ESP-IDF build
-for the esp32s3, and a check that the generated OUI table still matches what
-its generator produces.
+for the esp32s3, and a validation of the generated OUI table — that both tables
+are sorted for binary search, carry no duplicates, stay disjoint from each
+other, and index only names that exist.
+
+That check deliberately does not re-download the IEEE registry to diff against.
+The registry is unreachable from GitHub's runners, and it publishes new
+assignments constantly, so such a job would fail for reasons unrelated to
+whether this repository is correct. Refreshing the table stays a deliberate
+manual step.
 
 ### Regenerating the OUI table
 
