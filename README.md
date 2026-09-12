@@ -370,7 +370,22 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-`idf.py set-target esp32s3` is needed once in a fresh checkout. The XIAO uses
+`idf.py set-target esp32s3` is needed once in a fresh checkout.
+
+### Other targets
+
+The reference board is the XIAO ESP32S3 and every measurement here was taken on
+it, but the firmware builds for `esp32c6` and `esp32c5` too, and CI builds all
+three so portability breaks surface immediately rather than months later.
+
+Per-chip settings live in `sdkconfig.defaults.<target>`, which ESP-IDF loads on
+top of the shared `sdkconfig.defaults`. Two things differ in practice: neither
+RISC-V target has PSRAM, so the console runs on its smaller internal budget;
+and a RISC-V build is about a fifth larger than Xtensa, which is why the
+application partition is sized the way it is.
+
+Those builds are compile-tested only — running Observore on a C5 or C6 has not
+been verified, and the 5 GHz radio the C5 has is not used yet. The XIAO uses
 the S3's native USB-Serial/JTAG, so it enumerates as `/dev/ttyACM0`, not
 `/dev/ttyUSB0`.
 

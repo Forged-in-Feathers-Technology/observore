@@ -1,0 +1,8 @@
+# ESP32-C6. No PSRAM, so the console runs on its internal fallback.
+# 2.4 GHz only, like the S3.
+
+# ESP-IDF defaults this target to 2 MB, which the 3 MB application partition
+# does not fit -- the build fails at the partition table, before any code is
+# compiled. 4 MB is the smallest size found on boards for this chip and leaves
+# roughly 900 KB spare; raise it if yours has more.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y

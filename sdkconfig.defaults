@@ -1,22 +1,12 @@
-# Target: Seeed Studio XIAO ESP32S3 (ESP32-S3R8, 8 MB flash, 8 MB octal PSRAM)
+# Settings that hold for every supported target.
+#
+# Anything chip- or board-specific belongs in sdkconfig.defaults.<target>,
+# which ESP-IDF loads automatically on top of this file. Keeping PSRAM or a
+# flash size here made them "unknown kconfig symbol" warnings on the RISC-V
+# targets, which is the kind of noise that trains people to ignore warnings.
 
-CONFIG_IDF_TARGET="esp32s3"
-
-# Flash
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-
-# PSRAM.  The device table and the JSON buffer fit comfortably in internal RAM,
-# but leaving PSRAM on gives the Wi-Fi and BLE stacks room to coexist.
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
-
-# Console over the S3's native USB-Serial/JTAG -- the XIAO has no UART bridge.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # Bluetooth: NimBLE, observer only.  No advertising, no GATT server, nothing
 # that would make this device visible to anything it is watching.
@@ -40,6 +30,10 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
+# Every supported target has a native USB serial/JTAG peripheral and the boards
+# in question carry no UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
 # Wi-Fi uplink credentials are deliberately EMPTY here -- this file is tracked
 # by git.  Set them with `idf.py menuconfig` (sdkconfig is gitignored), or with
 # a gitignored credentials.conf, or at runtime from the console.
@@ -47,7 +41,7 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_OBSERVORE_WIFI_SSID=""
 CONFIG_OBSERVORE_WIFI_PASSWORD=""
 
-# Gotify pushes go over TLS to whatever host you run, so the Mozilla root
+# Notifications go over TLS to whatever host you run, so the Mozilla root
 # bundle is compiled in rather than pinning a single certificate.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
