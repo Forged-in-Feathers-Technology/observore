@@ -14,6 +14,67 @@ pushes notifications, and serves the log on your network.
 
 Observer and carnivore: it eats surveillance signals.
 
+## Getting started
+
+You need a XIAO ESP32S3, a USB-C cable and
+[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.5 or later. The
+whole first run takes about ten minutes, most of it waiting.
+
+**1. Build and flash.**
+
+```bash
+. ~/esp/esp-idf/export.sh
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+The XIAO uses the S3's native USB-Serial/JTAG, so it appears as
+`/dev/ttyACM0`, not `/dev/ttyUSB0`.
+
+**2. Write down the console password.** It is generated once, on this device,
+and printed at every boot:
+
+```
+console SoftAP: "console-F964FD"  password: 2p78ggedb4bj
+```
+
+You will need it in a moment, and serial is the only place it appears — see
+[The console password](#the-console-password).
+
+**3. Open the console.** Hold the BOOT button for 1.5 s. The LED goes solid and
+the log says the SoftAP is up. Join `console-XXXXXX` with the password from
+step 2 and open <http://192.168.4.1/>.
+
+If nothing happens, keep holding: the firmware prints how long it saw the
+button held, so a press slightly too short looks different from a dead button.
+
+**4. Give it your Wi-Fi.** In the **Network** panel enter your SSID and
+password, and Save. Then hold the button for 1.5 s again — it joins, and the
+log prints the address the console now lives at:
+
+```
+uplink up at 192.168.1.42
+```
+
+From here the console is on your LAN and the SoftAP is no longer needed. Note
+that it is only on your network during its uplink window, so the address
+answers for about thirty seconds out of every two and a half minutes — that is
+[deliberate](#patrol-and-uplink-alternate).
+
+**5. Optionally, set up notifications.** In the **Notifications** panel, put in
+a [Gotify](https://gotify.net/) server URL and application token, Save, then
+**Send test** while the uplink is up.
+
+**6. Leave it where it will live, and take a baseline.** Let it patrol for ten
+minutes or so, then open the console and press **Set baseline**. That marks
+everything currently in range as known and resets the score, so from then on it
+reports what is *new* rather than the whole neighbourhood.
+
+**Then expect quiet.** After a good baseline Observore should say almost
+nothing. A silent device is the normal state, not a broken one — the heartbeat
+on the serial log tells you it is still watching.
+
 ## What it does
 
 **While patrolling, it listens and does not answer.** Nothing it observes can
@@ -45,7 +106,7 @@ Detection runs across three phases:
 | Phase | What it catches |
 |---|---|
 | BLE passive scan (continuous) | trackers, body cameras, smart glasses, Remote ID drones, followers |
-| Wi-Fi passive scan (~8 s/cycle) | camera and ALPR vendor APs, camera-keyword SSIDs |
+| Wi-Fi passive scan (~10 s/cycle) | camera and ALPR vendor APs, camera-keyword SSIDs |
 | Wi-Fi promiscuous sniff (~5 s/cycle, ch 1–13) | Remote ID beacons, hidden and non-broadcasting APs |
 
 Classification uses four independent kinds of evidence, and the UI tells you
@@ -148,8 +209,8 @@ the device on the uplink indefinitely. **A user interface must not be able to
 blind the detector**, so the hold has a hard ceiling.
 
 The console is therefore reachable within about two minutes rather than
-continuously. If it does not answer, it is patrolling; wait, or hold the button
-to bring it up now.
+continuously. If it does not answer, it is patrolling: wait for the next uplink
+window, or hold the button for 1.5 s to go there now.
 
 The button means "switch now" and alternation continues from there, so a single
 press can never strand the device in a mode it will not leave.
@@ -165,8 +226,9 @@ than sitting associated to nothing.
 Credentials never belong in a tracked file. There are three ways to set them,
 and the first is the one to prefer:
 
-**1. At runtime, from the console.** Hold the button, join the SoftAP, and fill
-in the **Network** panel. Stored in NVS. Nothing touches this repo at all, and
+**1. At runtime, from the console.** Hold the button for 4 s to raise the
+SoftAP (1.5 s is enough before any network is configured), join it, and fill in
+the **Network** panel. Stored in NVS. Nothing touches this repo at all, and
 nothing needs rebuilding to re-point a device at a different network.
 
 **2. `idf.py menuconfig`** → **Observore** → Wi-Fi uplink. This writes `sdkconfig`,
@@ -237,7 +299,7 @@ Two caveats, both real:
   will fail there however the network is configured.
 - **It is only on the network during its uplink window.** While patrolling it
   has no address at all, so neither the name nor the IP will answer. Wait for
-  the next window, or hold the button.
+  the next window, or hold the button for 1.5 s.
 
 The address is also reported on the serial log as `uplink up at <ip>`, in the
 console's Network panel, and in your router's DHCP lease table. The Wi-Fi
@@ -269,22 +331,25 @@ The password is write-only from outside the device: no API returns it, and the
 console never receives it, so the field stays blank even when a network is
 configured.
 
-## Build and flash
+## Building
 
-Needs [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.5 or later.
+For a first run, follow [Getting started](#getting-started) — this section is
+the reference for everything after that.
 
 ```bash
 . ~/esp/esp-idf/export.sh
-idf.py set-target esp32s3
 idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
-`/dev/ttyACM0`, not `/dev/ttyUSB0`.
+`idf.py set-target esp32s3` is needed once in a fresh checkout. The XIAO uses
+the S3's native USB-Serial/JTAG, so it enumerates as `/dev/ttyACM0`, not
+`/dev/ttyUSB0`.
 
-Configure the LED pin, button pin and hostname under `idf.py menuconfig` →
-**Observore**.
+Everything tunable lives under `idf.py menuconfig` → **Observore**: the LED and
+button pins, the hostname, the patrol and uplink windows, the BLE duty cycle,
+and the credential overrides. Settings written there land in `sdkconfig`, which
+is gitignored.
 
 ### The console password
 
@@ -312,8 +377,9 @@ value reaches a tracked file.
 
 ### Reading the log
 
-Hold the button, join the `console-XXXXXX` network, open
-<http://192.168.4.1/>. The page lists every classified device with its class,
+Once a network is configured the console lives on your LAN, and the SoftAP is
+only needed when you are away from it — hold the button for **4 s** to raise it,
+join `console-XXXXXX`, and open <http://192.168.4.1/>. The page lists every classified device with its class,
 MAC, signal, evidence and how long ago it was last heard.
 
 ### Tests
@@ -351,9 +417,9 @@ not to the generated header. A prefix claimed as a threat is never also listed
 as benign.
 
 Each benign prefix costs 4 bytes of flash (the name is an index into a shared
-table, not a pointer per row). The 43 vendors shipped cost about 40 KB, taking
-the firmware from 973 KB to 1032 KB — roughly 4% of the app partition. Adding
-more is cheap; trimming `VENDORS` is the way to claw it back.
+table, not a pointer per row). The 43 vendors shipped cost about 40 KB of
+flash. Adding more is cheap; trimming `VENDORS` is the way to claw it back.
+`idf.py build` reports how much of the app partition remains.
 
 ## Ignoring what you already know about
 
