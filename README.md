@@ -336,6 +336,26 @@ configured.
 For a first run, follow [Getting started](#getting-started) — this section is
 the reference for everything after that.
 
+### Flashing a release without a toolchain
+
+Every tagged release carries `bootloader.bin`, `partition-table.bin`,
+`observore.bin`, a `SHA256SUMS`, and an [ESP Web
+Tools](https://esphome.github.io/esp-web-tools/) `manifest.json`. With
+`esptool` alone:
+
+```bash
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
+    0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 observore.bin
+```
+
+**These are three separate files on purpose.** A single merged image would
+span `0x0` upward with the gaps padded, and the NVS partition sits at `0x9000`
+— inside that span. Flashing one would silently erase every mute rule, the
+Wi-Fi credentials, the notifier token and the device's generated console
+password. Writing the parts at their own offsets leaves NVS alone, so an
+upgrade keeps everything it has learned and wiping is an explicit choice
+(`esptool.py erase_flash`).
+
 ```bash
 . ~/esp/esp-idf/export.sh
 idf.py build
