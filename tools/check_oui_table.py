@@ -16,7 +16,7 @@ What it checks, and why each one matters:
   * no prefix in both tables -- a benign vendor match must never be able to
     classify, and a threat prefix must never be reported as ordinary kit.
   * every vendor index within the names array -- an out-of-range index would
-    read past the end of ARGUS_VENDOR_NAMES at runtime.
+    read past the end of OBSERVORE_VENDOR_NAMES at runtime.
   * the counts in the generated comments match the rows actually present --
     catches a hand-edited or half-regenerated header.
 """
@@ -36,8 +36,7 @@ def main():
     src = open(HEADER, encoding="utf-8").read()
     problems = 0
 
-    names = re.search(r"ARGUS_VENDOR_NAMES\[\] = \{(.*?)\};", src, re.S)
-    names = re.search(r"OBSERVORE_VENDOR_NAMES\[\] = \{(.*?)\};", src, re.S) or names
+    names = re.search(r"OBSERVORE_VENDOR_NAMES\[\] = \{(.*?)\};", src, re.S)
     if not names:
         return fail("vendor name array not found")
     vendor_names = re.findall(r'"(.*?)"', names.group(1))

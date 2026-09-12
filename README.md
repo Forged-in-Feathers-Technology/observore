@@ -382,15 +382,31 @@ the reference for everything after that.
 
 ### Flashing a release without a toolchain
 
-Every tagged release carries `bootloader.bin`, `partition-table.bin`,
-`observore.bin`, a `SHA256SUMS`, and an [ESP Web
-Tools](https://esphome.github.io/esp-web-tools/) `manifest.json`. With
-`esptool` alone:
+Every tagged release carries a bootloader, partition table and application
+**per supported chip**, named with the target, plus a `SHA256SUMS`, an [ESP Web
+Tools](https://esphome.github.io/esp-web-tools/) `manifest.json` and the
+per-target `builds-<target>.json` the manifest is assembled from.
+
+With `esptool` alone — note that **the bootloader offset is not the same on
+every chip**, so these commands are not interchangeable:
 
 ```bash
+# XIAO ESP32S3 -- bootloader at 0x0
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
-    0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 observore.bin
+    0x0     bootloader-esp32s3.bin \
+    0x8000  partition-table-esp32s3.bin \
+    0x10000 observore-esp32s3.bin
+
+# ESP32-C5 -- bootloader at 0x2000
+esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
+    0x2000  bootloader-esp32c5.bin \
+    0x8000  partition-table-esp32c5.bin \
+    0x10000 observore-esp32c5.bin
 ```
+
+`manifest.json` in the release is the authoritative copy of those offsets: it
+is generated from each build rather than written by hand, so if these ever
+disagree, believe the manifest.
 
 **These are three separate files on purpose.** A single merged image would
 span `0x0` upward with the gaps padded, and the NVS partition sits at `0x9000`
@@ -406,7 +422,8 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-`idf.py set-target esp32s3` is needed once in a fresh checkout.
+`idf.py set-target esp32s3` — or `esp32c5`, or `esp32c6` — is needed once in
+a fresh checkout, and again whenever you change target.
 
 ### Other targets
 
@@ -766,9 +783,13 @@ The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,
 and Wi-Fi and lwip allocate from it. Observore therefore builds its JSON responses
 in **PSRAM** where there is any, not in static internal buffers.
 
-Targets without PSRAM — the C3, C5 and C6 — take a smaller budget from internal
-memory instead and report fewer devices per request. The console says which it
-got, and the heartbeat shows the consequence.
+Boards without PSRAM take a smaller budget from internal memory instead and
+report fewer devices per request. The console says which it got, and the
+heartbeat shows the consequence.
+
+Whether a board has PSRAM is not a property of the chip. The C6 has none; the
+C5 has it on `R`-suffixed modules and not otherwise, which is why the shipped
+C5 image is built to boot either way. The XIAO ESP32S3 has 8 MB.
 
 This is not premature tuning. An earlier version used static internal scratch
 (two 20 KB device snapshots plus 32 KB and 12 KB response buffers) and drove

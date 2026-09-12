@@ -112,10 +112,18 @@ normally there, and reports what is new.</p>
 
 <h2>Prefer a terminal?</h2>
 <div class="panel">
-  <p class="note">Every release carries the same three files and a
-  <code>SHA256SUMS</code>.</p>
+  <p class="note">Every release carries a bootloader, partition table and
+  application for each supported chip, named with the target, plus a
+  <code>SHA256SUMS</code>. The bootloader offset differs per chip, so these
+  are not interchangeable.</p>
   <pre>esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
-    0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 observore.bin</pre>
+    0x0 bootloader-esp32s3.bin \
+    0x8000 partition-table-esp32s3.bin \
+    0x10000 observore-esp32s3.bin</pre>
+  <pre>esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
+    0x2000 bootloader-esp32c5.bin \
+    0x8000 partition-table-esp32c5.bin \
+    0x10000 observore-esp32c5.bin</pre>
 </div>
 
 <footer>
