@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flash Observore</title>
-<meta name="description" content="Install Observore, a passive counter-surveillance detector for the Seeed XIAO ESP32S3, straight from your browser.">
+<meta name="description" content="Install Observore, a passive counter-surveillance detector for the Seeed XIAO ESP32S3 and the dual-band ESP32-C5, straight from your browser.">
 <style>
   :root {
     --bg:#0d0f12; --panel:#16191f; --line:#262b33; --fg:#e6e9ef; --dim:#8b93a1;
@@ -40,15 +40,19 @@
 <body>
 
 <h1>Observore</h1>
-<p class="sub">A passive counter-surveillance detector for the Seeed XIAO ESP32S3.
-It sits in one place, learns what is normally there, and reports what is new.</p>
+<p class="sub">A passive counter-surveillance detector for the Seeed XIAO
+ESP32S3 and the dual-band ESP32-C5. It sits in one place, learns what is
+normally there, and reports what is new.</p>
 
 <div class="panel cta">
   <esp-web-install-button manifest="firmware/manifest.json">
     <button slot="activate">Install Observore</button>
     <span slot="unsupported" class="unsupported">
-      This browser cannot talk to serial devices. Use Chrome or Edge on a
-      desktop — Web Serial is not available in Firefox or Safari, or on iOS.
+      This browser cannot talk to serial devices. Use a Chromium-based
+      browser on a desktop — Chrome, Edge, Opera, or Brave 1.69 and later.
+      Web Serial is not available in Firefox or Safari, and not on phones or
+      tablets at all. If you are already using Brave, check it is up to date:
+      Web Serial was disabled by default in older versions.
     </span>
     <span slot="not-allowed" class="unsupported">
       This page must be served over HTTPS to reach a serial device.
@@ -56,7 +60,10 @@ It sits in one place, learns what is normally there, and reports what is new.</p
   </esp-web-install-button>
   <p class="ver" id="ver">&nbsp;</p>
   <p class="note">Plug the board in over USB-C first. It appears as a serial
-  device on its own — no driver, no button to hold.</p>
+  device on its own — no driver, no button to hold. The right firmware is
+  chosen from the chip it finds, so there is nothing to pick.</p>
+  <p class="note">C5 boards have two USB-C ports: a native one and a UART
+  bridge. Either flashes, and the log appears on both.</p>
 </div>
 
 <h2>What this installs, and what it leaves alone</h2>

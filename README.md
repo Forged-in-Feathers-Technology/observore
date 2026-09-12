@@ -23,8 +23,10 @@ chip you plugged in and installs the matching build, so there is nothing to
 choose.
 
 **The quickest route is the [browser
-flasher](https://observore.forgedinfeatherstechnology.com/)** — Chrome
-or Edge on a desktop, no toolchain. It writes the firmware without touching the
+flasher](https://observore.forgedinfeatherstechnology.com/)** — any
+Chromium-based desktop browser (Chrome, Edge, Opera, or Brave 1.69 and later),
+no toolchain. Firefox and Safari do not implement Web Serial, and no mobile
+browser does. It writes the firmware without touching the
 stored configuration, so it upgrades an existing device without losing its mute
 rules, credentials or console password. Skip to step 2 below once it finishes.
 
