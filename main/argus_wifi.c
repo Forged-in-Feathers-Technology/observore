@@ -42,6 +42,7 @@ static bool               s_mode_applied;
 static uint32_t           s_sniffed_frames;
 static EventGroupHandle_t s_sta_events;
 static char               s_uplink_ip[16];
+static char               s_uplink_error[160];
 static int                s_connect_attempts;
 
 #define STA_BIT_GOT_IP  BIT0
@@ -214,6 +215,47 @@ static void run_ap_scan(void)
 /* Station uplink                                                     */
 /* ------------------------------------------------------------------ */
 
+/* The codes worth translating.  A bare number sends people to a search engine
+ * when the answer is usually "wrong password" or "wrong band". */
+static const char *wifi_reason_text(int reason)
+{
+    switch (reason) {
+        case WIFI_REASON_AUTH_EXPIRE:
+        case WIFI_REASON_AUTH_FAIL:
+        case WIFI_REASON_802_1X_AUTH_FAILED:
+            return "authentication rejected -- wrong password?";
+        case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+        case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        case WIFI_REASON_MIC_FAILURE:
+            return "handshake failed -- almost always a wrong password";
+        case WIFI_REASON_NO_AP_FOUND:
+            return "network not found -- check the SSID, and that it is "
+                   "2.4 GHz (the ESP32-S3 has no 5 GHz radio)";
+        case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+            /* Observed cause, in practice, was an empty stored password being
+             * offered to a WPA2 network -- so lead with that rather than with
+             * the exotic explanation. */
+            return "security mismatch -- is the password set? an empty one "
+                   "asks for an open network, which a WPA2 AP refuses";
+        case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+            return "found, but its auth mode was rejected";
+        case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+            return "found, but too weak";
+        case WIFI_REASON_ASSOC_FAIL:
+            return "association refused -- MAC filtering?";
+        case WIFI_REASON_ASSOC_TOOMANY:
+            return "the access point is full";
+        case WIFI_REASON_BEACON_TIMEOUT:
+            return "lost the access point";
+        case WIFI_REASON_CONNECTION_FAIL:
+            return "connection failed";
+        case WIFI_REASON_STA_LEAVING:
+            return "we disconnected";
+        default:
+            return "see WIFI_REASON_* in esp_wifi_types";
+    }
+}
+
 static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
                               void *data)
 {
@@ -223,13 +265,21 @@ static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *e = data;
+
+        /* Log EVERY attempt, not just the last.  Logging only the final one
+         * reported reason 36 -- our own disconnect in the timeout path --
+         * which says nothing about why the join actually failed. */
+        if (e->reason != WIFI_REASON_STA_LEAVING) {
+            snprintf(s_uplink_error, sizeof(s_uplink_error), "%s (reason %d)",
+                     wifi_reason_text(e->reason), e->reason);
+            ESP_LOGW(TAG, "uplink attempt %d/%d failed: %s",
+                     s_connect_attempts + 1, STA_MAX_RETRY + 1, s_uplink_error);
+        }
+
         if (s_connect_attempts < STA_MAX_RETRY) {
             s_connect_attempts++;
             esp_wifi_connect();
         } else {
-            /* Report the reason code: "wrong password" and "AP not found" are
-             * very different problems and both look like a silent failure. */
-            ESP_LOGW(TAG, "uplink failed, reason %d", e->reason);
             xEventGroupSetBits(s_sta_events, STA_BIT_FAILED);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -243,6 +293,11 @@ static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
 const char *argus_wifi_uplink_ip(void)
 {
     return s_uplink_ip;
+}
+
+const char *argus_wifi_uplink_error(void)
+{
+    return s_uplink_error;
 }
 
 esp_err_t argus_wifi_uplink_connect(void)
@@ -263,10 +318,27 @@ esp_err_t argus_wifi_uplink_connect(void)
            strnlen(cfg.ssid, sizeof(sta.sta.ssid)));
     memcpy(sta.sta.password, cfg.password,
            strnlen(cfg.password, sizeof(sta.sta.password)));
+
+    /* Accept whatever security the network offers.
+     *
+     * Left at defaults, a WPA2/WPA3 transition network or one that requires
+     * protected management frames is rejected before any credential is even
+     * tried, with reason 210 (NO_AP_FOUND_W_COMPATIBLE_SECURITY) -- which
+     * reads like "wrong network" when the network is right there.
+     *
+     * threshold.authmode OPEN means "do not refuse on auth mode alone";
+     * pmf capable-but-not-required joins both PMF and non-PMF networks; and
+     * BOTH lets SAE negotiate either hunting-and-pecking or hash-to-element,
+     * since access points differ on which they offer. */
+    sta.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    sta.sta.pmf_cfg.capable = true;
+    sta.sta.pmf_cfg.required = false;
+    sta.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
     /* Wipe the copy on our stack as soon as the driver has it. */
     memset(&cfg, 0, sizeof(cfg));
 
     s_uplink_ip[0] = '\0';
+    s_uplink_error[0] = '\0';
     s_connect_attempts = 0;
     xEventGroupClearBits(s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED);
 
@@ -293,8 +365,9 @@ esp_err_t argus_wifi_uplink_connect(void)
      * arriving nine seconds later. */
     s_connect_attempts = STA_MAX_RETRY;
     esp_wifi_disconnect();
-    ESP_LOGW(TAG, "uplink did not come up within %ds",
-             CONFIG_ARGUS_WIFI_CONNECT_TIMEOUT_S);
+    ESP_LOGW(TAG, "uplink did not come up within %ds: %s",
+             CONFIG_ARGUS_WIFI_CONNECT_TIMEOUT_S,
+             s_uplink_error[0] ? s_uplink_error : "no response from the network");
     return ESP_ERR_TIMEOUT;
 }
 

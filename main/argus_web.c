@@ -334,14 +334,19 @@ static esp_err_t netcfg_get_handler(httpd_req_t *req)
     char escaped[ARGUS_SSID_LEN * 2];
     json_escape(ssid, escaped, sizeof(escaped));
 
-    char body[256];
+    char werr[224];
+    json_escape(argus_wifi_uplink_error(), werr, sizeof(werr));
+
+    char body[ARGUS_SSID_LEN * 2 + sizeof(werr) + 160];
     /* The password is deliberately absent and there is no endpoint that can
      * read it back.  It is write-only from outside the device. */
     snprintf(body, sizeof(body),
-             "{\"configured\":%s,\"ssid\":\"%s\",\"mode\":\"%s\","
-             "\"ip\":\"%s\"}",
+             "{\"configured\":%s,\"ssid\":\"%s\",\"has_password\":%s,"
+             "\"mode\":\"%s\","
+             "\"ip\":\"%s\",\"error\":\"%s\"}",
              set ? "true" : "false", escaped,
-             argus_mode_name(argus_wifi_mode()), argus_wifi_uplink_ip());
+             argus_netcfg_has_password() ? "true" : "false",
+             argus_mode_name(argus_wifi_mode()), argus_wifi_uplink_ip(), werr);
     return send_json(req, body);
 }
 
@@ -359,13 +364,18 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
     if (!query_param(req, "ssid", ssid, sizeof(ssid))) {
         return fail(req, "ssid is required");
     }
-    query_param(req, "password", password, sizeof(password));
+    /* An absent password parameter keeps the stored one; an explicitly empty
+     * one is a deliberate request for an open network. */
+    bool have_password = query_param(req, "password", password,
+                                     sizeof(password));
 
-    const char *why = NULL;
-    if (!argus_netcfg_valid(ssid, password, &why)) {
-        return fail(req, why);
+    if (have_password) {
+        const char *why = NULL;
+        if (!argus_netcfg_valid(ssid, password, &why)) {
+            return fail(req, why);
+        }
     }
-    esp_err_t err = argus_netcfg_set(ssid, password);
+    esp_err_t err = argus_netcfg_set(ssid, have_password ? password : NULL);
     /* Do not leave the password sitting on this task's stack. */
     memset(password, 0, sizeof(password));
     if (err != ESP_OK) {

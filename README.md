@@ -120,6 +120,39 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;credentials.conf" build
 A credential in NVS wins over one compiled in, so setting it at runtime is not
 silently reverted by reflashing the same firmware.
 
+**Leaving the password field blank keeps the stored password.** The console
+clears the field after every save and never receives the password back, so
+always sending it would let a second Save replace a good password with an empty
+one — which asks for an *open* network, and a WPA2 access point refuses that
+with `reason 210, no AP found with compatible security`. That reads as though
+the network were at fault. To genuinely configure an open network, tick **open
+network**.
+
+The panel shows whether a password is stored (`password set` / `NO PASSWORD`)
+without ever revealing it.
+
+### When the uplink will not join
+
+The console's Network panel and the serial log both give the reason in words,
+and every attempt is logged rather than only the last — logging only the last
+reported `reason 36`, which is Argus's own disconnect in the timeout path and
+says nothing about the real cause.
+
+| Reason | Meaning |
+|---|---|
+| 210 | security mismatch — most often **no password stored** |
+| 201 | network not found — check the SSID, and that it is 2.4 GHz |
+| 202, 15, 204 | authentication or handshake failed — wrong password |
+| 203 | association refused — MAC filtering? |
+
+The ESP32-S3 has no 5 GHz radio, so a 5 GHz-only SSID can never be joined.
+
+### Finding the device on your network
+
+Once joined, the address is reported three ways: on the serial log as
+`uplink up at <ip>`, in the console's Network panel, and by your router's DHCP
+lease table. The Wi-Fi station MAC is printed at boot.
+
 Set `ARGUS_WIFI_AUTOJOIN=n` to keep full patrol coverage and reach the uplink
 only on demand via the button.
 

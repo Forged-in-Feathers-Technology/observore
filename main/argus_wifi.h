@@ -25,6 +25,9 @@ esp_err_t argus_wifi_uplink_connect(void);
 /* The address acquired in uplink mode, or an empty string. */
 const char *argus_wifi_uplink_ip(void);
 
+/* Why the last uplink attempt failed, in plain words, or an empty string. */
+const char *argus_wifi_uplink_error(void);
+
 esp_err_t argus_wifi_init(void);
 
 /* Switch modes.  Safe to call with the mode already active (no-op). */

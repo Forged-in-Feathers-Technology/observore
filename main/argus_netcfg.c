@@ -123,6 +123,14 @@ bool argus_netcfg_is_set(void)
     return set;
 }
 
+bool argus_netcfg_has_password(void)
+{
+    NETCFG_LOCK();
+    bool set = s_cfg.password[0] != '\0';
+    NETCFG_UNLOCK();
+    return set;
+}
+
 bool argus_netcfg_ssid(char *out, size_t len)
 {
     if (!out || len == 0) {
@@ -165,13 +173,25 @@ bool argus_netcfg_valid(const char *ssid, const char *password, const char **why
 
 esp_err_t argus_netcfg_set(const char *ssid, const char *password)
 {
-    if (!argus_netcfg_valid(ssid, password, NULL)) {
+    /* A NULL password means "keep whatever is stored".
+     *
+     * This is not a convenience.  The console clears its password field after
+     * a save, so saving twice used to overwrite a good password with an empty
+     * one -- silently reconfiguring a WPA2 network as open.  The driver then
+     * refused it with reason 210, "no AP found with compatible security",
+     * which reads as though the network were at fault.  Clearing a password
+     * now has to be asked for explicitly, by passing an empty string. */
+    NETCFG_LOCK();
+    const char *effective = password ? password : s_cfg.password;
+    if (!argus_netcfg_valid(ssid, effective, NULL)) {
+        NETCFG_UNLOCK();
         return ESP_ERR_INVALID_ARG;
     }
-    NETCFG_LOCK();
+    char kept[ARGUS_PASSWORD_LEN];
+    snprintf(kept, sizeof(kept), "%s", effective);
     snprintf(s_cfg.ssid, sizeof(s_cfg.ssid), "%s", ssid);
-    snprintf(s_cfg.password, sizeof(s_cfg.password), "%s",
-             password ? password : "");
+    snprintf(s_cfg.password, sizeof(s_cfg.password), "%s", kept);
+    memset(kept, 0, sizeof(kept));
     netcfg_save();
     NETCFG_UNLOCK();
     return ESP_OK;

@@ -155,11 +155,16 @@
     <input id="password" type="password" placeholder="password (blank = open)"
            autocomplete="new-password">
     <button id="netsave">Save</button>
+    <label class="note" style="margin:0">
+      <input type="checkbox" id="netopen" style="min-width:0"> open network
+    </label>
     <button id="netclear" class="mini">Forget</button>
   </div>
   <p class="dim" style="margin:8px 0 0;font-size:11px">
     Stored on the device, never in the repo. It is never sent back to this page,
-    so the field stays blank even when a network is configured.
+    so the field stays blank even when a network is configured &mdash; leaving
+    it blank keeps the stored password rather than replacing it.
+    Tick <em>open network</em> only if there really is no password.
     While joined to a network the Wi-Fi sniffer is suspended &mdash; BLE
     scanning continues.
   </p>
@@ -342,7 +347,10 @@ async function refresh() {
     const net = await getJSON('/api/netcfg',
       { configured: false, ssid: '', ip: '' });
     $('netinfo').textContent = net.configured
-      ? '— ' + net.ssid + (net.ip ? ' · ' + net.ip : ' · not joined')
+      ? '— ' + net.ssid +
+        (net.has_password ? ' · password set' : ' · NO PASSWORD (open)') +
+        (net.ip ? ' · ' + net.ip : ' · not joined') +
+        (net.error ? ' · ' + net.error : '')
       : '— none configured';
     if (net.configured && !$('ssid').matches(':focus')) {
       $('ssid').placeholder = net.ssid;
@@ -412,8 +420,13 @@ $('gclear').addEventListener('click', () => {
 $('netsave').addEventListener('click', async () => {
   const ssid = $('ssid').value.trim();
   if (!ssid) { $('updated').textContent = 'enter an SSID'; return; }
-  const q = '/api/netcfg?ssid=' + encodeURIComponent(ssid) +
-            '&password=' + encodeURIComponent($('password').value);
+  // Send the password only when there is one to send. The field is cleared
+  // after every save, so always sending it would let a second Save wipe a
+  // good password and silently ask for an open network.
+  const pw = $('password').value;
+  let q = '/api/netcfg?ssid=' + encodeURIComponent(ssid);
+  if (pw) q += '&password=' + encodeURIComponent(pw);
+  else if ($('netopen').checked) q += '&password=';
   const out = await fetch(q, { method: 'POST' }).then(r => r.json());
   // Clear the field either way; a password should not linger in the DOM.
   $('password').value = '';

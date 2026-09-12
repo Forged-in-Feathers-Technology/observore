@@ -39,6 +39,10 @@ bool argus_netcfg_get(argus_netcfg_t *out);
  * never puts a password on the caller's stack. */
 bool argus_netcfg_is_set(void);
 
+/* Whether a password is stored.  Reports its presence, never its value, so
+ * the console can show that one is set without being able to read it. */
+bool argus_netcfg_has_password(void);
+
 /* Copies only the SSID.  This is what the API is allowed to report -- the
  * password is write-only from outside the device. */
 bool argus_netcfg_ssid(char *out, size_t len);
