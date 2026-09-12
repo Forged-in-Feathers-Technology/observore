@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Fail if a real Wi-Fi credential has reached a tracked file.
+# Fail if a credential has reached a tracked file.
 #
-# The credential options exist in Kconfig, so it is easy to set one with
-# menuconfig and later paste it into sdkconfig.defaults "to make it stick" --
-# which is exactly how a home network password ends up in a public repo.
+# Covers the uplink SSID and password, and the console SoftAP password.  The
+# last one matters even though it is not "yours": each device generates its own
+# on first boot, so a value committed here would put every device built from
+# this firmware behind one shared, published password.
+#
+# The options exist in Kconfig, so it is easy to set one with menuconfig and
+# later paste it into sdkconfig.defaults "to make it stick" -- which is exactly
+# how a home network password ends up in a public repo.
 #
 #   tools/check_no_secrets.sh          # check tracked files
 #   tools/check_no_secrets.sh --staged # check what is about to be committed
@@ -21,7 +26,7 @@ status=0
 for f in $files; do
     [[ -f "$f" ]] || continue
     # A credential option set to anything other than the empty string.
-    if matches=$(grep -nE '^[[:space:]]*CONFIG_OBSERVORE_WIFI_(SSID|PASSWORD)[[:space:]]*=[[:space:]]*"[^"]+"' "$f" 2>/dev/null); then
+    if matches=$(grep -nE '^[[:space:]]*CONFIG_OBSERVORE_(WIFI_SSID|WIFI_PASSWORD|AP_PASSWORD)[[:space:]]*=[[:space:]]*"[^"]+"' "$f" 2>/dev/null); then
         # The example file is allowed to carry obvious placeholders.
         if [[ "$f" == "credentials.conf.example" ]]; then
             continue

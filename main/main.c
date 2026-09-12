@@ -218,6 +218,13 @@ void app_main(void)
     observore_netcfg_init();
     observore_notify_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
+    /* Printed at boot, not only when the console comes up: you need it before
+     * you can join, and the serial log is the one place it is safe to put it.
+     * It is deliberately NOT exposed over the network -- serving the console's
+     * own password from the console would turn "someone was on the LAN once"
+     * into "someone can join the SoftAP in range, indefinitely". */
+    ESP_LOGW(TAG, "console SoftAP: \"%s\"  password: %s",
+             observore_wifi_ap_ssid(), observore_wifi_ap_password());
     ESP_ERROR_CHECK(observore_ble_start());
 
     xTaskCreate(button_task, "observore_btn", 3072, NULL, 3, NULL);

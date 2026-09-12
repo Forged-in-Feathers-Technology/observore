@@ -1,17 +1,21 @@
 menu "Observore"
 
-config OBSERVORE_MDNS_HOSTNAME
-    string "mDNS hostname"
+config OBSERVORE_HOSTNAME
+    string "Hostname"
     default "observore"
     help
-        The device answers to this name plus ".local" on whichever network it
-        is joined to.
+        Used twice.  It is the mDNS name, answering as "<hostname>.local" on
+        the link it is joined to.  It is also the hostname offered in the DHCP
+        request, which is what a router registers in its own DNS and shows in
+        its client list.
 
-        mDNS is link-local multicast and does not cross subnets, so a device on
-        an isolated IoT VLAN will not answer clients on the main LAN unless the
-        router is set to reflect mDNS between them.  Observore is also only on
-        the network during its uplink window, so the name resolves then and not
-        while it patrols.
+        The DHCP one is the more useful of the two across subnets: mDNS is
+        link-local multicast and does not route, so a device on an isolated
+        VLAN needs the router to reflect mDNS before the .local name reaches
+        the main LAN -- whereas ordinary DNS crosses VLANs by design.
+
+        mDNS names are always ".local" (RFC 6762); that suffix is not taken
+        from DHCP and must not be changed.
 
 config OBSERVORE_LED_GPIO
     int "User LED GPIO"
@@ -147,10 +151,19 @@ config OBSERVORE_AP_SSID_PREFIX
         does not advertise what the device is.
 
 config OBSERVORE_AP_PASSWORD
-    string "Console SoftAP password"
-    default "observore-console"
+    string "Console SoftAP password override (leave EMPTY)"
+    default ""
     help
-        Must be at least 8 characters for WPA2; a shorter value leaves the
-        SoftAP open.  Change it.
+        Leave this empty.  Each device then generates its own random console
+        password on first boot, keeps it in NVS and prints it on the serial
+        log -- so no two devices share one, and nothing published in this
+        repository reveals it.
+
+        Deriving the password from the MAC would be no better than publishing
+        it: the SoftAP's BSSID appears in every Wi-Fi scan.
+
+        Setting a value here overrides that, and every device built from the
+        resulting firmware will share the password you choose.  It must be at
+        least 8 characters or the console SoftAP falls back to open.
 
 endmenu

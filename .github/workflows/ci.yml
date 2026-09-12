@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The classification, scoring, muting and parsing logic is deliberately free
+  # of ESP-IDF, so it compiles with a plain C compiler in seconds.  That makes
+  # it cheap enough to run on every push, which is the point.
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the test suite
+        run: make -C test test
+
+  # The pre-commit hook that guards against committing Wi-Fi credentials is
+  # installed locally and is therefore absent from a fresh clone.  This is the
+  # copy that actually protects the repository.
+  secrets:
+    name: No credentials in tracked files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked files
+        run: tools/check_no_secrets.sh
+
+  # Catches what the host tests cannot: the radio, web and persistence layers,
+  # which only exist when built against ESP-IDF.
+  firmware:
+    name: Firmware build (esp32s3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32s3
+
+  # The vendor and threat tables are generated, so a change to the generator
+  # that alters its output should be committed, not discovered later.
+  generated-tables:
+    name: OUI table is in sync with its generator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Regenerate and diff
+        run: |
+          python3 tools/gen_oui_table.py
+          if ! git diff --quiet -- main/observore_oui_table.h; then
+            echo "::error::main/observore_oui_table.h differs from what tools/gen_oui_table.py produces."
+            echo "Either the generator changed without regenerating, or the IEEE registry moved on."
+            git diff --stat -- main/observore_oui_table.h
+            exit 1
+          fi
+          echo "in sync"

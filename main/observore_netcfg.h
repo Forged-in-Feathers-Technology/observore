@@ -32,6 +32,21 @@ typedef struct {
 
 void observore_netcfg_init(void);
 
+/* The console SoftAP password.
+ *
+ * Deriving it from the MAC would be worthless: the SoftAP's BSSID is in every
+ * Wi-Fi scan and the derivation would be published in this repository, so the
+ * password would be readable by anyone in range.  A build-time constant is no
+ * better -- everyone who flashes the firmware would share it.
+ *
+ * So it is random, generated once on first boot, kept in NVS, and printed on
+ * the serial log.  Setting CONFIG_OBSERVORE_AP_PASSWORD overrides it, with the
+ * consequence that every device built from that firmware shares one password.
+ *
+ * Never empty: an open console is not an option on a device whose log says
+ * where the cameras are. */
+const char *observore_netcfg_ap_password(void);
+
 /* Returns false when no network has been configured, by either route. */
 bool observore_netcfg_get(observore_netcfg_t *out);
 
