@@ -19,6 +19,7 @@ idf_component_register(
         esp_http_server
         esp_netif
         esp_timer
+        espressif__mdns
         esp-tls
         esp_http_client
         esp_wifi

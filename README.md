@@ -188,9 +188,25 @@ The ESP32-S3 has no 5 GHz radio, so a 5 GHz-only SSID can never be joined.
 
 ### Finding the device on your network
 
-Once joined, the address is reported three ways: on the serial log as
-`uplink up at <ip>`, in the console's Network panel, and by your router's DHCP
-lease table. The Wi-Fi station MAC is printed at boot.
+Observore answers to **`observore.local`** (configurable as
+`OBSERVORE_MDNS_HOSTNAME`) and advertises its console as an `_http._tcp`
+service, so it can be reached by name rather than by an address DHCP may
+change.
+
+Two caveats, both real:
+
+- **mDNS is link-local multicast and does not route between subnets.** If
+  Observore sits on an isolated IoT VLAN and you browse from the main LAN, the
+  name will not resolve unless your router reflects mDNS across those networks
+  — on UniFi that is the *Multicast DNS* setting on the network. A DHCP
+  reservation for the device is the simpler and more reliable answer.
+- **It is only on the network during its uplink window.** While patrolling it
+  has no address at all, so neither the name nor the IP will answer. Wait for
+  the next window, or hold the button.
+
+The address is also reported on the serial log as `uplink up at <ip>`, in the
+console's Network panel, and in your router's DHCP lease table. The Wi-Fi
+station MAC is printed at boot.
 
 Set `OBSERVORE_WIFI_AUTOJOIN=n` to keep full patrol coverage and reach the uplink
 only on demand via the button.

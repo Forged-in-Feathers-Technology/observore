@@ -75,8 +75,8 @@ static void enter_mode(observore_mode_t next)
     observore_web_start();
     observore_led_set_console(true);
     if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
-        ESP_LOGI(TAG, "console at http://%s/ on your network",
-                 observore_wifi_uplink_ip());
+        ESP_LOGI(TAG, "console at http://%s/ or http://%s/ on your network",
+                 observore_wifi_uplink_ip(), observore_wifi_hostname());
     } else {
         ESP_LOGI(TAG, "console up: join \"%s\" (password \"%s\"), "
                       "then open http://192.168.4.1/",

@@ -351,10 +351,11 @@ static esp_err_t netcfg_get_handler(httpd_req_t *req)
     snprintf(body, sizeof(body),
              "{\"configured\":%s,\"ssid\":\"%s\",\"has_password\":%s,"
              "\"mode\":\"%s\","
-             "\"ip\":\"%s\",\"error\":\"%s\"}",
+             "\"ip\":\"%s\",\"hostname\":\"%s\",\"error\":\"%s\"}",
              set ? "true" : "false", escaped,
              observore_netcfg_has_password() ? "true" : "false",
-             observore_mode_name(observore_wifi_mode()), observore_wifi_uplink_ip(), werr);
+             observore_mode_name(observore_wifi_mode()),
+             observore_wifi_uplink_ip(), observore_wifi_hostname(), werr);
     return send_json(req, body);
 }
 
@@ -650,7 +651,8 @@ esp_err_t observore_web_start(void)
     /* Report the address that is actually reachable in this mode; naming the
      * SoftAP while joined to a network sends you to the wrong place. */
     if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
-        ESP_LOGI(TAG, "console at http://%s/", observore_wifi_uplink_ip());
+        ESP_LOGI(TAG, "console at http://%s/ (%s)", observore_wifi_uplink_ip(),
+                 observore_wifi_hostname());
     } else {
         ESP_LOGI(TAG, "console at http://192.168.4.1/ (SSID %s)",
                  observore_wifi_ap_ssid());

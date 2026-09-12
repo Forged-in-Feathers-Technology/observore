@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "observore_netcfg.h"
+#include "mdns.h"
 #include "observore_track.h"
 #include "observore_wifi.h"
 #include "esp_event.h"
@@ -33,6 +34,7 @@ static const uint8_t ASTM_OUI[3]     = {0xFA, 0x0B, 0xBC};
 static observore_mode_t       s_mode = OBSERVORE_MODE_PATROL;
 static esp_netif_t       *s_ap_netif;
 static char               s_ap_ssid[32];
+static char               s_hostname[48];
 static bool               s_initialised;
 /* s_mode is only meaningful once it has been pushed into the driver.  Without
  * this, the first set_mode(PATROL) matches the initial value of s_mode, takes
@@ -418,6 +420,42 @@ uint32_t observore_wifi_sniffer_calls(void)
     return s_sniffer_calls;
 }
 
+/* Announce the device by name, so the console can be reached without first
+ * hunting for an address that DHCP may have changed.
+ *
+ * mDNS is link-local multicast: it does not cross subnets.  A device on an
+ * isolated IoT VLAN will not answer to clients on the main LAN unless the
+ * router reflects mDNS between them. */
+static void start_mdns(void)
+{
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS unavailable: %s", esp_err_to_name(err));
+        return;
+    }
+
+    snprintf(s_hostname, sizeof(s_hostname), "%s.local",
+             CONFIG_OBSERVORE_MDNS_HOSTNAME);
+    ESP_ERROR_CHECK(mdns_hostname_set(CONFIG_OBSERVORE_MDNS_HOSTNAME));
+    ESP_ERROR_CHECK(mdns_instance_name_set("Observore counter-surveillance"));
+
+    mdns_txt_item_t txt[] = {
+        {"path", "/"},
+    };
+    err = mdns_service_add(NULL, "_http", "_tcp", 80, txt,
+                           sizeof(txt) / sizeof(txt[0]));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "could not advertise the console: %s",
+                 esp_err_to_name(err));
+    }
+    ESP_LOGI(TAG, "answering to %s", s_hostname);
+}
+
+const char *observore_wifi_hostname(void)
+{
+    return s_hostname;
+}
+
 const char *observore_wifi_ap_ssid(void)
 {
     return s_ap_ssid;
@@ -459,6 +497,7 @@ esp_err_t observore_wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
     derive_ap_ssid();
+    start_mdns();
     s_initialised = true;
 
     return observore_wifi_set_mode(OBSERVORE_MODE_PATROL);

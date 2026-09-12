@@ -55,5 +55,8 @@ uint32_t observore_wifi_sniffed_frames(void);
  * rejected by our own frame handling. */
 uint32_t observore_wifi_sniffer_calls(void);
 
+/* The mDNS name the device answers to, e.g. "observore.local". */
+const char *observore_wifi_hostname(void);
+
 const char *observore_wifi_ap_ssid(void);
 const char *observore_wifi_ap_password(void);

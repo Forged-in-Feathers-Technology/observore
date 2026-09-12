@@ -1,0 +1,6 @@
+dependencies:
+  # mDNS left core IDF in v5.0 and is now a managed component.  Pinned to a
+  # minor range so a build is reproducible without freezing out patch fixes.
+  espressif/mdns: "^1.2.0"
+  idf:
+    version: ">=5.0"

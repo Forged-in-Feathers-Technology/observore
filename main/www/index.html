@@ -349,7 +349,7 @@ async function refresh() {
     $('netinfo').textContent = net.configured
       ? '— ' + net.ssid +
         (net.has_password ? ' · password set' : ' · NO PASSWORD (open)') +
-        (net.ip ? ' · ' + net.ip : ' · not joined') +
+        (net.ip ? ' · ' + net.ip + (net.hostname ? ' / ' + net.hostname : '') : ' · not joined') +
         (net.error ? ' · ' + net.error : '')
       : '— none configured';
     if (net.configured && !$('ssid').matches(':focus')) {

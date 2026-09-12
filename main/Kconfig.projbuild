@@ -1,5 +1,18 @@
 menu "Observore"
 
+config OBSERVORE_MDNS_HOSTNAME
+    string "mDNS hostname"
+    default "observore"
+    help
+        The device answers to this name plus ".local" on whichever network it
+        is joined to.
+
+        mDNS is link-local multicast and does not cross subnets, so a device on
+        an isolated IoT VLAN will not answer clients on the main LAN unless the
+        router is set to reflect mDNS between them.  Observore is also only on
+        the network during its uplink window, so the name resolves then and not
+        while it patrols.
+
 config OBSERVORE_LED_GPIO
     int "User LED GPIO"
     default 21
