@@ -98,6 +98,13 @@ static void button_task(void *arg)
         bool down = gpio_get_level(BUTTON_GPIO) == 0;
 
         if (!down) {
+            /* Say what was actually seen.  Without this, a press that was a
+             * shade too short is indistinguishable from a button that is not
+             * wired up, and the only thing to do is guess and try again. */
+            if (held_ms > 150 && !acted) {
+                ESP_LOGW(TAG, "button held %" PRIu32 " ms -- %d ms needed",
+                         held_ms, BUTTON_HOLD_MS);
+            }
             held_ms = 0;
             acted = false;
         } else {
@@ -106,6 +113,8 @@ static void button_task(void *arg)
              * be able to feel the mode change while still pressing. */
             if (held_ms >= BUTTON_HOLD_MS && !acted) {
                 acted = true;
+                ESP_LOGI(TAG, "button held %" PRIu32 " ms -- switching mode",
+                         held_ms);
                 cycle_mode();
             }
         }
