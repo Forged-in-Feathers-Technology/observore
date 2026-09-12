@@ -3,6 +3,10 @@
 
 #include "observore_netcfg.h"
 
+#ifndef OBSERVORE_HOST_TEST
+#include "esp_random.h"
+#endif
+
 #ifdef OBSERVORE_HOST_TEST
 #define NETCFG_LOCK()   do {} while (0)
 #define NETCFG_UNLOCK() do {} while (0)
@@ -27,12 +31,27 @@ static SemaphoreHandle_t s_lock;
 #define NVS_NAMESPACE OBSERVORE_NVS_NAMESPACE
 #define NVS_KEY_SSID  "sta_ssid"
 #define NVS_KEY_PASS  "sta_pass"
+#define NVS_KEY_AP    "ap_pass"
 
 #define OBSERVORE_CFG_SSID     CONFIG_OBSERVORE_WIFI_SSID
 #define OBSERVORE_CFG_PASSWORD CONFIG_OBSERVORE_WIFI_PASSWORD
 #endif
 
 static observore_netcfg_t s_cfg;
+
+/* 12 characters from a 31-symbol alphabet is about 59 bits -- far beyond what
+ * a WPA2 handshake capture can be brute-forced through, and short enough to
+ * read off a serial log and type on a phone.  Ambiguous glyphs are left out
+ * for the same reason. */
+#define AP_PASSWORD_LEN 12
+static const char AP_ALPHABET[] = "abcdefghjkmnpqrstuvwxyz23456789";
+/* Sized for any WPA2 passphrase, since a build-time override may be far
+ * longer than the generated one. */
+static char s_ap_password[OBSERVORE_PASSWORD_LEN];
+
+#ifndef OBSERVORE_HOST_TEST
+static void ap_password_init(void);
+#endif
 
 /* ------------------------------------------------------------------ */
 
@@ -90,6 +109,9 @@ void observore_netcfg_init(void)
     NETCFG_LOCK();
     memset(&s_cfg, 0, sizeof(s_cfg));
     netcfg_load();
+#ifndef OBSERVORE_HOST_TEST
+    ap_password_init();
+#endif
 
     /* Seed from the build-time defaults only when NVS has nothing, so a
      * credential set through the console is never silently reverted by a
@@ -122,6 +144,52 @@ bool observore_netcfg_is_set(void)
     bool set = s_cfg.ssid[0] != '\0';
     NETCFG_UNLOCK();
     return set;
+}
+
+#ifndef OBSERVORE_HOST_TEST
+static void ap_password_init(void)
+{
+    /* An explicit build-time password wins, and is the caller's problem. */
+    if (CONFIG_OBSERVORE_AP_PASSWORD[0] != '\0') {
+        snprintf(s_ap_password, sizeof(s_ap_password), "%s",
+                 CONFIG_OBSERVORE_AP_PASSWORD);
+        ESP_LOGW(TAG, "console password comes from the build configuration, so "
+                      "every device built from this firmware shares it");
+        return;
+    }
+
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(s_ap_password);
+        if (nvs_get_str(h, NVS_KEY_AP, s_ap_password, &len) != ESP_OK) {
+            s_ap_password[0] = '\0';
+        }
+        nvs_close(h);
+    }
+    if (s_ap_password[0] != '\0') {
+        return;
+    }
+
+    /* esp_random() is a true hardware RNG once Wi-Fi or Bluetooth is running,
+     * which it is by the time this is called. */
+    for (size_t i = 0; i < AP_PASSWORD_LEN; i++) {
+        s_ap_password[i] = AP_ALPHABET[esp_random() % (sizeof(AP_ALPHABET) - 1)];
+    }
+    s_ap_password[AP_PASSWORD_LEN] = '\0';
+
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_set_str(h, NVS_KEY_AP, s_ap_password) == ESP_OK) {
+            nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGW(TAG, "generated a console password for this device");
+}
+#endif
+
+const char *observore_netcfg_ap_password(void)
+{
+    return s_ap_password;
 }
 
 bool observore_netcfg_has_password(void)

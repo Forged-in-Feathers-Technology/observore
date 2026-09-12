@@ -33,6 +33,7 @@ static const uint8_t ASTM_OUI[3]     = {0xFA, 0x0B, 0xBC};
 static observore_mode_t       s_mode = OBSERVORE_MODE_PATROL;
 static char               s_ap_ssid[32];
 static char               s_hostname[48];
+static esp_netif_t       *s_sta_netif;
 static bool               s_initialised;
 /* s_mode is only meaningful once it has been pushed into the driver.  Without
  * this, the first set_mode(PATROL) matches the initial value of s_mode, takes
@@ -431,8 +432,8 @@ static void start_mdns(void)
     }
 
     snprintf(s_hostname, sizeof(s_hostname), "%s.local",
-             CONFIG_OBSERVORE_MDNS_HOSTNAME);
-    ESP_ERROR_CHECK(mdns_hostname_set(CONFIG_OBSERVORE_MDNS_HOSTNAME));
+             CONFIG_OBSERVORE_HOSTNAME);
+    ESP_ERROR_CHECK(mdns_hostname_set(CONFIG_OBSERVORE_HOSTNAME));
     ESP_ERROR_CHECK(mdns_instance_name_set("Observore counter-surveillance"));
 
     mdns_txt_item_t txt[] = {
@@ -444,7 +445,8 @@ static void start_mdns(void)
         ESP_LOGW(TAG, "could not advertise the console: %s",
                  esp_err_to_name(err));
     }
-    ESP_LOGI(TAG, "answering to %s", s_hostname);
+    ESP_LOGI(TAG, "answering to %s, and to \"%s\" via DHCP",
+             s_hostname, CONFIG_OBSERVORE_HOSTNAME);
 }
 
 const char *observore_wifi_hostname(void)
@@ -459,7 +461,7 @@ const char *observore_wifi_ap_ssid(void)
 
 const char *observore_wifi_ap_password(void)
 {
-    return CONFIG_OBSERVORE_AP_PASSWORD;
+    return observore_netcfg_ap_password();
 }
 
 esp_err_t observore_wifi_init(void)
@@ -478,7 +480,20 @@ esp_err_t observore_wifi_init(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_ap();
-    esp_netif_create_default_wifi_sta();
+    s_sta_netif = esp_netif_create_default_wifi_sta();
+    /* Offer the name in the DHCP request too, not only over mDNS.  This is
+     * what a router registers in its own DNS and lists as the client name --
+     * and unlike mDNS multicast, ordinary DNS crosses subnets, which is the
+     * case that actually matters when the device sits on an isolated VLAN.
+     * Without it the router sees the ESP-IDF default, "espressif". */
+    if (s_sta_netif) {
+        esp_err_t herr = esp_netif_set_hostname(s_sta_netif,
+                                                CONFIG_OBSERVORE_HOSTNAME);
+        if (herr != ESP_OK) {
+            ESP_LOGW(TAG, "could not set the DHCP hostname: %s",
+                     esp_err_to_name(herr));
+        }
+    }
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
@@ -538,13 +553,14 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
         wifi_config_t ap = {0};
         snprintf((char *)ap.ap.ssid, sizeof(ap.ap.ssid), "%s", s_ap_ssid);
         ap.ap.ssid_len = strlen(s_ap_ssid);
-        snprintf((char *)ap.ap.password, sizeof(ap.ap.password), "%s",
-                 CONFIG_OBSERVORE_AP_PASSWORD);
+        const char *ap_pw = observore_netcfg_ap_password();
+        snprintf((char *)ap.ap.password, sizeof(ap.ap.password), "%s", ap_pw);
         ap.ap.channel = 6;
         ap.ap.max_connection = 2;
-        ap.ap.authmode = strlen(CONFIG_OBSERVORE_AP_PASSWORD) >= 8
-                             ? WIFI_AUTH_WPA2_PSK
-                             : WIFI_AUTH_OPEN;
+        /* The password is generated, so this is never the open branch in
+         * practice; it stays as a guard against a short override. */
+        ap.ap.authmode = strlen(ap_pw) >= 8 ? WIFI_AUTH_WPA2_PSK
+                                            : WIFI_AUTH_OPEN;
 
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));

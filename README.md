@@ -1,5 +1,7 @@
 # Observore
 
+[![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
+
 A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/),
 built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com).
 
@@ -189,18 +191,30 @@ The ESP32-S3 has no 5 GHz radio, so a 5 GHz-only SSID can never be joined.
 
 ### Finding the device on your network
 
-Observore answers to **`observore.local`** (configurable as
-`OBSERVORE_MDNS_HOSTNAME`) and advertises its console as an `_http._tcp`
-service, so it can be reached by name rather than by an address DHCP may
-change.
+Observore offers the name **`observore`** (configurable as
+`OBSERVORE_HOSTNAME`) two ways: over mDNS as `observore.local`, and as the
+hostname in its DHCP request — which is what a router registers in its own DNS
+and shows in its client list.
+
+The DHCP one is the more useful across subnets, because ordinary DNS routes and
+multicast does not.
 
 Two caveats, both real:
 
 - **mDNS is link-local multicast and does not route between subnets.** If
-  Observore sits on an isolated IoT VLAN and you browse from the main LAN, the
-  name will not resolve unless your router reflects mDNS across those networks
-  — on UniFi that is the *Multicast DNS* setting on the network. A DHCP
-  reservation for the device is the simpler and more reliable answer.
+  Observore sits on an isolated VLAN and you browse from the main LAN, the
+  `.local` name will not resolve unless your router reflects mDNS across both
+  networks — on UniFi that is the *Multicast DNS* setting, and it must be
+  enabled on each network, not just one.
+- **A DNS domain ending in `.local` collides with mDNS.** RFC 6762 reserves
+  `.local` for multicast, so most resolvers send `*.local` to mDNS and never
+  ask your DNS server. If your LAN domain is something like `house.local`,
+  names under it are ambiguous for every client, not just this one — a DHCP
+  reservation plus a static record under a non-`.local` domain sidesteps the
+  whole problem.
+- **Some clients cannot resolve `.local` at all.** A Linux box with no Avahi
+  and `systemd-resolved` showing `-mDNS` has no multicast resolver, so the name
+  will fail there however the network is configured.
 - **It is only on the network during its uplink window.** While patrolling it
   has no address at all, so neither the name nor the IP will answer. Wait for
   the next window, or hold the button.
@@ -249,8 +263,32 @@ idf.py -p /dev/ttyACM0 flash monitor
 The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
 `/dev/ttyACM0`, not `/dev/ttyUSB0`.
 
-Configure the LED pin, button pin and console SoftAP credentials under
-`idf.py menuconfig` → **Observore**. **Change the default console password.**
+Configure the LED pin, button pin and hostname under `idf.py menuconfig` →
+**Observore**.
+
+### The console password
+
+Each device generates its own random console password on first boot, stores it
+in NVS and prints it on the serial log:
+
+```
+console SoftAP: "console-F964FD"  password: 2p78ggedb4bj
+```
+
+It is not derived from anything observable and it is not shipped in this
+repository, so no two devices share one. Deriving it from the MAC would be
+pointless — the SoftAP's BSSID is in every Wi-Fi scan and the derivation would
+be right here in the source. A build-time constant would be worse still:
+everyone who flashed the firmware would share it.
+
+It is deliberately **not** exposed over the network. Serving the console's own
+password from inside the console would turn "someone was on the LAN once" into
+"someone can join the SoftAP in range, indefinitely". Read it from serial;
+erasing NVS generates a new one.
+
+`OBSERVORE_AP_PASSWORD` overrides it, and every device built from that firmware
+then shares the password you chose. `tools/check_no_secrets.sh` fails if such a
+value reaches a tracked file.
 
 ### Reading the log
 
@@ -266,6 +304,10 @@ no hardware and no ESP-IDF:
 ```bash
 make -C test test
 ```
+
+CI runs these on every push, alongside the credential scan, an ESP-IDF build
+for the esp32s3, and a check that the generated OUI table still matches what
+its generator produces.
 
 ### Regenerating the OUI table
 
