@@ -9,15 +9,11 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "nvs.h"
-#include "nvs_flash.h"
+#include "observore_nvs.h"
 
 static const char *TAG = "observore.notify";
 
 #include "observore_nvs.h"
-#define NVS_NAMESPACE OBSERVORE_NVS_NAMESPACE
-#define NVS_KEY_URL   "gotify_url"
-#define NVS_KEY_TOKEN "gotify_tok"
 
 /* Sending is done from the main loop, so a slow or unreachable server would
  * otherwise stall detection for the full TCP timeout. */
@@ -47,19 +43,19 @@ static char     s_last_error[64];
 
 static void load(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
-        return;
-    }
-    size_t len = sizeof(s_url);
-    if (nvs_get_str(h, NVS_KEY_URL, s_url, &len) != ESP_OK) {
+    observore_nvs_item_t items[] = {
+        {.key = "gotify_url", .type = OBSERVORE_NVS_STR,
+         .buf = s_url,   .len = sizeof(s_url)},
+        {.key = "gotify_tok", .type = OBSERVORE_NVS_STR,
+         .buf = s_token, .len = sizeof(s_token)},
+    };
+    observore_nvs_read(items, OBSERVORE_ARRLEN(items));
+    if (!items[0].found) {
         s_url[0] = '\0';
     }
-    len = sizeof(s_token);
-    if (nvs_get_str(h, NVS_KEY_TOKEN, s_token, &len) != ESP_OK) {
+    if (!items[1].found) {
         s_token[0] = '\0';
     }
-    nvs_close(h);
     if (s_url[0]) {
         ESP_LOGI(TAG, "notifying %s", s_url);
     }
@@ -67,24 +63,11 @@ static void load(void)
 
 static void save(void)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return;
-    }
-    err = nvs_set_str(h, NVS_KEY_URL, s_url);
-    if (err == ESP_OK) {
-        err = nvs_set_str(h, NVS_KEY_TOKEN, s_token);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to persist notifier config: %s",
-                 esp_err_to_name(err));
-    }
+    const observore_nvs_item_t items[] = {
+        {.key = "gotify_url", .type = OBSERVORE_NVS_STR, .buf = s_url},
+        {.key = "gotify_tok", .type = OBSERVORE_NVS_STR, .buf = s_token},
+    };
+    observore_nvs_write(items, OBSERVORE_ARRLEN(items));
 }
 
 void observore_notify_init(void)

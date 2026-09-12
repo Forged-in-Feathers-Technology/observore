@@ -18,8 +18,7 @@ static void netcfg_save(void) {}
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "nvs.h"
-#include "nvs_flash.h"
+#include "observore_nvs.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "observore.netcfg";
@@ -28,10 +27,6 @@ static SemaphoreHandle_t s_lock;
 #define NETCFG_UNLOCK() xSemaphoreGiveRecursive(s_lock)
 
 #include "observore_nvs.h"
-#define NVS_NAMESPACE OBSERVORE_NVS_NAMESPACE
-#define NVS_KEY_SSID  "sta_ssid"
-#define NVS_KEY_PASS  "sta_pass"
-#define NVS_KEY_AP    "ap_pass"
 
 #define OBSERVORE_CFG_SSID     CONFIG_OBSERVORE_WIFI_SSID
 #define OBSERVORE_CFG_PASSWORD CONFIG_OBSERVORE_WIFI_PASSWORD
@@ -58,20 +53,19 @@ static void ap_password_init(void);
 #ifndef OBSERVORE_HOST_TEST
 static void netcfg_load(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
-        return;
-    }
-    size_t len = sizeof(s_cfg.ssid);
-    if (nvs_get_str(h, NVS_KEY_SSID, s_cfg.ssid, &len) != ESP_OK) {
+    observore_nvs_item_t items[] = {
+        {.key = "sta_ssid", .type = OBSERVORE_NVS_STR,
+         .buf = s_cfg.ssid,     .len = sizeof(s_cfg.ssid)},
+        {.key = "sta_pass", .type = OBSERVORE_NVS_STR,
+         .buf = s_cfg.password, .len = sizeof(s_cfg.password)},
+    };
+    observore_nvs_read(items, OBSERVORE_ARRLEN(items));
+    if (!items[0].found) {
         s_cfg.ssid[0] = '\0';
     }
-    len = sizeof(s_cfg.password);
-    if (nvs_get_str(h, NVS_KEY_PASS, s_cfg.password, &len) != ESP_OK) {
+    if (!items[1].found) {
         s_cfg.password[0] = '\0';
     }
-    nvs_close(h);
-
     if (s_cfg.ssid[0]) {
         ESP_LOGI(TAG, "using network \"%s\" from NVS", s_cfg.ssid);
     }
@@ -79,23 +73,14 @@ static void netcfg_load(void)
 
 static void netcfg_save(void)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return;
-    }
-    err = nvs_set_str(h, NVS_KEY_SSID, s_cfg.ssid);
-    if (err == ESP_OK) {
-        err = nvs_set_str(h, NVS_KEY_PASS, s_cfg.password);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to persist credentials: %s", esp_err_to_name(err));
-    }
+    /* One batch: an SSID and its password must land together, or a power cut
+     * between two commits leaves a network configured with the wrong
+     * credential. */
+    const observore_nvs_item_t items[] = {
+        {.key = "sta_ssid", .type = OBSERVORE_NVS_STR, .buf = s_cfg.ssid},
+        {.key = "sta_pass", .type = OBSERVORE_NVS_STR, .buf = s_cfg.password},
+    };
+    observore_nvs_write(items, OBSERVORE_ARRLEN(items));
 }
 #endif
 
@@ -158,17 +143,14 @@ static void ap_password_init(void)
         return;
     }
 
-    nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
-        size_t len = sizeof(s_ap_password);
-        if (nvs_get_str(h, NVS_KEY_AP, s_ap_password, &len) != ESP_OK) {
-            s_ap_password[0] = '\0';
-        }
-        nvs_close(h);
-    }
-    if (s_ap_password[0] != '\0') {
+    observore_nvs_item_t stored = {.key = "ap_pass", .type = OBSERVORE_NVS_STR,
+                                   .buf = s_ap_password,
+                                   .len = sizeof(s_ap_password)};
+    observore_nvs_read(&stored, 1);
+    if (stored.found && s_ap_password[0] != '\0') {
         return;
     }
+    s_ap_password[0] = '\0';
 
     /* esp_random() is a true hardware RNG once Wi-Fi or Bluetooth is running,
      * which it is by the time this is called. */
@@ -177,12 +159,10 @@ static void ap_password_init(void)
     }
     s_ap_password[AP_PASSWORD_LEN] = '\0';
 
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
-        if (nvs_set_str(h, NVS_KEY_AP, s_ap_password) == ESP_OK) {
-            nvs_commit(h);
-        }
-        nvs_close(h);
-    }
+    const observore_nvs_item_t item = {.key = "ap_pass",
+                                       .type = OBSERVORE_NVS_STR,
+                                       .buf = s_ap_password};
+    observore_nvs_write(&item, 1);
     ESP_LOGW(TAG, "generated a console password for this device");
 }
 #endif
