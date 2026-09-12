@@ -103,69 +103,67 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_track_status(&st, now);
 
     char body[768];
-    int n = snprintf(body, sizeof(body),
-                     "{\"score\":%u,\"level\":\"%s\",\"devices\":%u,"
-                     "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
-                     ",\"mode\":\"%s\",\"muted\":%zu,"
-                     "\"suppressed\":%" PRIu32 ",\"counts\":{",
-                     st.score, observore_level_name(st.level), st.device_count,
-                     st.total_sightings, now / 1000000,
-                     observore_mode_name(observore_wifi_mode()),
-                     observore_mute_count(), observore_mute_suppressed());
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, body, sizeof(body), 2);   /* room for "}}" */
 
-    for (int c = 1; c < OBSERVORE_CLASS_MAX && n < (int)sizeof(body); c++) {
-        n += snprintf(body + n, sizeof(body) - n, "%s\"%s\":%" PRIu32,
-                      c > 1 ? "," : "", observore_class_name(c), st.class_counts[c]);
+    observore_jb_printf(&jb,
+        "{\"score\":%u,\"level\":\"%s\",\"devices\":%u,"
+        "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
+        ",\"mode\":\"%s\",\"muted\":%zu,\"suppressed\":%" PRIu32
+        ",\"counts\":{",
+        st.score, observore_level_name(st.level), st.device_count,
+        st.total_sightings, now / 1000000,
+        observore_mode_name(observore_wifi_mode()),
+        observore_mute_count(), observore_mute_suppressed());
+
+    for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
+        observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
+                            observore_class_name(c), st.class_counts[c]);
     }
-    snprintf(body + n, sizeof(body) - n, "}}");
-
+    observore_jb_close(&jb, "}}");
     return send_json(req, body);
 }
 
 static esp_err_t devices_handler(httpd_req_t *req)
 {
     observore_event_t *snap = s_snap;
-    char *body = s_body;
-
     int64_t now = esp_timer_get_time();
     size_t count = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES);
 
-    int n = snprintf(body, JSON_BUF_LEN, "{\"devices\":[");
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, s_body, JSON_BUF_LEN, 2);
+    observore_jb_printf(&jb, "{\"devices\":[");
+
+    size_t written = 0;
     for (size_t i = 0; i < count; i++) {
         const observore_event_t *e = &snap[i];
-        char detail[sizeof(e->detail) * 2 + 1];
-        char label[sizeof(e->label) * 2 + 1];
-        observore_json_escape(e->detail, detail, sizeof(detail));
-        observore_json_escape(e->label, label, sizeof(label));
-        const char *vendor = e->vendor ? e->vendor : "";
         char macbuf[OBSERVORE_MAC_STR_LEN];
 
-        int written = snprintf(
-            body + n, JSON_BUF_LEN - n,
-            "%s{\"mac\":\"%s\",\"class\":\"%s\","
-            "\"label\":\"%s\",\"vendor\":\"%s\",\"random\":%s,"
-            "\"detail\":\"%s\",\"evidence\":\"%s\","
-            "\"source\":\"%s\",\"rssi\":%d,\"channel\":%u,\"hits\":%" PRIu32 ","
-            "\"first_seen_s\":%" PRId64 ",\"last_seen_s\":%" PRId64 "}",
-            i ? "," : "", observore_mac_str(e->mac, macbuf),
-            observore_class_name(e->cls), label, vendor,
-            e->addr_random ? "true" : "false", detail,
+        observore_jb_printf(&jb, "%s{\"mac\":\"%s\",\"class\":\"%s\",\"label\":\"",
+                            i ? "," : "", observore_mac_str(e->mac, macbuf),
+                            observore_class_name(e->cls));
+        observore_jb_escape(&jb, e->label);
+        observore_jb_printf(&jb, "\",\"vendor\":\"%s\",\"random\":%s,\"detail\":\"",
+                            e->vendor ? e->vendor : "",
+                            e->addr_random ? "true" : "false");
+        observore_jb_escape(&jb, e->detail);
+        observore_jb_printf(&jb,
+            "\",\"evidence\":\"%s\",\"source\":\"%s\",\"rssi\":%d,"
+            "\"channel\":%u,\"hits\":%" PRIu32 ",\"first_seen_s\":%" PRId64
+            ",\"last_seen_s\":%" PRId64 "}",
             observore_evidence_name(e->evidence), observore_source_name(e->src),
             e->rssi, e->channel, e->hits,
             (now - e->first_seen_us) / 1000000,
             (now - e->last_seen_us) / 1000000);
 
-        if (written < 0 || n + written >= JSON_BUF_LEN - 4) {
-            /* Out of room: close the array honestly rather than emitting
-             * truncated JSON the browser cannot parse. */
-            ESP_LOGW(TAG, "device list truncated at %zu of %zu", i, count);
+        if (observore_jb_full(&jb)) {
+            ESP_LOGW(TAG, "device list truncated at %zu of %zu", written, count);
             break;
         }
-        n += written;
+        written++;
     }
-    snprintf(body + n, JSON_BUF_LEN - n, "]}");
-
-    return send_json(req, body);
+    observore_jb_close(&jb, "]}");
+    return send_json(req, s_body);
 }
 
 /* Read one query parameter.  Returns false when absent. */
@@ -219,49 +217,54 @@ static esp_err_t mutes_handler(httpd_req_t *req)
 {
     /* Walked by index into the PSRAM scratch.  A static copy of the whole rule
      * table was 6 KB of internal RAM duplicating observore_mute's own, resident
-     * even while the server is stopped, and the old 4 KB stack buffer took half
-     * the httpd task stack -- also internal RAM, which is the scarce kind. */
-    char *body = s_body;
+     * even while the server is stopped. */
     size_t n = observore_mute_count();
 
-    int w = snprintf(body, JSON_BUF_LEN, "{\"suppressed\":%" PRIu32 ",\"rules\":[",
-                     observore_mute_suppressed());
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, s_body, JSON_BUF_LEN, 2);
+    observore_jb_printf(&jb, "{\"suppressed\":%" PRIu32 ",\"rules\":[",
+                        observore_mute_suppressed());
+
     for (size_t i = 0; i < n; i++) {
-        observore_mute_rule_t rule;
-        if (!observore_mute_get(i, &rule)) {
+        observore_mute_rule_t r;
+        if (!observore_mute_get(i, &r)) {
             break;   /* the list shrank under us */
         }
-        const observore_mute_rule_t *r = &rule;
-        char value[OBSERVORE_MUTE_SSID_LEN * 2];
-
-        switch (r->kind) {
-            case OBSERVORE_MUTE_MAC:
-                observore_mac_str(r->mac, value);
+        observore_jb_printf(&jb, "%s{\"index\":%zu,\"kind\":\"%s\",\"value\":\"",
+                            i ? "," : "", i, observore_mute_kind_name(r.kind));
+        switch (r.kind) {
+            case OBSERVORE_MUTE_MAC: {
+                char macbuf[OBSERVORE_MAC_STR_LEN];
+                observore_jb_printf(&jb, "%s", observore_mac_str(r.mac, macbuf));
                 break;
+            }
             case OBSERVORE_MUTE_OUI:
-                snprintf(value, sizeof(value), "%02X:%02X:%02X",
-                         r->mac[0], r->mac[1], r->mac[2]);
+                observore_jb_printf(&jb, "%02X:%02X:%02X", r.mac[0], r.mac[1],
+                                    r.mac[2]);
                 break;
             case OBSERVORE_MUTE_CLASS:
-                snprintf(value, sizeof(value), "%s", observore_class_name(r->cls));
+                observore_jb_printf(&jb, "%s", observore_class_name(r.cls));
                 break;
             case OBSERVORE_MUTE_FINGERPRINT:
-                snprintf(value, sizeof(value), "%08" PRIx32, r->fingerprint);
+                observore_jb_printf(&jb, "%08" PRIx32, r.fingerprint);
+                break;
+            case OBSERVORE_MUTE_NAME:
+                observore_jb_escape(&jb, r.ssid);
                 break;
             default:
-                observore_json_escape(r->ssid, value, sizeof(value));
+                /* A kind added without extending this switch should be
+                 * visible, not silently blank. */
+                observore_jb_printf(&jb, "unrenderable kind %u", r.kind);
                 break;
         }
-        w += snprintf(body + w, JSON_BUF_LEN - w,
-                      "%s{\"index\":%zu,\"kind\":\"%s\",\"value\":\"%s\"}",
-                      i ? "," : "", i, observore_mute_kind_name(r->kind), value);
-        if (w >= (int)JSON_BUF_LEN - 4) {
+        observore_jb_printf(&jb, "\"}");
+        if (observore_jb_full(&jb)) {
             ESP_LOGW(TAG, "mute list truncated at %zu of %zu", i, n);
             break;
         }
     }
-    snprintf(body + w, JSON_BUF_LEN - w, "]}");
-    return send_json(req, body);
+    observore_jb_close(&jb, "]}");
+    return send_json(req, s_body);
 }
 
 static esp_err_t mute_handler(httpd_req_t *req)
@@ -395,38 +398,39 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
     observore_event_t *snap = s_snap;
-    char *body = s_body;
-
     int64_t now = esp_timer_get_time();
     size_t count = observore_track_nearby(snap, NEARBY_MAX);
 
-    int n = snprintf(body, JSON_BUF_LEN, "{\"nearby\":[");
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, s_body, JSON_BUF_LEN, 2);
+    observore_jb_printf(&jb, "{\"nearby\":[");
+
+    size_t written = 0;
     for (size_t i = 0; i < count; i++) {
         const observore_event_t *e = &snap[i];
+        char macbuf[OBSERVORE_MAC_STR_LEN];
+
+        observore_jb_printf(&jb, "%s{\"mac\":\"%s\",\"vendor\":\"%s\",\"name\":\"",
+                            i ? "," : "", observore_mac_str(e->mac, macbuf),
+                            e->vendor ? e->vendor : "");
         /* The name is chosen by whoever owns the radio, so it is escaped on
          * the way out exactly like every other remote-controlled string. */
-        char name[sizeof(e->detail) * 2 + 1];
-        char macbuf[OBSERVORE_MAC_STR_LEN];
-        observore_json_escape(e->detail, name, sizeof(name));
-
-        int written = snprintf(
-            body + n, JSON_BUF_LEN - n,
-            "%s{\"mac\":\"%s\",\"vendor\":\"%s\","
-            "\"name\":\"%s\",\"random\":%s,\"source\":\"%s\","
-            "\"fingerprint\":\"%08" PRIx32 "\","
+        observore_jb_escape(&jb, e->detail);
+        observore_jb_printf(&jb,
+            "\",\"random\":%s,\"source\":\"%s\",\"fingerprint\":\"%08" PRIx32 "\","
             "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
-            i ? "," : "", observore_mac_str(e->mac, macbuf),
-            e->vendor ? e->vendor : "", name,
             e->addr_random ? "true" : "false", observore_source_name(e->src),
-            e->fingerprint,
-            e->rssi, e->hits, (now - e->last_seen_us) / 1000000);
-        if (written < 0 || n + written >= JSON_BUF_LEN - 4) {
+            e->fingerprint, e->rssi, e->hits,
+            (now - e->last_seen_us) / 1000000);
+
+        if (observore_jb_full(&jb)) {
+            ESP_LOGW(TAG, "nearby list truncated at %zu of %zu", written, count);
             break;
         }
-        n += written;
+        written++;
     }
-    snprintf(body + n, JSON_BUF_LEN - n, "]}");
-    return send_json(req, body);
+    observore_jb_close(&jb, "]}");
+    return send_json(req, s_body);
 }
 
 /* Mark everything currently in range as known, then start watching for what

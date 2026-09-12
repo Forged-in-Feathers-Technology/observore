@@ -10,6 +10,7 @@
 #include "observore_detect.h"
 #include "observore_mute.h"
 #include "observore_track.h"
+#include "observore_util.h"
 
 static int g_failures;
 static int g_checks;
@@ -884,9 +885,102 @@ static void test_mac_parsing(void)
           "the unknown class must not be addressable by name");
 }
 
+/* A crude "is this parseable" check: balanced braces and brackets outside of
+ * strings, and no dangling escape.  Enough to catch the failure that actually
+ * shipped -- a document that simply stopped mid-object. */
+static bool json_balanced(const char *s)
+{
+    int curly = 0, square = 0;
+    bool in_str = false, esc = false;
+    for (; *s; s++) {
+        if (esc) { esc = false; continue; }
+        if (in_str) {
+            if (*s == '\\') esc = true;
+            else if (*s == '"') in_str = false;
+            continue;
+        }
+        if (*s == '"') in_str = true;
+        else if (*s == '{') curly++;
+        else if (*s == '}') curly--;
+        else if (*s == '[') square++;
+        else if (*s == ']') square--;
+        if (curly < 0 || square < 0) return false;
+    }
+    return curly == 0 && square == 0 && !in_str && !esc;
+}
+
+static void test_json_builder(void)
+{
+    banner("json append cursor");
+
+    char buf[128];
+    observore_jbuf_t jb;
+
+    observore_jb_init(&jb, buf, sizeof(buf), 2);
+    observore_jb_printf(&jb, "{\"a\":%d,\"b\":[", 42);
+    observore_jb_printf(&jb, "1,2,3");
+    observore_jb_close(&jb, "]}");
+    CHECK(strcmp(buf, "{\"a\":42,\"b\":[1,2,3]}") == 0, "got '%s'", buf);
+    CHECK(json_balanced(buf), "should be balanced");
+
+    /* Escaping goes in without quotes, so a caller supplies them. */
+    observore_jb_init(&jb, buf, sizeof(buf), 2);
+    observore_jb_printf(&jb, "{\"n\":\"");
+    observore_jb_escape(&jb, "he said \"hi\"\\then\nleft");
+    observore_jb_printf(&jb, "\"");
+    observore_jb_close(&jb, "}");
+    CHECK(json_balanced(buf), "escaped output should stay balanced: %s", buf);
+    CHECK(strstr(buf, "\\\"hi\\\"") != NULL, "quotes not escaped: %s", buf);
+    CHECK(strstr(buf, "\\n") != NULL, "newline not escaped: %s", buf);
+
+    /* The property the whole cursor exists for: running out of room must yield
+     * a SHORT but PARSEABLE document, never a truncated one.  A missing
+     * closing bracket is exactly what shipped once and what the browser then
+     * refused to parse. */
+    char small[48];
+    observore_jb_init(&jb, small, sizeof(small), 2);
+    observore_jb_printf(&jb, "{\"items\":[");
+    int accepted = 0;
+    for (int i = 0; i < 100; i++) {
+        observore_jb_printf(&jb, "%s{\"index\":%d,\"padding\":\"xxxxxxxx\"}",
+                            i ? "," : "", i);
+        if (observore_jb_full(&jb)) break;
+        accepted++;
+    }
+    observore_jb_close(&jb, "]}");
+    CHECK(observore_jb_full(&jb), "the small buffer should have filled");
+    CHECK(accepted < 100, "not everything can have fitted");
+    CHECK(json_balanced(small), "a full buffer must still close: '%s'", small);
+    CHECK(strlen(small) < sizeof(small), "must not overrun");
+
+    /* A partial write is dropped whole rather than leaving half a token. */
+    observore_jb_init(&jb, small, sizeof(small), 2);
+    observore_jb_printf(&jb, "{\"x\":\"");
+    size_t before = strlen(small);
+    observore_jb_printf(&jb, "%s", "an extremely long value that cannot fit at all");
+    CHECK(observore_jb_full(&jb), "should be full");
+    CHECK(strlen(small) == before, "a rejected write must leave nothing behind");
+
+    /* Escaping must also stop cleanly at the boundary. */
+    observore_jb_init(&jb, small, sizeof(small), 2);
+    observore_jb_printf(&jb, "{\"x\":\"");
+    observore_jb_escape(&jb, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    observore_jb_printf(&jb, "\"");
+    observore_jb_close(&jb, "}");
+    CHECK(strlen(small) < sizeof(small), "escape must not overrun");
+
+    /* A reserve larger than the buffer must not explode. */
+    char tiny[4];
+    observore_jb_init(&jb, tiny, sizeof(tiny), 8);
+    CHECK(observore_jb_full(&jb), "an impossible reserve should read as full");
+    observore_jb_printf(&jb, "anything");
+    CHECK(strlen(tiny) == 0, "nothing should have been written");
+}
+
 int main(void)
 {
     test_oui_lookup();
+    test_json_builder();
     test_vendor_lookup();
     test_vendor_labelling();
     test_name_capture();
