@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "observore_clock.h"
 #include "observore_notify.h"
 #include "observore_util.h"
 #include "observore_wifi.h"
@@ -247,13 +248,25 @@ void observore_notify_event(const observore_event_t *ev)
 
     snprintf(title, sizeof(title), "%s detected", observore_class_name(ev->cls));
     char macbuf[OBSERVORE_MAC_STR_LEN];
-    snprintf(msg, sizeof(msg), "%s%s%s\n%s %s\n%d dBm, via %s, %s",
+    /* When it was seen, not when it was sent.
+     *
+     * Notices are queued while patrolling and flushed on the next uplink
+     * window, so delivery can trail detection by twenty minutes -- and the
+     * queue exists precisely for the case where that gap is longest. A push
+     * that arrives at 03:20 saying a body camera was detected, with no
+     * indication of when, is misleading in exactly the situation it matters
+     * most. Omitted rather than guessed when the clock has never been set. */
+    char seen[24];
+    bool dated = observore_clock_iso(ev->last_seen_us, seen, sizeof(seen));
+
+    snprintf(msg, sizeof(msg), "%s%s%s\n%s %s\n%d dBm, via %s, %s%s%s",
              ev->label,
              ev->detail[0] ? " / " : "", ev->detail,
              observore_mac_str(ev->mac, macbuf),
              ev->vendor ? ev->vendor : (ev->addr_random ? "(random)" : ""),
              ev->rssi, observore_source_name(ev->src),
-             observore_evidence_name(ev->evidence));
+             observore_evidence_name(ev->evidence),
+             dated ? "\nseen " : "", dated ? seen : "");
 
     enqueue(title, msg, observore_class_desc(ev->cls)->notify_urgency);
 }

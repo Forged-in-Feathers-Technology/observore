@@ -243,6 +243,23 @@ function ago(s) {
   return Math.floor(s / 3600) + 'h';
 }
 
+// "4m ago" answers how long, not when. Once the device knows the time it also
+// sends an absolute UTC stamp, which is rendered in the browser's own zone --
+// the device deliberately has no idea what zone it is in, and guessing one
+// would be worse than leaving the conversion to the machine that knows.
+//
+// Both are shown: relative reads faster at a glance, absolute is the one you
+// can act on hours later.
+function when(relSeconds, iso) {
+  const rel = ago(relSeconds) + ' ago';
+  if (!iso) return rel;
+  const d = new Date(iso);
+  if (isNaN(d)) return rel;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const t = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  return rel + ' \u00b7 ' + (sameDay ? t : d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + t);
+}
+
 // Each panel is fetched independently and failures are reported per panel.
 // A single Promise.all with one try/catch meant that one malformed response
 // blanked the whole page and said only "connection lost", which hid a server
@@ -368,7 +385,10 @@ function renderStatus(s) {
   $('devices').textContent = s.devices;
   $('sightings').textContent = s.sightings;
   $('mode').textContent = s.mode;
-  $('uptime').textContent = 'up ' + ago(s.uptime_s);
+  // Say so when the clock has never been set, rather than letting every row
+  // quietly show only "4m ago" and leaving the reader to wonder why.
+  $('uptime').textContent = 'up ' + ago(s.uptime_s) +
+    (s.time_valid ? '' : ' \u00b7 clock not set');
 }
 
 function renderDevices(list) {
@@ -387,7 +407,7 @@ function renderDevices(list) {
     cell(tr, 'dim', d.source);
     cell(tr, 'dim', d.evidence);
     cell(tr, 'dim', String(d.hits));
-    cell(tr, 'dim', ago(d.last_seen_s) + ' ago');
+    cell(tr, 'dim', when(d.last_seen_s, d.last_seen));
     ignoreCell(tr, d);
     rows.appendChild(tr);
   }
@@ -409,7 +429,7 @@ function renderNearby(list) {
     cell(tr, 'dim', d.source);
     cell(tr, 'dim', d.rssi + ' dBm');
     cell(tr, 'dim', String(d.hits));
-    cell(tr, 'dim', ago(d.last_seen_s) + ' ago');
+    cell(tr, 'dim', when(d.last_seen_s, d.last_seen));
     ignoreCell(tr, d);
     rows.appendChild(tr);
   }

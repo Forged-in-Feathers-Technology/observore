@@ -6,6 +6,7 @@
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_auth.h"
+#include "observore_clock.h"
 #include "observore_notify.h"
 #include "observore_util.h"
 #include "observore_track.h"
@@ -129,6 +130,12 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_status_t st;
     observore_track_status(&st, now);
 
+    /* Empty until the clock has been set. Reported rather than faked so the
+     * console can say "times are relative to boot" instead of rendering an
+     * uptime as though it were a date. */
+    char now_iso[24];
+    observore_clock_iso(now, now_iso, sizeof(now_iso));
+
     char body[768];
     observore_jbuf_t jb;
     observore_jb_init(&jb, body, sizeof(body), 2);   /* room for "}}" */
@@ -137,11 +144,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         "{\"score\":%u,\"level\":\"%s\",\"devices\":%u,"
         "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
         ",\"mode\":\"%s\",\"muted\":%zu,\"suppressed\":%" PRIu32
+        ",\"time_valid\":%s,\"now\":\"%s\""
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
         observore_mode_name(observore_wifi_mode()),
-        observore_mute_count(), observore_mute_suppressed());
+        observore_mute_count(), observore_mute_suppressed(),
+        observore_clock_valid() ? "true" : "false", now_iso);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
@@ -166,6 +175,12 @@ static esp_err_t devices_handler(httpd_req_t *req)
         const observore_event_t *e = &snap[i];
         char macbuf[OBSERVORE_MAC_STR_LEN];
 
+        /* Empty when the clock has never been set, which the client reads as
+         * "relative only" rather than being handed a timestamp from 1970. */
+        char first_iso[24], last_iso[24];
+        observore_clock_iso(e->first_seen_us, first_iso, sizeof(first_iso));
+        observore_clock_iso(e->last_seen_us, last_iso, sizeof(last_iso));
+
         observore_jb_printf(&jb, "%s{\"mac\":\"%s\",\"class\":\"%s\",\"label\":\"",
                             i ? "," : "", observore_mac_str(e->mac, macbuf),
                             observore_class_name(e->cls));
@@ -177,11 +192,13 @@ static esp_err_t devices_handler(httpd_req_t *req)
         observore_jb_printf(&jb,
             "\",\"evidence\":\"%s\",\"source\":\"%s\",\"rssi\":%d,"
             "\"channel\":%u,\"hits\":%" PRIu32 ",\"first_seen_s\":%" PRId64
-            ",\"last_seen_s\":%" PRId64 "}",
+            ",\"last_seen_s\":%" PRId64
+            ",\"first_seen\":\"%s\",\"last_seen\":\"%s\"}",
             observore_evidence_name(e->evidence), observore_source_name(e->src),
             e->rssi, e->channel, e->hits,
             (now - e->first_seen_us) / 1000000,
-            (now - e->last_seen_us) / 1000000);
+            (now - e->last_seen_us) / 1000000,
+            first_iso, last_iso);
 
         if (observore_jb_full(&jb)) {
             ESP_LOGW(TAG, "device list truncated at %zu of %zu", written, count);
@@ -438,6 +455,8 @@ static esp_err_t nearby_handler(httpd_req_t *req)
     for (size_t i = 0; i < count; i++) {
         const observore_event_t *e = &snap[i];
         char macbuf[OBSERVORE_MAC_STR_LEN];
+        char last_iso[24];
+        observore_clock_iso(e->last_seen_us, last_iso, sizeof(last_iso));
 
         observore_jb_printf(&jb, "%s{\"mac\":\"%s\",\"vendor\":\"%s\",\"name\":\"",
                             i ? "," : "", observore_mac_str(e->mac, macbuf),
@@ -447,10 +466,11 @@ static esp_err_t nearby_handler(httpd_req_t *req)
         observore_jb_escape(&jb, e->detail);
         observore_jb_printf(&jb,
             "\",\"random\":%s,\"source\":\"%s\",\"fingerprint\":\"%08" PRIx32 "\","
-            "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
+            "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64
+            ",\"last_seen\":\"%s\"}",
             e->addr_random ? "true" : "false", observore_source_name(e->src),
             e->fingerprint, e->rssi, e->hits,
-            (now - e->last_seen_us) / 1000000);
+            (now - e->last_seen_us) / 1000000, last_iso);
 
         if (observore_jb_full(&jb)) {
             ESP_LOGW(TAG, "nearby list truncated at %zu of %zu", written, count);

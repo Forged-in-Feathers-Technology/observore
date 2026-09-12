@@ -80,6 +80,20 @@ config OBSERVORE_BUTTON_GPIO
         enters download mode when held across a reset, so reusing it here is
         safe.
 
+config OBSERVORE_NTP_SERVER
+    string "Fallback NTP server"
+    default "pool.ntp.org"
+    help
+        Used only when the network hands out no NTP server over DHCP.
+
+        DHCP is tried first on purpose. This device is meant to sit on the
+        segment the cameras are on, and that segment is often firewalled from
+        the internet -- the same isolation that stops a push notification
+        reaching its server stops a public pool answering. A router's own NTP
+        is reachable from inside that fence.
+
+        Times are always UTC on the wire; the console renders local.
+
 comment "Wi-Fi uplink -- leave blank here and set it with menuconfig or NVS"
 
 config OBSERVORE_WIFI_SSID

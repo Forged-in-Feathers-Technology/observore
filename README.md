@@ -852,6 +852,40 @@ this reason; if the console ever goes quiet again, read that line first.
 clear | score 0 | 0 devices | 227 sightings | 0/0 frames | heap 103687 free, 42568 min, 31744 largest
 ```
 
+## Knowing what time it is
+
+A detector that cannot say *when* has given you half an answer. The device
+learns the time by SNTP during an uplink window and reports UTC everywhere; the
+console renders it in the browser's own zone, because the device has no idea
+what zone it is in and guessing would be worse than not.
+
+**DHCP first, then a configured server.** This is the important part. Observore
+is meant to sit on the segment the cameras are on, and that segment is
+routinely firewalled from the internet — the same isolation that stops a push
+notification reaching its server stops `pool.ntp.org` answering. A router's own
+NTP is reachable from inside that fence. `OBSERVORE_NTP_SERVER` is the fallback
+for networks that hand out no NTP option.
+
+**Timestamps are retroactive.** The conversion works from the monotonic clock,
+which runs from boot, so a sighting recorded *before* the time was known is
+still dated correctly once it is. That matters because the device starts
+detecting the instant it powers on and only learns the time when it next
+reaches the network — often a few seconds later, sometimes never.
+
+**Unknown is reported, not faked.** Until the clock is set, `time_valid` is
+false, the absolute fields are empty, and the console says `clock not set`
+next to the uptime. Only the relative "4m ago" is shown. Emitting 1970 dressed
+up as a timestamp would be worse than admitting the clock is unset, on a device
+whose output is meant to be evidence.
+
+**Notifications carry the time the thing was seen**, not the time the message
+was sent. Notices are queued while patrolling and flushed on the next uplink,
+so delivery can trail detection by twenty minutes — and the queue exists
+precisely for the case where that gap is longest.
+
+Both forms are reported: `last_seen_s` counts seconds ago, `last_seen` is
+ISO-8601 UTC. A client with no clock of its own still needs the first.
+
 ## What happens when the radio misbehaves
 
 A driver error on a mode change does not restart the device. It is logged, the
