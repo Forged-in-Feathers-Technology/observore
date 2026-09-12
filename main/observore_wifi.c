@@ -69,6 +69,9 @@ static const uint8_t ASTM_OUI[3]     = {0xFA, 0x0B, 0xBC};
 #define IE_VENDOR_SPECIFIC    0xDD
 #define IE_SSID               0x00
 
+static observore_scan_entry_t s_last_scan[OBSERVORE_SCAN_REPORT_MAX];
+static size_t                 s_last_scan_count;
+
 static observore_mode_t       s_mode = OBSERVORE_MODE_PATROL;
 static char               s_ap_ssid[32];
 static char               s_hostname[48];
@@ -246,6 +249,22 @@ static void run_ap_scan(void)
         ESP_LOGW(TAG, "scan results unavailable: %s", esp_err_to_name(err));
         return;
     }
+
+    /* Keep a copy for Improv, which needs SSIDs rather than the tracker's
+     * view.  Named networks only: a hidden AP is a beacon with a blank SSID
+     * and cannot be offered as something to join. */
+    size_t kept = 0;
+    for (uint16_t i = 0; i < count && kept < OBSERVORE_SCAN_REPORT_MAX; i++) {
+        if (records[i].ssid[0] == '\0') {
+            continue;
+        }
+        snprintf(s_last_scan[kept].ssid, sizeof(s_last_scan[kept].ssid), "%s",
+                 (const char *)records[i].ssid);
+        s_last_scan[kept].rssi   = records[i].rssi;
+        s_last_scan[kept].secure = records[i].authmode != WIFI_AUTH_OPEN;
+        kept++;
+    }
+    s_last_scan_count = kept;
 
     int64_t now = esp_timer_get_time();
     for (uint16_t i = 0; i < count; i++) {
@@ -586,6 +605,13 @@ esp_err_t observore_wifi_init(void)
     s_initialised = true;
 
     return observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
+}
+
+size_t observore_wifi_last_scan(observore_scan_entry_t *out, size_t max)
+{
+    size_t n = s_last_scan_count < max ? s_last_scan_count : max;
+    memcpy(out, s_last_scan, n * sizeof(*out));
+    return n;
 }
 
 observore_mode_t observore_wifi_mode(void)

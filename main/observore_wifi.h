@@ -64,6 +64,20 @@ uint32_t observore_wifi_sniffed_frames(void);
 uint32_t observore_wifi_sniffer_calls(void);
 
 /* The mDNS name the device answers to, e.g. "observore.local". */
+/* The most recent AP scan, for the Improv provisioning dialog to offer as a
+ * list.  Reported from the sweep that is already running rather than by
+ * starting a scan on demand: this chip has one radio, and a scan requested
+ * mid-patrol fights the sweep for it. */
+#define OBSERVORE_SCAN_REPORT_MAX 24
+
+typedef struct {
+    char    ssid[33];
+    int8_t  rssi;
+    bool    secure;
+} observore_scan_entry_t;
+
+size_t observore_wifi_last_scan(observore_scan_entry_t *out, size_t max);
+
 const char *observore_wifi_hostname(void);
 
 const char *observore_wifi_ap_ssid(void);

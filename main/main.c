@@ -10,6 +10,7 @@
 
 #include "observore_auth.h"
 #include "observore_ble.h"
+#include "observore_improv.h"
 #include "observore_led.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -234,6 +235,11 @@ void app_main(void)
     ESP_ERROR_CHECK(observore_ble_start());
 
     xTaskCreate(button_task, "observore_btn", 3072, NULL, 3, NULL);
+
+    /* Started even when a network is already configured: re-provisioning a
+     * device that has moved house is the same problem as provisioning a new
+     * one, and it only listens on a cable somebody has physically attached. */
+    observore_improv_init();
 
 #if CONFIG_OBSERVORE_WIFI_AUTOJOIN
     if (observore_netcfg_is_set()) {
