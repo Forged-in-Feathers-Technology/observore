@@ -11,6 +11,17 @@ name: Flasher page
 on:
   release:
     types: [published]
+  # The page is not only published with firmware.  Edits to the page itself --
+  # wording, browser guidance, flashing instructions -- used to sit unpublished
+  # until the next release happened to go out, which meant the site could
+  # contradict the repository for weeks.  The firmware served alongside it
+  # still comes from the latest release, so this republishes the page without
+  # changing what it installs.
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
     inputs:
       tag:
