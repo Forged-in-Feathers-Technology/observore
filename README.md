@@ -353,8 +353,11 @@ is gitignored.
 
 ### The console password
 
-Each device generates its own random console password on first boot, stores it
-in NVS and prints it on the serial log:
+It is used twice: as the SoftAP's WPA2 key, and to unlock the console when the
+device is on your own network.
+
+Each device generates its own on first boot, stores it in NVS and prints it on
+the serial log:
 
 ```
 console SoftAP: "console-F964FD"  password: 2p78ggedb4bj
@@ -374,6 +377,30 @@ erasing NVS generates a new one.
 `OBSERVORE_AP_PASSWORD` overrides it, and every device built from that firmware
 then shares the password you chose. `tools/check_no_secrets.sh` fails if such a
 value reaches a tracked file.
+
+#### Unlocking the console
+
+On your own network the console asks for that password once and exchanges it
+for a session cookie, so the password is not repeated on every request — which
+matters, because it is also the WPA2 key to the device's own access point. The
+session lasts two hours of use and **Lock** ends it.
+
+The SoftAP is deliberately not challenged. WPA2 already authenticates that link
+with the same password, and first-time setup is the one moment the console is
+the only way in.
+
+Everything except the page itself and the login endpoints requires a session:
+the detection log, the mute rules, and the network and notifier settings. The
+requirement lives in the route table and a single dispatcher enforces it, so a
+route added later cannot quietly forget to check.
+
+Repeated wrong guesses are slowed by a delay that grows with consecutive
+failures. Set `OBSERVORE_CONSOLE_AUTH=n` to turn the whole thing off, which is
+reasonable only on a network you would be content to leave the detection log
+readable on.
+
+**This is authentication, not encryption.** Over plain HTTP the session cookie
+can be captured by anything sniffing the LAN.
 
 ### Reading the log
 

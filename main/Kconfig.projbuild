@@ -143,6 +143,26 @@ config OBSERVORE_BLE_SCAN_WINDOW_MS
         around 200.  The default trades roughly a third of BLE throughput for
         a sniffer that functions.
 
+config OBSERVORE_CONSOLE_AUTH
+    bool "Require the console password in uplink mode"
+    default y
+    help
+        Without this, anyone who can reach the device on your network can read
+        the detection log -- which says what was watching you and when -- and
+        change the network it joins.
+
+        The credential is the same generated console password printed on the
+        serial log.  It is asked for once and exchanged for a session cookie,
+        so the password itself is not repeated on every request; that matters
+        because it is also the SoftAP's WPA2 key.
+
+        The SoftAP is not challenged: WPA2 already authenticates that link with
+        the same password, and first-time setup is the one moment the console
+        is the only way in.
+
+        Turn this off only on a network you would be content to leave the
+        detection log readable on.
+
 config OBSERVORE_AP_SSID_PREFIX
     string "Console SoftAP SSID prefix"
     default "console"

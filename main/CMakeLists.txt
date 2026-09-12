@@ -5,6 +5,7 @@ idf_component_register(
         "observore_track.c"
         "observore_mute.c"
         "observore_netcfg.c"
+        "observore_auth.c"
         "observore_nvs.c"
         "observore_util.c"
         "observore_notify.c"
