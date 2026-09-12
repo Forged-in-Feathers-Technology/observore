@@ -10,6 +10,7 @@
 
 #include "observore_auth.h"
 #include "observore_ble.h"
+#include "observore_clock.h"
 #include "observore_improv.h"
 #include "observore_led.h"
 #include "observore_mute.h"
@@ -229,6 +230,10 @@ void app_main(void)
      * and a device flashed with an older build keeps everything under that
      * name. */
     observore_nvs_migrate();
+    /* Started here rather than on the first uplink: it renews its servers on
+     * every new IP, so one init covers every window the device is associated
+     * for, and the times it hands back are retroactive anyway. */
+    observore_clock_init();
     observore_mute_init();
     observore_netcfg_init();
     observore_auth_init();

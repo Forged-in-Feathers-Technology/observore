@@ -26,7 +26,11 @@
 #define OBSERVORE_NOTIFY_USER_LEN  64
 #define OBSERVORE_NOTIFY_QUEUE     24
 #define OBSERVORE_NOTIFY_TITLE_LEN 48
-#define OBSERVORE_NOTIFY_MSG_LEN   160
+/* Raised from 160 to fit "\nseen <ISO-8601>" on the end.  A worst-case event
+ * line already reached about 150 characters, so the timestamp would have been
+ * silently truncated away -- losing precisely the field it was added for.
+ * Costs 24 * 64 = 1.5 KB of static queue. */
+#define OBSERVORE_NOTIFY_MSG_LEN   224
 
 void observore_notify_init(void);
 
