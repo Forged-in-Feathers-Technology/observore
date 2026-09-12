@@ -634,7 +634,11 @@ cannot inject a field — there is a test for exactly that.
 
 The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,
 and Wi-Fi and lwip allocate from it. Observore therefore builds its JSON responses
-in **PSRAM**, not in static internal buffers.
+in **PSRAM** where there is any, not in static internal buffers.
+
+Targets without PSRAM — the C3, C5 and C6 — take a smaller budget from internal
+memory instead and report fewer devices per request. The console says which it
+got, and the heartbeat shows the consequence.
 
 This is not premature tuning. An earlier version used static internal scratch
 (two 20 KB device snapshots plus 32 KB and 12 KB response buffers) and drove
