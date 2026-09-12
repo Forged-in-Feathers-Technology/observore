@@ -8,6 +8,7 @@
 
 #include <inttypes.h>
 
+#include "observore_auth.h"
 #include "observore_ble.h"
 #include "observore_led.h"
 #include "observore_mute.h"
@@ -220,6 +221,7 @@ void app_main(void)
     observore_nvs_migrate();
     observore_mute_init();
     observore_netcfg_init();
+    observore_auth_init();
     observore_notify_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before

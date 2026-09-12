@@ -55,6 +55,13 @@
     border-radius: 5px; padding: 6px 12px; font: inherit; font-size: 12px; cursor: pointer;
   }
   button:hover { border-color: var(--dim); }
+  #login { position: fixed; inset: 0; background: var(--bg); display: none;
+           align-items: center; justify-content: center; z-index: 10; }
+  #login.show { display: flex; }
+  #login .box { border: 1px solid var(--line); background: var(--panel);
+                border-radius: 8px; padding: 22px 24px; max-width: 380px; }
+  #login h2 { margin: 0 0 6px; font-size: 14px; letter-spacing: 0.08em;
+              text-transform: uppercase; }
   footer { margin-top: 14px; display: flex; justify-content: space-between;
            align-items: center; color: var(--dim); font-size: 11px; gap: 10px; }
   .mini { padding: 2px 8px; font-size: 11px; }
@@ -82,6 +89,22 @@
 </style>
 </head>
 <body>
+<div id="login">
+  <div class="box">
+    <h2>Observore</h2>
+    <p class="note" style="margin:0 0 12px">
+      Enter the console password. It is generated for this device and printed
+      on its serial log at every boot.
+    </p>
+    <div class="add" style="margin:0">
+      <input id="lpw" type="password" placeholder="console password"
+             autocomplete="current-password">
+      <button id="lgo">Unlock</button>
+    </div>
+    <p class="note" id="lnote" style="margin:10px 0 0"></p>
+  </div>
+</div>
+
 <header>
   <h1>Observore</h1>
   <span class="sub" id="uptime"></span>
@@ -207,6 +230,7 @@
   <span>
     <button class="mini" id="unmuteall">Clear ignores</button>
     <button class="mini" id="clear">Clear log</button>
+    <button class="mini" id="logout">Lock</button>
   </span>
 </footer>
 
@@ -225,9 +249,21 @@ function ago(s) {
 // bug behind what looked like a network problem.
 const errors = [];
 
+let locked = false;
+
+function showLogin(on) {
+  locked = on;
+  $('login').classList.toggle('show', on);
+  if (on) $('lpw').focus();
+}
+
 async function getJSON(path, fallback) {
   try {
     const r = await fetch(path);
+    // A 401 anywhere means the session went away -- an expired cookie, or the
+    // device rebooted and dropped its sessions. Ask again rather than
+    // reporting a confusing per-panel error.
+    if (r.status === 401) { showLogin(true); return fallback; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return await r.json();
   } catch (e) {
@@ -235,6 +271,24 @@ async function getJSON(path, fallback) {
     return fallback;
   }
 }
+
+async function login() {
+  const res = await fetch('/api/login?password=' +
+                          encodeURIComponent($('lpw').value),
+                          { method: 'POST' });
+  $('lpw').value = '';
+  if (res.ok) {
+    $('lnote').textContent = '';
+    showLogin(false);
+    refreshLive();
+    refreshConfig();
+  } else {
+    $('lnote').textContent = 'Wrong password.';
+  }
+}
+
+$('lgo').addEventListener('click', login);
+$('lpw').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 
 // MACs whose mute is in flight. The poll would otherwise repaint a row that
 // has already been clicked away, making the button feel unresponsive.
@@ -362,6 +416,7 @@ function renderNearby(list) {
 }
 
 async function refreshLive() {
+  if (locked) return;
   errors.length = 0;
   renderStatus(await getJSON('/api/status', {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?' }));
@@ -431,6 +486,7 @@ function renderMutes(m) {
 }
 
 async function refreshConfig() {
+  if (locked) return;
   renderNotify(await getJSON('/api/notify', { configured: false }));
   renderNet(await getJSON('/api/netcfg', { configured: false, ssid: '', ip: '' }));
   renderMutes(await getJSON('/api/mutes', { rules: [], suppressed: 0 }));
@@ -469,6 +525,10 @@ $('add').addEventListener('click', () => {
 
 $('unmuteall').addEventListener('click', () => post('/api/unmute?all=1'));
 $('clear').addEventListener('click', () => post('/api/clear'));
+$('logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  showLogin(true);
+});
 
 $('baseline').addEventListener('click', async () => {
   const b = $('baseline');
@@ -562,8 +622,11 @@ $('gclear').addEventListener('click', () => {
   post('/api/notify?clear=1', 'notifier forgotten', 'gnote');
 });
 
-refreshLive();
-refreshConfig();
+// Ask up front rather than discovering it through a failed fetch.
+fetch('/api/auth').then(r => r.json()).then(a => {
+  showLogin(a.required && !a.authenticated);
+  if (!locked) { refreshLive(); refreshConfig(); }
+}).catch(() => { refreshLive(); refreshConfig(); });
 setInterval(refreshLive, 2000);
 </script>
 </body>

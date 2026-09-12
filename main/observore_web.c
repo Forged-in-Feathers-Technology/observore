@@ -5,6 +5,7 @@
 
 #include "observore_mute.h"
 #include "observore_netcfg.h"
+#include "observore_auth.h"
 #include "observore_notify.h"
 #include "observore_util.h"
 #include "observore_track.h"
@@ -610,11 +611,66 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     return ok(req);
 }
 
+static esp_err_t unauthorized(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "401 Unauthorized");
+    return send_json(req, "{\"ok\":false,\"error\":\"authentication required\"}");
+}
+
+static esp_err_t login_handler(httpd_req_t *req)
+{
+    char password[OBSERVORE_PASSWORD_LEN] = {0};
+    if (!query_param(req, "password", password, sizeof(password))) {
+        return fail(req, "password is required");
+    }
+    esp_err_t err = observore_auth_login(req, password);
+    memset(password, 0, sizeof(password));
+    if (err != ESP_OK) {
+        /* Deliberately says nothing about which part was wrong. */
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return send_json(req, "{\"ok\":false,\"error\":\"wrong password\"}");
+    }
+    return ok(req);
+}
+
+static esp_err_t logout_handler(httpd_req_t *req)
+{
+    observore_auth_logout(req);
+    return ok(req);
+}
+
+/* Reports whether a login is needed, so the console can show the form instead
+ * of guessing from a failed fetch. Open by design: it reveals nothing. */
+static esp_err_t authstate_handler(httpd_req_t *req)
+{
+    char body[96];
+    snprintf(body, sizeof(body), "{\"required\":%s,\"authenticated\":%s}",
+             observore_auth_enforced() ? "true" : "false",
+             observore_auth_ok(req) ? "true" : "false");
+    return send_json(req, body);
+}
+
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     observore_track_clear();
     ESP_LOGI(TAG, "log cleared by console");
     return ok(req);
+}
+
+typedef struct {
+    const char     *uri;
+    httpd_method_t  method;
+    esp_err_t     (*fn)(httpd_req_t *);
+    bool            open_route;   /* reachable without a session */
+} observore_route_t;
+
+static esp_err_t dispatch(httpd_req_t *req)
+{
+    const observore_route_t *r = req->user_ctx;
+    if (!r->open_route && !observore_auth_ok(req)) {
+        return unauthorized(req);
+    }
+    return r->fn(req);
 }
 
 esp_err_t observore_web_start(void)
@@ -623,20 +679,27 @@ esp_err_t observore_web_start(void)
         return ESP_OK;
     }
 
-    static const httpd_uri_t routes[] = {
-        {.uri = "/",             .method = HTTP_GET,  .handler = index_handler},
-        {.uri = "/api/status",   .method = HTTP_GET,  .handler = status_handler},
-        {.uri = "/api/devices",  .method = HTTP_GET,  .handler = devices_handler},
-        {.uri = "/api/nearby",   .method = HTTP_GET,  .handler = nearby_handler},
-        {.uri = "/api/clear",    .method = HTTP_POST, .handler = clear_handler},
-        {.uri = "/api/mutes",    .method = HTTP_GET,  .handler = mutes_handler},
-        {.uri = "/api/mute",     .method = HTTP_POST, .handler = mute_handler},
-        {.uri = "/api/unmute",   .method = HTTP_POST, .handler = unmute_handler},
-        {.uri = "/api/baseline", .method = HTTP_POST, .handler = baseline_handler},
-        {.uri = "/api/netcfg",   .method = HTTP_GET,  .handler = netcfg_get_handler},
-        {.uri = "/api/netcfg",   .method = HTTP_POST, .handler = netcfg_set_handler},
-        {.uri = "/api/notify",   .method = HTTP_GET,  .handler = notify_get_handler},
-        {.uri = "/api/notify",   .method = HTTP_POST, .handler = notify_set_handler},
+    /* The flag lives in the table and one dispatcher enforces it, so a route
+     * added later cannot quietly forget to check. Only the page itself and the
+     * two login endpoints are open -- the page carries no data, and the rest
+     * is the detection log and the device's own configuration. */
+    static observore_route_t routes[] = {
+        {"/",              HTTP_GET,  index_handler,      true },
+        {"/api/auth",      HTTP_GET,  authstate_handler,  true },
+        {"/api/login",     HTTP_POST, login_handler,      true },
+        {"/api/logout",    HTTP_POST, logout_handler,     true },
+        {"/api/status",    HTTP_GET,  status_handler,     false},
+        {"/api/devices",   HTTP_GET,  devices_handler,    false},
+        {"/api/nearby",    HTTP_GET,  nearby_handler,     false},
+        {"/api/clear",     HTTP_POST, clear_handler,      false},
+        {"/api/mutes",     HTTP_GET,  mutes_handler,      false},
+        {"/api/mute",      HTTP_POST, mute_handler,       false},
+        {"/api/unmute",    HTTP_POST, unmute_handler,     false},
+        {"/api/baseline",  HTTP_POST, baseline_handler,   false},
+        {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
+        {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
+        {"/api/notify",    HTTP_GET,  notify_get_handler, false},
+        {"/api/notify",    HTTP_POST, notify_set_handler, false},
     };
     if (!scratch_alloc()) {
         return ESP_ERR_NO_MEM;
@@ -658,7 +721,13 @@ esp_err_t observore_web_start(void)
     }
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-        err = httpd_register_uri_handler(s_server, &routes[i]);
+        const httpd_uri_t u = {
+            .uri      = routes[i].uri,
+            .method   = routes[i].method,
+            .handler  = dispatch,
+            .user_ctx = &routes[i],
+        };
+        err = httpd_register_uri_handler(s_server, &u);
         if (err != ESP_OK) {
             /* Never silently serve a partial API. */
             ESP_LOGE(TAG, "could not register %s: %s", routes[i].uri,
