@@ -1,6 +1,7 @@
 # Observore
 
-A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/).
+A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/),
+built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com).
 
 It tells you what is watching you. Built to sit in one place and watch that
 place: it learns what is normally there, then reports what is new. It listens
@@ -465,6 +466,11 @@ lawful in most jurisdictions — but "most" is not "all", and what you do with a
 log is a separate question from how you gathered it. Check your local law.
 
 ## Credit
+
+Built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com),
+alongside [WarDeck](https://github.com/Forged-in-Feathers-Technology/wardeck) —
+the same interest in what the radio spectrum around you is actually doing,
+pointed in the opposite direction.
 
 The concept — passive BLE plus Wi-Fi surveillance detection with a decaying
 threat score on a pocket-sized ESP32 — comes from
