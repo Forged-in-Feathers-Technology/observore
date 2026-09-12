@@ -124,7 +124,7 @@ static void test_vendor_labelling(void)
     CHECK(!observore_track_observe(&obs, SECS(0)), "must not be reportable");
 
     observore_event_t nearby[8];
-    size_t n = observore_track_nearby(nearby, 8, SECS(0));
+    size_t n = observore_track_nearby(nearby, 8);
     CHECK(n == 1, "expected 1 nearby device, got %zu", n);
     CHECK(n == 1 && nearby[0].vendor && strcmp(nearby[0].vendor, "Apple") == 0,
           "nearby device should be labelled Apple");
@@ -140,13 +140,13 @@ static void test_vendor_labelling(void)
     observore_track_observe(&obs, SECS(20));
     CHECK(observore_track_observe(&obs, SECS(400)), "follower not promoted");
     observore_event_t snap[4];
-    n = observore_track_snapshot(snap, 4, SECS(400));
+    n = observore_track_snapshot(snap, 4);
     CHECK(n == 1 && strstr(snap[0].label, "Apple") != NULL,
           "follower label should name the vendor, got '%s'",
           n ? snap[0].label : "");
 
     /* Nearby must exclude anything already classified. */
-    n = observore_track_nearby(nearby, 8, SECS(400));
+    n = observore_track_nearby(nearby, 8);
     CHECK(n == 0, "a classified device must leave the nearby list, got %zu", n);
 }
 
@@ -167,7 +167,7 @@ static void test_name_capture(void)
     CHECK(!observore_track_observe(&obs, SECS(0)), "must not classify");
 
     observore_event_t nearby[8];
-    size_t n = observore_track_nearby(nearby, 8, SECS(0));
+    size_t n = observore_track_nearby(nearby, 8);
     CHECK(n == 1 && strcmp(nearby[0].detail, "Shelf") == 0,
           "name not captured, got '%s'", n ? nearby[0].detail : "");
 
@@ -178,7 +178,7 @@ static void test_name_capture(void)
     obs.adv = nameless;
     obs.adv_len = sizeof(nameless);
     observore_track_observe(&obs, SECS(5));
-    n = observore_track_nearby(nearby, 8, SECS(5));
+    n = observore_track_nearby(nearby, 8);
     CHECK(n == 1 && strcmp(nearby[0].detail, "Shelf") == 0,
           "a nameless advert erased the learned name, got '%s'",
           n ? nearby[0].detail : "");
@@ -188,12 +188,12 @@ static void test_name_capture(void)
     obs.adv = nameless;
     obs.adv_len = sizeof(nameless);
     observore_track_observe(&obs, SECS(0));
-    n = observore_track_nearby(nearby, 8, SECS(0));
+    n = observore_track_nearby(nearby, 8);
     CHECK(n == 1 && nearby[0].detail[0] == '\0', "should start nameless");
     obs.adv = named;
     obs.adv_len = sizeof(named);
     observore_track_observe(&obs, SECS(1));
-    n = observore_track_nearby(nearby, 8, SECS(1));
+    n = observore_track_nearby(nearby, 8);
     CHECK(n == 1 && strcmp(nearby[0].detail, "Shelf") == 0,
           "a late name was not learned, got '%s'", n ? nearby[0].detail : "");
 
@@ -203,7 +203,7 @@ static void test_name_capture(void)
     observore_observation_t wifi = {.mac = ap, .src = OBSERVORE_SRC_WIFI_SCAN,
                                 .rssi = -50, .ssid = "42-Guest"};
     observore_track_observe(&wifi, SECS(0));
-    n = observore_track_nearby(nearby, 8, SECS(0));
+    n = observore_track_nearby(nearby, 8);
     CHECK(n == 1 && strcmp(nearby[0].detail, "42-Guest") == 0,
           "ssid not captured, got '%s'", n ? nearby[0].detail : "");
     CHECK(n == 1 && nearby[0].vendor && strcmp(nearby[0].vendor, "Ubiquiti") == 0,
@@ -213,7 +213,7 @@ static void test_name_capture(void)
     observore_track_init();
     wifi.ssid = "";
     observore_track_observe(&wifi, SECS(0));
-    n = observore_track_nearby(nearby, 8, SECS(0));
+    n = observore_track_nearby(nearby, 8);
     CHECK(n == 1 && nearby[0].detail[0] == '\0',
           "a hidden AP should stay nameless, got '%s'",
           n ? nearby[0].detail : "");
@@ -392,7 +392,7 @@ static void test_random_signals_disagree(void)
     observore_track_init();
     observore_track_observe(&a, SECS(0));
     observore_event_t nearby[4];
-    size_t n = observore_track_nearby(nearby, 4, SECS(0));
+    size_t n = observore_track_nearby(nearby, 4);
     CHECK(n == 1 && nearby[0].addr_random,
           "tracker should record the address as random");
     CHECK(n == 1 && nearby[0].vendor == NULL,
@@ -548,7 +548,7 @@ static void test_table_pressure(void)
     }
 
     observore_event_t snap[OBSERVORE_MAX_DEVICES];
-    size_t n = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES, SECS(10000));
+    size_t n = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES);
     bool found = false;
     for (size_t i = 0; i < n; i++) {
         if (memcmp(snap[i].mac, axon, 6) == 0) {
@@ -575,7 +575,7 @@ static void test_snapshot_order(void)
     observore_track_observe(&b, SECS(20));
 
     observore_event_t snap[8];
-    size_t n = observore_track_snapshot(snap, 8, SECS(30));
+    size_t n = observore_track_snapshot(snap, 8);
     CHECK(n == 2, "expected 2 devices, got %zu", n);
     CHECK(n == 2 && memcmp(snap[0].mac, newer, 6) == 0,
           "snapshot must be newest first");
@@ -637,7 +637,7 @@ static void test_mute(void)
     observore_track_init();
     observore_mute_rule_t r = {.kind = OBSERVORE_MUTE_MAC};
     memcpy(r.mac, ring, 6);
-    CHECK(observore_mute_add(&r) == ESP_OK, "add mac rule");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "add mac rule");
     CHECK(!observore_track_observe(&o_ring, SECS(0)), "muted mac must be suppressed");
     CHECK(observore_track_observe(&o_ring2, SECS(0)), "a different mac must survive");
 
@@ -651,7 +651,7 @@ static void test_mute(void)
     observore_track_init();
     r = (observore_mute_rule_t){.kind = OBSERVORE_MUTE_OUI};
     memcpy(r.mac, ring, 3);
-    CHECK(observore_mute_add(&r) == ESP_OK, "add oui rule");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "add oui rule");
     CHECK(!observore_track_observe(&o_ring, SECS(0)), "oui rule should suppress");
     CHECK(!observore_track_observe(&o_ring2, SECS(0)), "oui rule should suppress");
     CHECK(observore_track_observe(&o_axon, SECS(0)), "a different vendor must survive");
@@ -660,7 +660,7 @@ static void test_mute(void)
     observore_mute_clear();
     observore_track_init();
     r = (observore_mute_rule_t){.kind = OBSERVORE_MUTE_CLASS, .cls = OBSERVORE_CLASS_CAMERA};
-    CHECK(observore_mute_add(&r) == ESP_OK, "add class rule");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "add class rule");
     CHECK(!observore_track_observe(&o_ring, SECS(0)), "camera class muted");
     CHECK(observore_track_observe(&o_axon, SECS(0)), "bodycam must still report");
 
@@ -679,9 +679,9 @@ static void test_mute(void)
     /* SSID substring, case-insensitively. */
     observore_mute_clear();
     observore_track_init();
-    r = (observore_mute_rule_t){.kind = OBSERVORE_MUTE_SSID};
+    r = (observore_mute_rule_t){.kind = OBSERVORE_MUTE_NAME};
     snprintf(r.ssid, sizeof(r.ssid), "lobby");
-    CHECK(observore_mute_add(&r) == ESP_OK, "add ssid rule");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "add ssid rule");
     const uint8_t ap[6] = {0x00, 0x00, 0x00, 0x01, 0x02, 0x03};
     observore_observation_t o_ap = {.mac = ap, .src = OBSERVORE_SRC_WIFI_SCAN,
                                 .rssi = -50, .ssid = "Lobby-CCTV-2"};
@@ -692,18 +692,18 @@ static void test_mute(void)
     /* List hygiene. */
     observore_mute_clear();
     r = (observore_mute_rule_t){.kind = OBSERVORE_MUTE_CLASS, .cls = OBSERVORE_CLASS_CAMERA};
-    CHECK(observore_mute_add(&r) == ESP_OK, "first add");
-    CHECK(observore_mute_add(&r) == ESP_OK, "duplicate add should succeed");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "first add");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "duplicate add should succeed");
     CHECK(observore_mute_count() == 1, "duplicates must not accumulate, got %zu",
           observore_mute_count());
 
     /* Rules that would match everything are refused. */
-    observore_mute_rule_t empty_ssid = {.kind = OBSERVORE_MUTE_SSID};
-    CHECK(observore_mute_add(&empty_ssid) == ESP_ERR_INVALID_ARG,
+    observore_mute_rule_t empty_ssid = {.kind = OBSERVORE_MUTE_NAME};
+    CHECK(observore_mute_add(&empty_ssid, NULL) == ESP_ERR_INVALID_ARG,
           "an empty ssid rule matches everything and must be refused");
     observore_mute_rule_t bad_class = {.kind = OBSERVORE_MUTE_CLASS,
                                    .cls = OBSERVORE_CLASS_UNKNOWN};
-    CHECK(observore_mute_add(&bad_class) == ESP_ERR_INVALID_ARG,
+    CHECK(observore_mute_add(&bad_class, NULL) == ESP_ERR_INVALID_ARG,
           "muting the unknown class must be refused");
 
     CHECK(observore_mute_remove(99) == ESP_ERR_NOT_FOUND, "out of range remove");
@@ -775,7 +775,7 @@ static void test_fingerprint_safety(void)
     observore_mute_rule_t fp = {.kind = OBSERVORE_MUTE_FINGERPRINT,
                             .fingerprint = observore_fingerprint(findmy,
                                                              sizeof(findmy))};
-    CHECK(observore_mute_add(&fp) == ESP_OK, "fingerprint rule should be accepted");
+    CHECK(observore_mute_add(&fp, NULL) == ESP_OK, "fingerprint rule should be accepted");
 
     /* Muting your own tracker by fingerprint would silence a stranger's too,
      * so the rule must not apply to a tracker at all. */
@@ -802,7 +802,7 @@ static void test_fingerprint_safety(void)
     observore_mute_rule_t fp2 = {.kind = OBSERVORE_MUTE_FINGERPRINT,
                              .fingerprint = observore_fingerprint(plain,
                                                               sizeof(plain))};
-    CHECK(observore_mute_add(&fp2) == ESP_OK, "add");
+    CHECK(observore_mute_add(&fp2, NULL) == ESP_OK, "add");
 
     /* Unclassified traffic IS suppressed, including across a MAC change --
      * that is the whole point of fingerprinting. */
@@ -812,12 +812,12 @@ static void test_fingerprint_safety(void)
     un2.mac = rotated;
     observore_track_observe(&un2, SECS(10));
     observore_event_t nearby[8];
-    CHECK(observore_track_nearby(nearby, 8, SECS(10)) == 0,
+    CHECK(observore_track_nearby(nearby, 8) == 0,
           "a fingerprint rule must suppress the device under any address");
 
     /* A zero fingerprint rule would match every nameless advert. */
     observore_mute_rule_t zero = {.kind = OBSERVORE_MUTE_FINGERPRINT, .fingerprint = 0};
-    CHECK(observore_mute_add(&zero) == ESP_ERR_INVALID_ARG,
+    CHECK(observore_mute_add(&zero, NULL) == ESP_ERR_INVALID_ARG,
           "a zero fingerprint rule must be refused");
 }
 
@@ -834,7 +834,7 @@ static void test_name_rule_matches_ble(void)
                        0x08, 0x09, 'E', 'n', 'c', 'h', 'a', 'r', 'g'};
     observore_mute_rule_t r = {.kind = OBSERVORE_MUTE_NAME};
     snprintf(r.ssid, sizeof(r.ssid), "Encharg");
-    CHECK(observore_mute_add(&r) == ESP_OK, "add name rule");
+    CHECK(observore_mute_add(&r, NULL) == ESP_OK, "add name rule");
 
     const uint8_t mac1[6] = {0x4A, 0x01, 0x02, 0x03, 0x04, 0x05};
     const uint8_t mac2[6] = {0x4A, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
@@ -847,7 +847,7 @@ static void test_name_rule_matches_ble(void)
           "still muted after the address rotates");
 
     observore_event_t nearby[8];
-    CHECK(observore_track_nearby(nearby, 8, SECS(60)) == 0,
+    CHECK(observore_track_nearby(nearby, 8) == 0,
           "neither address should be tracked");
 
     /* And it still works for Wi-Fi SSIDs, which is where it started. */

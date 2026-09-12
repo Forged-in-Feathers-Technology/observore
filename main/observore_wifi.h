@@ -41,9 +41,13 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode);
 observore_mode_t observore_wifi_mode(void);
 
 /* Run one patrol cycle: an active AP scan followed by a promiscuous sniff
- * sweep across the 2.4 GHz channels.  Blocks for roughly
- * OBSERVORE_SCAN_MS + OBSERVORE_SNIFF_MS.  No-op outside patrol mode. */
-void observore_wifi_patrol_cycle(void);
+ * sweep across the 2.4 GHz channels.  No-op outside patrol mode.
+ *
+ * The cycle blocks for several seconds, which is far too long to sit on a
+ * detection: `between` is called after each channel dwell (roughly every
+ * 400 ms) so the caller can publish what BLE has found in the meantime
+ * instead of waiting for the sweep to finish.  May be NULL. */
+void observore_wifi_patrol_cycle(void (*between)(void));
 
 /* Management frames accepted by the sniffer since boot.  A patrol cycle that
  * leaves this unchanged means the sniffer is not hearing air, which looks

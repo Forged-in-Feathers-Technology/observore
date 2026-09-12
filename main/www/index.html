@@ -179,6 +179,7 @@
       <option value="oui">this vendor prefix</option>
       <option value="class">this whole class</option>
       <option value="name">name / SSID containing</option>
+      <option value="fingerprint">this advert fingerprint</option>
     </select>
     <input id="value" placeholder="AA:BB:CC:DD:EE:FF">
     <button id="add">Ignore</button>
@@ -228,229 +229,52 @@ async function getJSON(path, fallback) {
   }
 }
 
-async function refresh() {
-  errors.length = 0;
-  {
-    const status = await getJSON('/api/status', null) || {
-      level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?' };
-    const devices = await getJSON('/api/devices', { devices: [] });
-
-    $('banner').className = 'banner ' + status.level;
-    $('level').textContent = status.level;
-    $('score').textContent = status.score;
-    $('devices').textContent = status.devices;
-    $('sightings').textContent = status.sightings;
-    $('mode').textContent = status.mode;
-    $('uptime').textContent = 'up ' + ago(status.uptime_s);
-
-    const rows = $('rows');
-    rows.replaceChildren();
-    for (const d of devices.devices) {
-      if (pending.has(d.mac)) continue;
-      const tr = document.createElement('tr');
-      const cells = [
-        ['span', 'tag t-' + d.class, d.class],
-        ['text', '', d.label],
-        ['text', 'dim', d.vendor || (d.random ? 'random MAC' : '')],
-        ['text', 'dim', d.mac],
-        ['text', '', d.detail],
-        ['text', '', d.rssi + ' dBm'],
-        ['text', 'dim', d.source],
-        ['text', 'dim', d.evidence],
-        ['text', 'dim', String(d.hits)],
-        ['text', 'dim', ago(d.last_seen_s) + ' ago'],
-        ['mute', '', d.mac],
-      ];
-      for (const [kind, cls, value] of cells) {
-        const td = document.createElement('td');
-        if (kind === 'span') {
-          const s = document.createElement('span');
-          s.className = cls;
-          s.textContent = value;
-          td.appendChild(s);
-        } else if (kind === 'mute') {
-          const b = document.createElement('button');
-          b.className = 'mini';
-          b.textContent = 'ignore';
-          b.title = 'Stop reporting this device';
-          b.addEventListener('click', () => mute('mac', value, tr));
-          td.appendChild(b);
-        } else {
-          td.className = cls;
-          td.textContent = value;   // textContent, never innerHTML: these are
-                                    // strings a stranger's radio chose
-        }
-        tr.appendChild(td);
-      }
-      rows.appendChild(tr);
-    }
-    $('empty').style.display = devices.devices.length ? 'none' : 'block';
-
-    const near = await getJSON('/api/nearby', { nearby: [] });
-    $('nearbyinfo').textContent = near.nearby.length
-      ? '— ' + near.nearby.length + ' seen'
-      : '— nothing yet';
-    const nrows = $('nearbyrows');
-    nrows.replaceChildren();
-    for (const d of near.nearby) {
-      if (pending.has(d.mac)) continue;
-      const tr = document.createElement('tr');
-      tr.dataset.mac = d.mac;
-      for (const [cls, value] of [
-        ['', d.name || '—'],
-        ['dim', d.vendor || (d.random ? 'random MAC' : 'unknown')],
-        ['dim', d.mac],
-        ['dim', d.source],
-        ['dim', d.rssi + ' dBm'],
-        ['dim', String(d.hits)],
-        ['dim', ago(d.last_seen_s) + ' ago'],
-      ]) {
-        const td = document.createElement('td');
-        td.className = cls;
-        td.textContent = value;   // textContent: a stranger's radio chose this
-        tr.appendChild(td);
-      }
-      const td = document.createElement('td');
-      const b = document.createElement('button');
-      b.className = 'mini';
-      b.textContent = 'ignore';
-      // Prefer a rule that outlives the address: the name if it broadcasts
-      // one, else the advert's shape, else the MAC.
-      if (d.name) {
-        b.title = 'Ignore by name — survives address rotation';
-        b.addEventListener('click', () => mute('name', d.name, tr));
-      } else if (d.fingerprint && d.fingerprint !== '00000000') {
-        b.title = 'Ignore by advert shape — survives address rotation';
-        b.addEventListener('click', () => mute('fingerprint', d.fingerprint, tr));
-      } else {
-        b.title = 'Ignore this address (rotating devices will return)';
-        b.addEventListener('click', () => mute('mac', d.mac, tr));
-      }
-      td.appendChild(b);
-      tr.appendChild(td);
-      nrows.appendChild(tr);
-    }
-
-    const nt = await getJSON('/api/notify', { configured: false });
-    $('notifyinfo').textContent = nt.configured
-      ? '— ' + nt.url + ' · ' + nt.sent + ' sent' +
-        (nt.queued ? ', ' + nt.queued + ' queued' : '') +
-        (nt.failed ? ', ' + nt.failed + ' failed' : '') +
-        (nt.dropped ? ', ' + nt.dropped + ' dropped' : '') +
-        (nt.error ? ' · last error: ' + nt.error : '') +
-        (nt.can_send ? '' : ' · not sending (needs uplink)')
-      : '— none configured';
-    if (nt.configured && !$('gurl').matches(':focus')) {
-      $('gurl').placeholder = nt.url;
-    }
-
-    const net = await getJSON('/api/netcfg',
-      { configured: false, ssid: '', ip: '' });
-    $('netinfo').textContent = net.configured
-      ? '— ' + net.ssid +
-        (net.has_password ? ' · password set' : ' · NO PASSWORD (open)') +
-        (net.ip ? ' · ' + net.ip + (net.hostname ? ' / ' + net.hostname : '') : ' · not joined') +
-        (net.error ? ' · ' + net.error : '')
-      : '— none configured';
-    if (net.configured && !$('ssid').matches(':focus')) {
-      $('ssid').placeholder = net.ssid;
-    }
-
-    const mutes = await getJSON('/api/mutes', { rules: [], suppressed: 0 });
-    // Stop filtering anything the server now reports as muted.
-    for (const r of mutes.rules) {
-      if (r.kind === 'mac') pending.delete(r.value);
-    }
-    $('muteinfo').textContent = mutes.rules.length
-      ? '— ' + mutes.suppressed + ' sightings suppressed'
-      : '— nothing ignored yet';
-    const rules = $('rules');
-    rules.replaceChildren();
-    for (const r of mutes.rules) {
-      const el = document.createElement('span');
-      el.className = 'rule';
-      const k = document.createElement('span');
-      k.className = 'k';
-      k.textContent = r.kind;
-      const v = document.createElement('span');
-      v.textContent = r.value;
-      const x = document.createElement('button');
-      x.textContent = '×';
-      x.title = 'Stop ignoring';
-      x.addEventListener('click', async () => {
-        await fetch('/api/unmute?index=' + r.index, { method: 'POST' });
-        refresh();
-      });
-      el.append(k, v, x);
-      rules.appendChild(el);
-    }
-    $('updated').textContent = errors.length
-      ? 'updated ' + new Date().toLocaleTimeString() + ' — failed: ' +
-        errors.join('; ')
-      : 'updated ' + new Date().toLocaleTimeString();
-  }
-}
-
-async function notifyPost(q, okMsg) {
-  try {
-    const out = await fetch('/api/notify?' + q, { method: 'POST' })
-      .then(r => r.json());
-    $('gnote').textContent = out.ok ? okMsg : 'failed: ' + out.error;
-  } catch (e) {
-    $('gnote').textContent = 'failed: ' + e.message;
-  }
-  refresh();
-}
-
-$('gsave').addEventListener('click', () => {
-  const url = $('gurl').value.trim();
-  if (!url) { $('gnote').textContent = 'enter a server URL'; return; }
-  const q = 'url=' + encodeURIComponent(url) +
-            '&token=' + encodeURIComponent($('gtoken').value);
-  $('gtoken').value = '';   // never leave a token sitting in the DOM
-  notifyPost(q, 'saved — use Send test while on the uplink');
-});
-$('gtest').addEventListener('click', () => notifyPost('test=1', 'test sent'));
-$('gclear').addEventListener('click', () => {
-  $('gurl').value = '';
-  $('gurl').placeholder = 'https://gotify.example.com';
-  notifyPost('clear=1', 'notifier forgotten');
-});
-
-$('netsave').addEventListener('click', async () => {
-  const ssid = $('ssid').value.trim();
-  if (!ssid) { $('updated').textContent = 'enter an SSID'; return; }
-  // Send the password only when there is one to send. The field is cleared
-  // after every save, so always sending it would let a second Save wipe a
-  // good password and silently ask for an open network.
-  const pw = $('password').value;
-  let q = '/api/netcfg?ssid=' + encodeURIComponent(ssid);
-  if (pw) q += '&password=' + encodeURIComponent(pw);
-  else if ($('netopen').checked) q += '&password=';
-  const out = await fetch(q, { method: 'POST' }).then(r => r.json());
-  // Clear the field either way; a password should not linger in the DOM.
-  $('password').value = '';
-  $('updated').textContent = out.ok
-    ? 'network saved — hold the button to join'
-    : 'save failed: ' + out.error;
-  refresh();
-});
-
-$('netclear').addEventListener('click', async () => {
-  await fetch('/api/netcfg?clear=1', { method: 'POST' });
-  $('ssid').value = '';
-  $('ssid').placeholder = 'SSID';
-  refresh();
-});
-
-// MACs whose mute is in flight. The 2 s poll would otherwise repaint a row
-// that has already been clicked away, making the button feel unresponsive.
+// MACs whose mute is in flight. The poll would otherwise repaint a row that
+// has already been clicked away, making the button feel unresponsive.
 const pending = new Set();
 
+// ---- row building -------------------------------------------------------
+// Both tables build the same kind of row, so they share these rather than
+// each carrying its own tuple convention and its own button construction.
+
+function cell(tr, cls, text) {
+  const td = document.createElement('td');
+  td.className = cls || '';
+  td.textContent = text;   // textContent, never innerHTML: a stranger's radio
+  tr.appendChild(td);      // chose these strings
+  return td;
+}
+
+function tagCell(tr, cls, text) {
+  const span = document.createElement('span');
+  span.className = cls;
+  span.textContent = text;
+  cell(tr, '', '').appendChild(span);
+}
+
+// Prefer a rule that outlives the address: the name if it broadcasts one,
+// else the advert's shape, else the MAC.
+function ignoreCell(tr, d) {
+  const b = document.createElement('button');
+  b.className = 'mini';
+  b.textContent = 'ignore';
+  let kind = 'mac', value = d.mac;
+  if (d.name) {
+    kind = 'name'; value = d.name;
+    b.title = 'Ignore by name — survives address rotation';
+  } else if (d.fingerprint && d.fingerprint !== '00000000') {
+    kind = 'fingerprint'; value = d.fingerprint;
+    b.title = 'Ignore by advert shape — survives address rotation';
+  } else {
+    b.title = 'Ignore this address (rotating devices will return)';
+  }
+  b.addEventListener('click', () => mute(kind, value, tr));
+  cell(tr, '', '').appendChild(b);
+}
+
 async function mute(kind, value, row) {
-  if (kind === 'mac') pending.add(value);
-  else if (row && row.dataset.mac) pending.add(row.dataset.mac);
   if (row) {
+    pending.add(row.dataset.mac);
     row.classList.add('going');
     row.querySelectorAll('button').forEach(b => (b.disabled = true));
   }
@@ -463,29 +287,174 @@ async function mute(kind, value, row) {
     $('updated').textContent = 'ignoring ' + value;
   } catch (e) {
     // Put it back rather than leaving a row that looks handled but is not.
-    pending.delete(value);
     if (row) {
+      pending.delete(row.dataset.mac);
       row.classList.remove('going');
       row.querySelectorAll('button').forEach(b => (b.disabled = false));
     }
     $('updated').textContent = 'ignore failed: ' + e.message;
   }
-  refresh();
+  refreshLive();
+  refreshConfig();
 }
 
+// ---- live panels: polled ------------------------------------------------
+
+function renderStatus(s) {
+  $('banner').className = 'banner ' + s.level;
+  $('level').textContent = s.level;
+  $('score').textContent = s.score;
+  $('devices').textContent = s.devices;
+  $('sightings').textContent = s.sightings;
+  $('mode').textContent = s.mode;
+  $('uptime').textContent = 'up ' + ago(s.uptime_s);
+}
+
+function renderDevices(list) {
+  const rows = $('rows');
+  rows.replaceChildren();
+  for (const d of list) {
+    if (pending.has(d.mac)) continue;
+    const tr = document.createElement('tr');
+    tr.dataset.mac = d.mac;
+    tagCell(tr, 'tag t-' + d.class, d.class);
+    cell(tr, '', d.label);
+    cell(tr, 'dim', d.vendor || (d.random ? 'random MAC' : ''));
+    cell(tr, 'dim', d.mac);
+    cell(tr, '', d.detail);
+    cell(tr, '', d.rssi + ' dBm');
+    cell(tr, 'dim', d.source);
+    cell(tr, 'dim', d.evidence);
+    cell(tr, 'dim', String(d.hits));
+    cell(tr, 'dim', ago(d.last_seen_s) + ' ago');
+    ignoreCell(tr, d);
+    rows.appendChild(tr);
+  }
+  $('empty').style.display = list.length ? 'none' : 'block';
+}
+
+function renderNearby(list) {
+  $('nearbyinfo').textContent =
+    list.length ? '— ' + list.length + ' seen' : '— nothing yet';
+  const rows = $('nearbyrows');
+  rows.replaceChildren();
+  for (const d of list) {
+    if (pending.has(d.mac)) continue;
+    const tr = document.createElement('tr');
+    tr.dataset.mac = d.mac;
+    cell(tr, '', d.name || '—');
+    cell(tr, 'dim', d.vendor || (d.random ? 'random MAC' : 'unknown'));
+    cell(tr, 'dim', d.mac);
+    cell(tr, 'dim', d.source);
+    cell(tr, 'dim', d.rssi + ' dBm');
+    cell(tr, 'dim', String(d.hits));
+    cell(tr, 'dim', ago(d.last_seen_s) + ' ago');
+    ignoreCell(tr, d);
+    rows.appendChild(tr);
+  }
+}
+
+async function refreshLive() {
+  errors.length = 0;
+  renderStatus(await getJSON('/api/status', {
+    level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?' }));
+  renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
+  renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
+  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString() +
+    (errors.length ? ' — failed: ' + errors.join('; ') : '');
+}
+
+// ---- configuration panels: only when something changes ------------------
+// These were polled with the live panels, re-fetching settings thirty times a
+// minute that only change when the user acts. Worse, every request counts as
+// console activity, which holds the device in uplink mode -- where it does no
+// Wi-Fi detection at all -- until the hard cap expires.
+
+function renderNotify(n) {
+  $('notifyinfo').textContent = n.configured
+    ? '— ' + n.url + ' · ' + n.sent + ' sent' +
+      (n.queued ? ', ' + n.queued + ' queued' : '') +
+      (n.failed ? ', ' + n.failed + ' failed' : '') +
+      (n.dropped ? ', ' + n.dropped + ' dropped' : '') +
+      (n.error ? ' · last error: ' + n.error : '') +
+      (n.can_send ? '' : ' · not sending (needs uplink)')
+    : '— none configured';
+  if (n.configured && !$('gurl').matches(':focus')) $('gurl').placeholder = n.url;
+}
+
+function renderNet(n) {
+  $('netinfo').textContent = n.configured
+    ? '— ' + n.ssid +
+      (n.has_password ? ' · password set' : ' · NO PASSWORD (open)') +
+      (n.ip ? ' · ' + n.ip + (n.hostname ? ' / ' + n.hostname : '') : ' · not joined') +
+      (n.error ? ' · ' + n.error : '')
+    : '— none configured';
+  if (n.configured && !$('ssid').matches(':focus')) $('ssid').placeholder = n.ssid;
+}
+
+function renderMutes(m) {
+  $('muteinfo').textContent = m.rules.length
+    ? '— ' + m.suppressed + ' sightings suppressed'
+    : '— nothing ignored yet';
+  const rules = $('rules');
+  rules.replaceChildren();
+  for (const r of m.rules) {
+    if (r.kind === 'mac') pending.delete(r.value);
+    const el = document.createElement('span');
+    el.className = 'rule';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = r.kind;
+    const v = document.createElement('span');
+    v.textContent = r.value;
+    const x = document.createElement('button');
+    x.textContent = '×';
+    x.title = 'Stop ignoring';
+    x.addEventListener('click', () => post('/api/unmute?index=' + r.index));
+    el.append(k, v, x);
+    rules.appendChild(el);
+  }
+}
+
+async function refreshConfig() {
+  renderNotify(await getJSON('/api/notify', { configured: false }));
+  renderNet(await getJSON('/api/netcfg', { configured: false, ssid: '', ip: '' }));
+  renderMutes(await getJSON('/api/mutes', { rules: [], suppressed: 0 }));
+}
+
+// ---- actions ------------------------------------------------------------
+
+async function post(query, okMsg, noteEl) {
+  try {
+    const out = await fetch(query, { method: 'POST' }).then(r => r.json());
+    const msg = out.ok ? (okMsg || 'done') : 'failed: ' + out.error;
+    (noteEl ? $(noteEl) : $('updated')).textContent = msg;
+  } catch (e) {
+    (noteEl ? $(noteEl) : $('updated')).textContent = 'failed: ' + e.message;
+  }
+  refreshLive();
+  refreshConfig();
+}
+
+const PLACEHOLDERS = {
+  mac: 'AA:BB:CC:DD:EE:FF',
+  oui: 'AA:BB:CC',
+  class: 'camera',
+  name: 'part of a name or SSID',
+  fingerprint: '1a2b3c4d',
+};
+
 $('kind').addEventListener('change', () => {
-  $('value').placeholder = {
-    mac: 'AA:BB:CC:DD:EE:FF',
-    oui: 'AA:BB:CC',
-    class: 'camera',
-    name: 'part of a name or SSID',
-  }[$('kind').value];
+  $('value').placeholder = PLACEHOLDERS[$('kind').value];
 });
 
 $('add').addEventListener('click', () => {
   const v = $('value').value.trim();
-  if (v) { mute($('kind').value, v); $('value').value = ''; }
+  if (v) { mute($('kind').value, v, null); $('value').value = ''; }
 });
+
+$('unmuteall').addEventListener('click', () => post('/api/unmute?all=1'));
+$('clear').addEventListener('click', () => post('/api/clear'));
 
 $('baseline').addEventListener('click', async () => {
   const b = $('baseline');
@@ -522,21 +491,48 @@ $('baseline').addEventListener('click', async () => {
     $('baselinenote').textContent = 'baseline failed: ' + e.message;
   }
   b.disabled = false;
-  refresh();
+  refreshLive();
+  refreshConfig();
 });
 
-$('unmuteall').addEventListener('click', async () => {
-  await fetch('/api/unmute?all=1', { method: 'POST' });
-  refresh();
+$('netsave').addEventListener('click', () => {
+  const ssid = $('ssid').value.trim();
+  if (!ssid) { $('updated').textContent = 'enter an SSID'; return; }
+  // Send the password only when there is one to send. The field is cleared
+  // after every save, so always sending it would let a second Save wipe a
+  // good password and silently ask for an open network.
+  const pw = $('password').value;
+  let q = '/api/netcfg?ssid=' + encodeURIComponent(ssid);
+  if (pw) q += '&password=' + encodeURIComponent(pw);
+  else if ($('netopen').checked) q += '&password=';
+  $('password').value = '';
+  post(q, 'network saved — hold the button to join');
 });
 
-$('clear').addEventListener('click', async () => {
-  await fetch('/api/clear', { method: 'POST' });
-  refresh();
+$('netclear').addEventListener('click', () => {
+  $('ssid').value = '';
+  $('ssid').placeholder = 'SSID';
+  post('/api/netcfg?clear=1', 'network forgotten');
 });
 
-refresh();
-setInterval(refresh, 2000);
+$('gsave').addEventListener('click', () => {
+  const url = $('gurl').value.trim();
+  if (!url) { $('gnote').textContent = 'enter a server URL'; return; }
+  const q = '/api/notify?url=' + encodeURIComponent(url) +
+            '&token=' + encodeURIComponent($('gtoken').value);
+  $('gtoken').value = '';   // never leave a token sitting in the DOM
+  post(q, 'saved — use Send test while on the uplink', 'gnote');
+});
+$('gtest').addEventListener('click', () => post('/api/notify?test=1', 'test sent', 'gnote'));
+$('gclear').addEventListener('click', () => {
+  $('gurl').value = '';
+  $('gurl').placeholder = 'https://gotify.example.com';
+  post('/api/notify?clear=1', 'notifier forgotten', 'gnote');
+});
+
+refreshLive();
+refreshConfig();
+setInterval(refreshLive, 2000);
 </script>
 </body>
 </html>

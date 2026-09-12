@@ -93,8 +93,6 @@ static const observore_keyword_t SSID_KEYWORDS[] = {
     {"ring-",     OBSERVORE_CLASS_CAMERA, "Ring"},
 };
 
-#define ARRLEN(a) (sizeof(a) / sizeof((a)[0]))
-
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                      */
 /* ------------------------------------------------------------------ */
@@ -104,10 +102,7 @@ static char lower(char c)
     return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
 }
 
-/* Case-insensitive substring search.  strcasestr() is a GNU extension and is
- * not available in every toolchain this file is compiled by (the host test
- * build included), so it is spelled out here. */
-static bool contains_ci(const char *hay, const char *needle)
+bool observore_contains_ci(const char *hay, const char *needle)
 {
     if (!hay || !needle || !*needle) {
         return false;
@@ -248,20 +243,35 @@ bool observore_adv_name(const uint8_t *adv, size_t adv_len, char *buf, size_t bu
     return true;
 }
 
-bool observore_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len)
+/* First matching row, or NULL.  One scanner for both keyword tables: the SSID
+ * path used to find a row, return only its label, and then walk the table a
+ * second time to recover the class -- two scans that could pick different rows
+ * if either ever gained a precondition. */
+static const observore_keyword_t *match_keyword(const observore_keyword_t *tbl,
+                                                size_t n, const char *text)
 {
-    if (!ssid || !*ssid) {
-        return false;
+    if (!text || !*text) {
+        return NULL;
     }
-    for (size_t i = 0; i < ARRLEN(SSID_KEYWORDS); i++) {
-        if (contains_ci(ssid, SSID_KEYWORDS[i].needle)) {
-            if (label_out && label_len) {
-                snprintf(label_out, label_len, "%s", SSID_KEYWORDS[i].label);
-            }
-            return true;
+    for (size_t i = 0; i < n; i++) {
+        if (observore_contains_ci(text, tbl[i].needle)) {
+            return &tbl[i];
         }
     }
-    return false;
+    return NULL;
+}
+
+bool observore_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len)
+{
+    const observore_keyword_t *hit =
+        match_keyword(SSID_KEYWORDS, OBSERVORE_ARRLEN(SSID_KEYWORDS), ssid);
+    if (!hit) {
+        return false;
+    }
+    if (label_out && label_len) {
+        snprintf(label_out, label_len, "%s", hit->label);
+    }
+    return true;
 }
 
 /* FNV-1a, 32-bit. */
@@ -335,19 +345,34 @@ uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len)
     return h ? h : 1u;
 }
 
+/* Gotify priorities: 8 raises a high-priority alert on Android, 5 is an
+ * ordinary notification, 2 is quiet.
+ *
+ * "Protected" means a fingerprint mute rule may never silence the class: a
+ * fingerprint identifies a KIND of device, so muting your own tracker that way
+ * would silence a stranger's too. */
+static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
+    [OBSERVORE_CLASS_UNKNOWN]          = {"unknown",          0, 2, false},
+    [OBSERVORE_CLASS_CAMERA]           = {"camera",           1, 2, false},
+    [OBSERVORE_CLASS_FLEET_TELEMATICS] = {"fleet-telematics", 2, 2, false},
+    [OBSERVORE_CLASS_TRACKER]          = {"tracker",          3, 7, true },
+    [OBSERVORE_CLASS_SMARTGLASSES]     = {"smart-glasses",    3, 5, true },
+    [OBSERVORE_CLASS_DRONE]            = {"drone",            3, 5, true },
+    [OBSERVORE_CLASS_ALPR]             = {"alpr",             5, 8, true },
+    [OBSERVORE_CLASS_BODYCAM]          = {"bodycam",          5, 8, true },
+    [OBSERVORE_CLASS_FOLLOWER]         = {"follower",         4, 7, true },
+};
+
+const observore_class_desc_t *observore_class_desc(observore_class_t cls)
+{
+    return (cls > OBSERVORE_CLASS_UNKNOWN && cls < OBSERVORE_CLASS_MAX)
+               ? &CLASS_DESC[cls]
+               : &CLASS_DESC[OBSERVORE_CLASS_UNKNOWN];
+}
+
 uint8_t observore_class_points(observore_class_t cls)
 {
-    switch (cls) {
-        case OBSERVORE_CLASS_BODYCAM:          return 5;
-        case OBSERVORE_CLASS_ALPR:             return 5;
-        case OBSERVORE_CLASS_FOLLOWER:         return 4;
-        case OBSERVORE_CLASS_TRACKER:          return 3;
-        case OBSERVORE_CLASS_DRONE:            return 3;
-        case OBSERVORE_CLASS_SMARTGLASSES:     return 3;
-        case OBSERVORE_CLASS_FLEET_TELEMATICS: return 2;
-        case OBSERVORE_CLASS_CAMERA:           return 1;
-        default:                           return 0;
-    }
+    return observore_class_desc(cls)->points;
 }
 
 /* ------------------------------------------------------------------ */
@@ -358,7 +383,7 @@ uint8_t observore_class_points(observore_class_t cls)
 static bool adv_has_uuid16(const uint8_t *adv, size_t adv_len, uint16_t uuid)
 {
     const uint8_t types[] = {AD_TYPE_UUID16_COMPLETE, AD_TYPE_UUID16_PARTIAL};
-    for (size_t t = 0; t < ARRLEN(types); t++) {
+    for (size_t t = 0; t < OBSERVORE_ARRLEN(types); t++) {
         size_t len = 0;
         const uint8_t *p = observore_adv_field(adv, adv_len, types[t], &len);
         if (!p) {
@@ -534,31 +559,29 @@ bool observore_classify(const observore_observation_t *obs, observore_event_t *o
             ev = sig;
             matched = true;
         } else if (have_name) {
-            for (size_t i = 0; i < ARRLEN(BLE_NAME_KEYWORDS); i++) {
-                if (contains_ci(name, BLE_NAME_KEYWORDS[i].needle)) {
-                    ev.cls = BLE_NAME_KEYWORDS[i].cls;
-                    ev.evidence = OBSERVORE_EVIDENCE_NAME;
-                    set_label(&ev, BLE_NAME_KEYWORDS[i].label);
-                    matched = true;
-                    break;
-                }
+            const observore_keyword_t *hit = match_keyword(
+                BLE_NAME_KEYWORDS, OBSERVORE_ARRLEN(BLE_NAME_KEYWORDS), name);
+            if (hit) {
+                ev.cls = hit->cls;
+                ev.evidence = OBSERVORE_EVIDENCE_NAME;
+                set_label(&ev, hit->label);
+                matched = true;
             }
         }
     } else if (obs->ssid && *obs->ssid) {
         set_detail(&ev, obs->ssid);
-        char label[OBSERVORE_LABEL_LEN];
-        if (observore_ssid_is_suspicious(obs->ssid, label, sizeof(label))) {
+        const observore_keyword_t *hit =
+            match_keyword(SSID_KEYWORDS, OBSERVORE_ARRLEN(SSID_KEYWORDS), obs->ssid);
+        if (hit) {
             /* Only let an SSID keyword override the OUI when the OUI said
-             * nothing -- a named vendor is the better answer. */
+             * nothing -- a named vendor is the better answer.  Note this
+             * deliberately differs from the BLE name path above, which does
+             * override the OUI: an SSID is free text anyone can choose, while a
+             * BLE local name accompanies a payload we have already inspected. */
             if (!oui) {
-                for (size_t i = 0; i < ARRLEN(SSID_KEYWORDS); i++) {
-                    if (contains_ci(obs->ssid, SSID_KEYWORDS[i].needle)) {
-                        ev.cls = SSID_KEYWORDS[i].cls;
-                        break;
-                    }
-                }
+                ev.cls = hit->cls;
                 ev.evidence = OBSERVORE_EVIDENCE_SSID;
-                set_label(&ev, label);
+                set_label(&ev, hit->label);
             }
             matched = true;
         }
@@ -579,11 +602,7 @@ bool observore_classify(const observore_observation_t *obs, observore_event_t *o
 
 const char *observore_class_name(observore_class_t cls)
 {
-    static const char *names[OBSERVORE_CLASS_MAX] = {
-        "unknown", "camera", "fleet-telematics", "tracker",
-        "smart-glasses", "drone", "alpr", "bodycam", "follower",
-    };
-    return (cls < OBSERVORE_CLASS_MAX) ? names[cls] : "unknown";
+    return observore_class_desc(cls)->name;
 }
 
 const char *observore_source_name(observore_source_t src)

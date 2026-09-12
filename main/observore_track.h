@@ -55,7 +55,7 @@ void observore_track_status(observore_status_t *out, int64_t now_us);
 /* Snapshot the device table, most recently seen first.  Returns the number of
  * entries written.  Only classified devices are returned -- the unclassified
  * ones exist purely to feed the follower heuristic. */
-size_t observore_track_snapshot(observore_event_t *out, size_t max, int64_t now_us);
+size_t observore_track_snapshot(observore_event_t *out, size_t max);
 
 /* Collect devices classified since the last call and mark them reported.
  * This is the serial event log: each detection is printed once, when it is
@@ -63,12 +63,15 @@ size_t observore_track_snapshot(observore_event_t *out, size_t max, int64_t now_
 /* Snapshot the devices that were NOT classified, busiest first.  These are
  * the ones worth naming and muting before they ever trip the follower
  * heuristic -- your own phone, your own speakers, the neighbour's TV. */
-size_t observore_track_nearby(observore_event_t *out, size_t max, int64_t now_us);
+size_t observore_track_nearby(observore_event_t *out, size_t max);
 
 /* Every device currently tracked, classified or not.  Used to take a
  * baseline: mark everything in range as known. */
 size_t observore_track_all(observore_event_t *out, size_t max);
 
+/* Collect devices classified since the last call and mark them reported.
+ * This is the serial event log: each detection is reported once, when it is
+ * first identified, rather than on every repeat sighting. */
 size_t observore_track_drain_new(observore_event_t *out, size_t max);
 
 void observore_track_clear(void);

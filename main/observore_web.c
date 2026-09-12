@@ -6,6 +6,7 @@
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_notify.h"
+#include "observore_util.h"
 #include "observore_track.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
@@ -79,27 +80,6 @@ static void scratch_free(void)
     s_body = NULL;
 }
 
-/* Escape a string for embedding in JSON.  Inputs here are advertised names and
- * SSIDs -- remote-controlled bytes -- so this is not optional.  The upstream
- * parsers already strip non-printable characters; this handles the rest. */
-static void json_escape(const char *in, char *out, size_t out_len)
-{
-    size_t o = 0;
-    for (size_t i = 0; in[i] && o + 2 < out_len; i++) {
-        char c = in[i];
-        if (c == '"' || c == '\\') {
-            out[o++] = '\\';
-            out[o++] = c;
-        } else if (c >= 0x20 && c < 0x7F) {
-            out[o++] = c;
-        } else {
-            /* Anything else becomes a space rather than a broken escape. */
-            out[o++] = ' ';
-        }
-    }
-    out[o] = '\0';
-}
-
 static esp_err_t send_json(httpd_req_t *req, const char *body)
 {
     s_last_request_us = esp_timer_get_time();
@@ -148,26 +128,26 @@ static esp_err_t devices_handler(httpd_req_t *req)
     char *body = s_body;
 
     int64_t now = esp_timer_get_time();
-    size_t count = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES, now);
+    size_t count = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES);
 
     int n = snprintf(body, JSON_BUF_LEN, "{\"devices\":[");
     for (size_t i = 0; i < count; i++) {
         const observore_event_t *e = &snap[i];
         char detail[sizeof(e->detail) * 2 + 1];
         char label[sizeof(e->label) * 2 + 1];
-        json_escape(e->detail, detail, sizeof(detail));
-        json_escape(e->label, label, sizeof(label));
+        observore_json_escape(e->detail, detail, sizeof(detail));
+        observore_json_escape(e->label, label, sizeof(label));
         const char *vendor = e->vendor ? e->vendor : "";
+        char macbuf[OBSERVORE_MAC_STR_LEN];
 
         int written = snprintf(
             body + n, JSON_BUF_LEN - n,
-            "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"class\":\"%s\","
+            "%s{\"mac\":\"%s\",\"class\":\"%s\","
             "\"label\":\"%s\",\"vendor\":\"%s\",\"random\":%s,"
             "\"detail\":\"%s\",\"evidence\":\"%s\","
             "\"source\":\"%s\",\"rssi\":%d,\"channel\":%u,\"hits\":%" PRIu32 ","
             "\"first_seen_s\":%" PRId64 ",\"last_seen_s\":%" PRId64 "}",
-            i ? "," : "",
-            e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
+            i ? "," : "", observore_mac_str(e->mac, macbuf),
             observore_class_name(e->cls), label, vendor,
             e->addr_random ? "true" : "false", detail,
             observore_evidence_name(e->evidence), observore_source_name(e->src),
@@ -220,33 +200,43 @@ static bool query_param(httpd_req_t *req, const char *key, char *out, size_t len
     return true;
 }
 
+static esp_err_t ok(httpd_req_t *req)
+{
+    return send_json(req, "{\"ok\":true}");
+}
+
 static esp_err_t fail(httpd_req_t *req, const char *why)
 {
     httpd_resp_set_status(req, "400 Bad Request");
     char body[160];
     char safe[96];
-    json_escape(why, safe, sizeof(safe));
+    observore_json_escape(why, safe, sizeof(safe));
     snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", safe);
     return send_json(req, body);
 }
 
 static esp_err_t mutes_handler(httpd_req_t *req)
 {
-    static observore_mute_rule_t rules[OBSERVORE_MUTE_MAX];
-    size_t n = observore_mute_list(rules, OBSERVORE_MUTE_MAX);
+    /* Walked by index into the PSRAM scratch.  A static copy of the whole rule
+     * table was 6 KB of internal RAM duplicating observore_mute's own, resident
+     * even while the server is stopped, and the old 4 KB stack buffer took half
+     * the httpd task stack -- also internal RAM, which is the scarce kind. */
+    char *body = s_body;
+    size_t n = observore_mute_count();
 
-    char body[4096];
-    int w = snprintf(body, sizeof(body), "{\"suppressed\":%" PRIu32 ",\"rules\":[",
+    int w = snprintf(body, JSON_BUF_LEN, "{\"suppressed\":%" PRIu32 ",\"rules\":[",
                      observore_mute_suppressed());
     for (size_t i = 0; i < n; i++) {
-        const observore_mute_rule_t *r = &rules[i];
+        observore_mute_rule_t rule;
+        if (!observore_mute_get(i, &rule)) {
+            break;   /* the list shrank under us */
+        }
+        const observore_mute_rule_t *r = &rule;
         char value[OBSERVORE_MUTE_SSID_LEN * 2];
 
         switch (r->kind) {
             case OBSERVORE_MUTE_MAC:
-                snprintf(value, sizeof(value), "%02X:%02X:%02X:%02X:%02X:%02X",
-                         r->mac[0], r->mac[1], r->mac[2],
-                         r->mac[3], r->mac[4], r->mac[5]);
+                observore_mac_str(r->mac, value);
                 break;
             case OBSERVORE_MUTE_OUI:
                 snprintf(value, sizeof(value), "%02X:%02X:%02X",
@@ -259,14 +249,18 @@ static esp_err_t mutes_handler(httpd_req_t *req)
                 snprintf(value, sizeof(value), "%08" PRIx32, r->fingerprint);
                 break;
             default:
-                json_escape(r->ssid, value, sizeof(value));
+                observore_json_escape(r->ssid, value, sizeof(value));
                 break;
         }
-        w += snprintf(body + w, sizeof(body) - w,
+        w += snprintf(body + w, JSON_BUF_LEN - w,
                       "%s{\"index\":%zu,\"kind\":\"%s\",\"value\":\"%s\"}",
                       i ? "," : "", i, observore_mute_kind_name(r->kind), value);
+        if (w >= (int)JSON_BUF_LEN - 4) {
+            ESP_LOGW(TAG, "mute list truncated at %zu of %zu", i, n);
+            break;
+        }
     }
-    snprintf(body + w, sizeof(body) - w, "]}");
+    snprintf(body + w, JSON_BUF_LEN - w, "]}");
     return send_json(req, body);
 }
 
@@ -308,7 +302,7 @@ static esp_err_t mute_handler(httpd_req_t *req)
         return fail(req, "expected one of mac, oui, class, name, fingerprint");
     }
 
-    esp_err_t err = observore_mute_add(&rule);
+    esp_err_t err = observore_mute_add(&rule, NULL);
     if (err == ESP_ERR_NO_MEM) {
         return fail(req, "mute list is full");
     }
@@ -316,7 +310,7 @@ static esp_err_t mute_handler(httpd_req_t *req)
         return fail(req, "invalid rule");
     }
     ESP_LOGI(TAG, "muted %s", observore_mute_kind_name(rule.kind));
-    return send_json(req, "{\"ok\":true}");
+    return ok(req);
 }
 
 static esp_err_t unmute_handler(httpd_req_t *req)
@@ -324,7 +318,7 @@ static esp_err_t unmute_handler(httpd_req_t *req)
     char value[16];
     if (query_param(req, "all", value, sizeof(value))) {
         observore_mute_clear();
-        return send_json(req, "{\"ok\":true}");
+        return ok(req);
     }
     if (!query_param(req, "index", value, sizeof(value))) {
         return fail(req, "expected index or all=1");
@@ -332,7 +326,7 @@ static esp_err_t unmute_handler(httpd_req_t *req)
     if (observore_mute_remove((size_t)strtoul(value, NULL, 10)) != ESP_OK) {
         return fail(req, "no such rule");
     }
-    return send_json(req, "{\"ok\":true}");
+    return ok(req);
 }
 
 static esp_err_t netcfg_get_handler(httpd_req_t *req)
@@ -340,10 +334,10 @@ static esp_err_t netcfg_get_handler(httpd_req_t *req)
     char ssid[OBSERVORE_SSID_LEN] = {0};
     bool set = observore_netcfg_ssid(ssid, sizeof(ssid));
     char escaped[OBSERVORE_SSID_LEN * 2];
-    json_escape(ssid, escaped, sizeof(escaped));
+    observore_json_escape(ssid, escaped, sizeof(escaped));
 
     char werr[224];
-    json_escape(observore_wifi_uplink_error(), werr, sizeof(werr));
+    observore_json_escape(observore_wifi_uplink_error(), werr, sizeof(werr));
 
     char body[OBSERVORE_SSID_LEN * 2 + sizeof(werr) + 160];
     /* The password is deliberately absent and there is no endpoint that can
@@ -365,7 +359,7 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
     if (query_param(req, "clear", value, sizeof(value))) {
         observore_netcfg_clear();
         ESP_LOGI(TAG, "network credentials cleared");
-        return send_json(req, "{\"ok\":true}");
+        return ok(req);
     }
 
     char ssid[OBSERVORE_SSID_LEN] = {0};
@@ -391,7 +385,7 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
         return fail(req, "could not store credentials");
     }
     ESP_LOGI(TAG, "network set to \"%s\"", ssid);
-    return send_json(req, "{\"ok\":true}");
+    return ok(req);
 }
 
 /* Unclassified devices, so known gear can be recognised and muted before it
@@ -404,10 +398,7 @@ static esp_err_t nearby_handler(httpd_req_t *req)
     char *body = s_body;
 
     int64_t now = esp_timer_get_time();
-    size_t count = observore_track_nearby(snap, OBSERVORE_MAX_DEVICES, now);
-    if (count > NEARBY_MAX) {
-        count = NEARBY_MAX;
-    }
+    size_t count = observore_track_nearby(snap, NEARBY_MAX);
 
     int n = snprintf(body, JSON_BUF_LEN, "{\"nearby\":[");
     for (size_t i = 0; i < count; i++) {
@@ -415,16 +406,16 @@ static esp_err_t nearby_handler(httpd_req_t *req)
         /* The name is chosen by whoever owns the radio, so it is escaped on
          * the way out exactly like every other remote-controlled string. */
         char name[sizeof(e->detail) * 2 + 1];
-        json_escape(e->detail, name, sizeof(name));
+        char macbuf[OBSERVORE_MAC_STR_LEN];
+        observore_json_escape(e->detail, name, sizeof(name));
 
         int written = snprintf(
             body + n, JSON_BUF_LEN - n,
-            "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"vendor\":\"%s\","
+            "%s{\"mac\":\"%s\",\"vendor\":\"%s\","
             "\"name\":\"%s\",\"random\":%s,\"source\":\"%s\","
             "\"fingerprint\":\"%08" PRIx32 "\","
             "\"rssi\":%d,\"hits\":%" PRIu32 ",\"last_seen_s\":%" PRId64 "}",
-            i ? "," : "",
-            e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
+            i ? "," : "", observore_mac_str(e->mac, macbuf),
             e->vendor ? e->vendor : "", name,
             e->addr_random ? "true" : "false", observore_source_name(e->src),
             e->fingerprint,
@@ -478,8 +469,8 @@ static esp_err_t baseline_handler(httpd_req_t *req)
             memcpy(rule.mac, e->mac, OBSERVORE_MAC_LEN);
         }
 
-        size_t before = observore_mute_count();
-        esp_err_t err = observore_mute_add(&rule);
+        bool is_new = false;
+        esp_err_t err = observore_mute_add_deferred(&rule, &is_new);
         if (err == ESP_ERR_NO_MEM) {
             full++;
             continue;
@@ -487,7 +478,7 @@ static esp_err_t baseline_handler(httpd_req_t *req)
         if (err != ESP_OK) {
             continue;
         }
-        if (observore_mute_count() == before) {
+        if (!is_new) {
             existing++;
             continue;
         }
@@ -503,6 +494,9 @@ static esp_err_t baseline_handler(httpd_req_t *req)
                 break;
         }
     }
+
+    /* One flash write for the whole baseline rather than one per rule. */
+    observore_mute_save();
 
     /* Everything in range is now known, so the score and the log start from
      * a clean slate -- that is what makes it a baseline rather than just a
@@ -527,9 +521,9 @@ static esp_err_t notify_get_handler(httpd_req_t *req)
     char url[OBSERVORE_NOTIFY_URL_LEN] = {0};
     bool set = observore_notify_url(url, sizeof(url));
     char escaped[OBSERVORE_NOTIFY_URL_LEN * 2];
-    json_escape(url, escaped, sizeof(escaped));
+    observore_json_escape(url, escaped, sizeof(escaped));
     char err[144];
-    json_escape(observore_notify_last_error(), err, sizeof(err));
+    observore_json_escape(observore_notify_last_error(), err, sizeof(err));
 
     char body[OBSERVORE_NOTIFY_URL_LEN * 2 + sizeof(err) + 256];
     /* The token is absent by design, exactly like the Wi-Fi password. */
@@ -549,7 +543,7 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     char value[16];
     if (query_param(req, "clear", value, sizeof(value))) {
         observore_notify_clear();
-        return send_json(req, "{\"ok\":true}");
+        return ok(req);
     }
     if (query_param(req, "test", value, sizeof(value))) {
         if (observore_wifi_mode() != OBSERVORE_MODE_UPLINK) {
@@ -563,7 +557,7 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
         if (err != ESP_OK) {
             return fail(req, observore_notify_last_error());
         }
-        return send_json(req, "{\"ok\":true}");
+        return ok(req);
     }
 
     char url[OBSERVORE_NOTIFY_URL_LEN] = {0};
@@ -585,14 +579,14 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
         return fail(req, "could not store the notifier settings");
     }
     ESP_LOGI(TAG, "notifier set to %s", url);
-    return send_json(req, "{\"ok\":true}");
+    return ok(req);
 }
 
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     observore_track_clear();
     ESP_LOGI(TAG, "log cleared by console");
-    return send_json(req, "{\"ok\":true}");
+    return ok(req);
 }
 
 esp_err_t observore_web_start(void)
@@ -648,15 +642,6 @@ esp_err_t observore_web_start(void)
         }
     }
 
-    /* Report the address that is actually reachable in this mode; naming the
-     * SoftAP while joined to a network sends you to the wrong place. */
-    if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
-        ESP_LOGI(TAG, "console at http://%s/ (%s)", observore_wifi_uplink_ip(),
-                 observore_wifi_hostname());
-    } else {
-        ESP_LOGI(TAG, "console at http://192.168.4.1/ (SSID %s)",
-                 observore_wifi_ap_ssid());
-    }
     return ESP_OK;
 }
 

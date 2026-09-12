@@ -6,6 +6,7 @@ idf_component_register(
         "observore_mute.c"
         "observore_netcfg.c"
         "observore_nvs.c"
+        "observore_util.c"
         "observore_notify.c"
         "observore_ble.c"
         "observore_wifi.c"

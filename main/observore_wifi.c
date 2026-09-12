@@ -18,7 +18,6 @@
 
 static const char *TAG = "observore.wifi";
 
-#define OBSERVORE_SCAN_MS      3000
 #define OBSERVORE_SNIFF_MS     5000
 #define OBSERVORE_CHANNEL_MIN  1
 #define OBSERVORE_CHANNEL_MAX  13
@@ -32,7 +31,6 @@ static const uint8_t ASTM_OUI[3]     = {0xFA, 0x0B, 0xBC};
 #define IE_SSID               0x00
 
 static observore_mode_t       s_mode = OBSERVORE_MODE_PATROL;
-static esp_netif_t       *s_ap_netif;
 static char               s_ap_ssid[32];
 static char               s_hostname[48];
 static bool               s_initialised;
@@ -151,7 +149,6 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 
     observore_observation_t obs = {
         .mac       = hdr->addr2,
-        .addr_random = observore_mac_is_random(hdr->addr2),
         .src       = OBSERVORE_SRC_WIFI_SNIFF,
         .rssi      = (int8_t)pkt->rx_ctrl.rssi,
         .channel   = pkt->rx_ctrl.channel,
@@ -203,7 +200,6 @@ static void run_ap_scan(void)
     for (uint16_t i = 0; i < count; i++) {
         observore_observation_t obs = {
             .mac     = records[i].bssid,
-            .addr_random = observore_mac_is_random(records[i].bssid),
             .src     = OBSERVORE_SRC_WIFI_SCAN,
             .rssi    = records[i].rssi,
             .channel = records[i].primary,
@@ -481,7 +477,7 @@ esp_err_t observore_wifi_init(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    s_ap_netif = esp_netif_create_default_wifi_ap();
+    esp_netif_create_default_wifi_ap();
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -579,13 +575,16 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
     return ESP_OK;
 }
 
-void observore_wifi_patrol_cycle(void)
+void observore_wifi_patrol_cycle(void (*between)(void))
 {
     if (s_mode != OBSERVORE_MODE_PATROL) {
         return;
     }
 
     run_ap_scan();
+    if (between) {
+        between();   /* the scan alone blocks for about three seconds */
+    }
 
     /* Sniff sweep.  Dwell is split evenly across the channels; a shorter dwell
      * covers the band faster but a beacon interval is typically ~102 ms, so
@@ -613,6 +612,9 @@ void observore_wifi_patrol_cycle(void)
         }
         esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
         vTaskDelay(pdMS_TO_TICKS(dwell_ms));
+        if (between) {
+            between();   /* BLE keeps finding things during the sweep */
+        }
     }
     esp_wifi_set_promiscuous(false);
 }

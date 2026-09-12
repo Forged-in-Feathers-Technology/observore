@@ -170,13 +170,18 @@ def main():
     rows = []
     claimed = set()
     rows_raw = list(csv.DictReader(io.StringIO(fetch(args.csv))))
-    for row in rows_raw:
-        if row.get("Registry") != "MA-L":
-            continue
-        oui = (row.get("Assignment") or "").strip().upper()
-        org = row.get("Organization Name") or ""
-        if len(oui) != 6 or oui in claimed:
-            continue
+
+    def registry_entries():
+        """Valid, not-yet-claimed MA-L assignments, as (oui, org)."""
+        for row in rows_raw:
+            if row.get("Registry") != "MA-L":
+                continue
+            oui = (row.get("Assignment") or "").strip().upper()
+            if len(oui) != 6 or oui in claimed:
+                continue
+            yield oui, row.get("Organization Name") or ""
+
+    for oui, org in registry_entries():
         for cat, pats in compiled.items():
             if any(p.search(org) for p in pats):
                 rows.append((oui, cat, normalise(org)))
@@ -193,13 +198,7 @@ def main():
     vendor_pats = [(i, [re.compile(p, re.I) for p in pats])
                    for i, pats in enumerate(VENDORS.values())]
     vendor_rows = []
-    for row in rows_raw:
-        if row.get("Registry") != "MA-L":
-            continue
-        oui = (row.get("Assignment") or "").strip().upper()
-        org = row.get("Organization Name") or ""
-        if len(oui) != 6 or oui in claimed:
-            continue
+    for oui, org in registry_entries():
         for idx, pats in vendor_pats:
             if any(p.search(org) for p in pats):
                 vendor_rows.append((oui, idx))

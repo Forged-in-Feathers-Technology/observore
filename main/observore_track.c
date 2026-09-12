@@ -288,78 +288,74 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
     OBSERVORE_UNLOCK();
 }
 
-size_t observore_track_snapshot(observore_event_t *out, size_t max, int64_t now_us)
+/* One collector for all three views.  `want`: 1 classified, 0 unclassified,
+ * -1 either.  Entries are kept in sorted order as they are found, bounded by
+ * `max` -- the previous shape collected all 192 slots and then insertion-sorted
+ * the lot so a caller could display forty, which meant shuffling megabytes of
+ * 120-byte structs on a request the console makes every two seconds. */
+typedef enum { BY_NOTHING, BY_LAST_SEEN, BY_HITS } sort_key_t;
+
+static bool precedes(const observore_event_t *a, const observore_event_t *b,
+                     sort_key_t key)
 {
-    (void)now_us;
+    return (key == BY_HITS) ? a->hits > b->hits
+                            : a->last_seen_us > b->last_seen_us;
+}
+
+static size_t collect(observore_event_t *out, size_t max, int want,
+                      sort_key_t key)
+{
     if (!out || max == 0) {
         return 0;
     }
     size_t n = 0;
     OBSERVORE_LOCK();
-    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES && n < max; i++) {
-        if (s_devices[i].in_use && s_devices[i].classified) {
-            out[n++] = s_devices[i].ev;
+    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
+        if (!s_devices[i].in_use) {
+            continue;
         }
-    }
-    OBSERVORE_UNLOCK();
+        if (want >= 0 && s_devices[i].classified != (want == 1)) {
+            continue;
+        }
+        const observore_event_t *ev = &s_devices[i].ev;
 
-    /* Insertion sort, newest first.  n is bounded by the table size and this
-     * runs only when the UI asks for a snapshot. */
-    for (size_t i = 1; i < n; i++) {
-        observore_event_t key = out[i];
-        size_t j = i;
-        while (j > 0 && out[j - 1].last_seen_us < key.last_seen_us) {
+        if (key == BY_NOTHING) {
+            if (n == max) {
+                break;
+            }
+            out[n++] = *ev;
+            continue;
+        }
+        /* Full and not good enough to displace the weakest kept entry. */
+        if (n == max && !precedes(ev, &out[n - 1], key)) {
+            continue;
+        }
+        size_t j = (n < max) ? n++ : max - 1;
+        while (j > 0 && precedes(ev, &out[j - 1], key)) {
             out[j] = out[j - 1];
             j--;
         }
-        out[j] = key;
+        out[j] = *ev;
     }
+    OBSERVORE_UNLOCK();
     return n;
 }
 
-size_t observore_track_nearby(observore_event_t *out, size_t max, int64_t now_us)
+size_t observore_track_nearby(observore_event_t *out, size_t max)
 {
-    (void)now_us;
-    if (!out || max == 0) {
-        return 0;
-    }
-    size_t n = 0;
-    OBSERVORE_LOCK();
-    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES && n < max; i++) {
-        if (s_devices[i].in_use && !s_devices[i].classified) {
-            out[n++] = s_devices[i].ev;
-        }
-    }
-    OBSERVORE_UNLOCK();
-
-    /* Busiest first: the things you see most are the things worth naming and
+    /* Busiest first: the things seen most are the ones worth naming and
      * muting, and a long tail of one-off sightings is noise. */
-    for (size_t i = 1; i < n; i++) {
-        observore_event_t key = out[i];
-        size_t j = i;
-        while (j > 0 && out[j - 1].hits < key.hits) {
-            out[j] = out[j - 1];
-            j--;
-        }
-        out[j] = key;
-    }
-    return n;
+    return collect(out, max, 0, BY_HITS);
+}
+
+size_t observore_track_snapshot(observore_event_t *out, size_t max)
+{
+    return collect(out, max, 1, BY_LAST_SEEN);   /* newest first */
 }
 
 size_t observore_track_all(observore_event_t *out, size_t max)
 {
-    if (!out || max == 0) {
-        return 0;
-    }
-    size_t n = 0;
-    OBSERVORE_LOCK();
-    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES && n < max; i++) {
-        if (s_devices[i].in_use) {
-            out[n++] = s_devices[i].ev;
-        }
-    }
-    OBSERVORE_UNLOCK();
-    return n;
+    return collect(out, max, -1, BY_NOTHING);
 }
 
 size_t observore_track_drain_new(observore_event_t *out, size_t max)

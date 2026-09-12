@@ -13,6 +13,7 @@
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
+#include "observore_util.h"
 #include "observore_notify.h"
 #include "observore_track.h"
 #include "observore_web.h"
@@ -44,6 +45,7 @@ static const char *TAG = "observore";
  * notifications and a reachable console. */
 static int64_t s_mode_since_us;
 static int64_t s_next_uplink_try_us;
+static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
 
 static void enter_mode(observore_mode_t next)
 {
@@ -103,6 +105,50 @@ static void toggle_mode(void)
         s_next_uplink_try_us = 0;   /* an explicit ask clears any backoff */
         enter_mode(OBSERVORE_MODE_UPLINK);
     }
+}
+
+/* Report whatever has been found: the serial log, the notifier queue and the
+ * LED.  Called from the main loop and again between patrol channel dwells, so a
+ * detection reaches the LED and the push queue within a few hundred
+ * milliseconds instead of waiting out the eight-second sweep. */
+static observore_status_t publish(void)
+{
+    static observore_event_t found[16];
+    int64_t now = esp_timer_get_time();
+
+    /* Each detection is reported once, when first identified.  Repeat
+     * sightings are counted but not reprinted, or one beacon would bury
+     * everything else. */
+    size_t n = observore_track_drain_new(found, OBSERVORE_ARRLEN(found));
+    for (size_t i = 0; i < n; i++) {
+        const observore_event_t *e = &found[i];
+        observore_notify_event(e);
+        char macbuf[OBSERVORE_MAC_STR_LEN];
+        ESP_LOGW(TAG, "%-16s %s %4d dBm  via %-10s %-13s  %s%s%s",
+                 observore_class_name(e->cls),
+                 observore_mac_str(e->mac, macbuf),
+                 e->rssi, observore_source_name(e->src),
+                 observore_evidence_name(e->evidence), e->label,
+                 e->detail[0] ? " / " : "", e->detail);
+    }
+
+    observore_status_t st;
+    observore_track_status(&st, now);
+    observore_led_set_level(st.level);
+
+    if (st.level != s_last_level) {
+        ESP_LOGW(TAG, "%s -> %s (score %u, %u devices)",
+                 observore_level_name(s_last_level), observore_level_name(st.level),
+                 st.score, st.device_count);
+        observore_notify_level(s_last_level, st.level, st.score);
+        s_last_level = st.level;
+    }
+    return st;
+}
+
+static void publish_void(void)
+{
+    (void)publish();
 }
 
 static void button_task(void *arg)
@@ -188,8 +234,6 @@ void app_main(void)
     ESP_LOGI(TAG, "hold %d ms to swap patrol/uplink, %d ms for the console.",
              BUTTON_HOLD_MS, BUTTON_CONSOLE_MS);
 
-    observore_level_t last_level = OBSERVORE_LEVEL_CLEAR;
-    static observore_event_t found[16];
     int64_t last_heartbeat_us = 0;
     int64_t uplink_lost_us = 0;
 
@@ -197,35 +241,7 @@ void app_main(void)
         int64_t now = esp_timer_get_time();
         observore_track_tick(now);
 
-        /* Print each detection once, when it is first identified.  Repeat
-         * sightings are counted but not reprinted, or a single beacon would
-         * bury everything else in the log. */
-        size_t n = observore_track_drain_new(found, sizeof(found) / sizeof(found[0]));
-        for (size_t i = 0; i < n; i++) {
-            const observore_event_t *e = &found[i];
-            observore_notify_event(e);
-            ESP_LOGW(TAG,
-                     "%-16s %02X:%02X:%02X:%02X:%02X:%02X %4d dBm  via %-10s "
-                     "%-13s  %s%s%s",
-                     observore_class_name(e->cls),
-                     e->mac[0], e->mac[1], e->mac[2],
-                     e->mac[3], e->mac[4], e->mac[5],
-                     e->rssi, observore_source_name(e->src),
-                     observore_evidence_name(e->evidence), e->label,
-                     e->detail[0] ? " / " : "", e->detail);
-        }
-
-        observore_status_t st;
-        observore_track_status(&st, now);
-        observore_led_set_level(st.level);
-
-        if (st.level != last_level) {
-            ESP_LOGW(TAG, "%s -> %s (score %u, %u devices)",
-                     observore_level_name(last_level), observore_level_name(st.level),
-                     st.score, st.device_count);
-            observore_notify_level(last_level, st.level, st.score);
-            last_level = st.level;
-        }
+        observore_status_t st = publish();
 
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */
@@ -301,7 +317,7 @@ void app_main(void)
         if (observore_wifi_mode() == OBSERVORE_MODE_PATROL) {
             /* Blocks for the scan plus the sniff sweep.  BLE keeps running
              * underneath on the NimBLE host task throughout. */
-            observore_wifi_patrol_cycle();
+            observore_wifi_patrol_cycle(publish_void);
         } else {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }

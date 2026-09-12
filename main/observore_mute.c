@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "observore_detect.h"
 #include "observore_mute.h"
 
 #ifdef OBSERVORE_HOST_TEST
@@ -97,45 +98,11 @@ void observore_mute_init(void)
 /* Matching                                                           */
 /* ------------------------------------------------------------------ */
 
-static char lower(char c)
-{
-    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
-}
-
-static bool contains_ci(const char *hay, const char *needle)
-{
-    if (!hay || !needle || !*needle) {
-        return false;
-    }
-    for (const char *h = hay; *h; h++) {
-        const char *a = h, *b = needle;
-        while (*a && *b && lower(*a) == lower(*b)) {
-            a++;
-            b++;
-        }
-        if (!*b) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool observore_mute_class_is_protected(observore_class_t cls)
 {
-    /* The classes where silencing a whole kind of device could hide a real
-     * threat.  Cameras and fleet telematics are excluded: those are street
-     * furniture, and being able to mute a whole brand of them is the point. */
-    switch (cls) {
-        case OBSERVORE_CLASS_TRACKER:
-        case OBSERVORE_CLASS_BODYCAM:
-        case OBSERVORE_CLASS_ALPR:
-        case OBSERVORE_CLASS_DRONE:
-        case OBSERVORE_CLASS_SMARTGLASSES:
-        case OBSERVORE_CLASS_FOLLOWER:
-            return true;
-        default:
-            return false;
-    }
+    /* Cameras and fleet telematics are deliberately unprotected: those are
+     * street furniture, and muting a whole brand of them is the point. */
+    return observore_class_desc(cls)->protected_cls;
 }
 
 bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
@@ -162,7 +129,7 @@ bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_clas
                 hit = cls != OBSERVORE_CLASS_UNKNOWN && r->cls == (uint8_t)cls;
                 break;
             case OBSERVORE_MUTE_NAME:
-                hit = name && contains_ci(name, r->ssid);
+                hit = name && observore_contains_ci(name, r->ssid);
                 break;
             case OBSERVORE_MUTE_FINGERPRINT:
                 /* The safety rule, enforced here rather than left to the
@@ -201,7 +168,8 @@ static bool same_rule(const observore_mute_rule_t *a, const observore_mute_rule_
     }
 }
 
-esp_err_t observore_mute_add(const observore_mute_rule_t *rule)
+static esp_err_t mute_add(const observore_mute_rule_t *rule, bool *added,
+                         bool persist)
 {
     if (!rule || rule->kind >= OBSERVORE_MUTE_KIND_MAX) {
         return ESP_ERR_INVALID_ARG;
@@ -219,6 +187,10 @@ esp_err_t observore_mute_add(const observore_mute_rule_t *rule)
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (added) {
+        *added = false;
+    }
+
     esp_err_t err = ESP_OK;
     MUTE_LOCK();
     for (size_t i = 0; i < s_count; i++) {
@@ -231,10 +203,33 @@ esp_err_t observore_mute_add(const observore_mute_rule_t *rule)
         err = ESP_ERR_NO_MEM;
     } else {
         s_rules[s_count++] = *rule;
-        mute_save();
+        if (added) {
+            *added = true;
+        }
+        if (persist) {
+            mute_save();
+        }
     }
     MUTE_UNLOCK();
     return err;
+}
+
+esp_err_t observore_mute_add(const observore_mute_rule_t *rule, bool *added)
+{
+    return mute_add(rule, added, true);
+}
+
+esp_err_t observore_mute_add_deferred(const observore_mute_rule_t *rule,
+                                      bool *added)
+{
+    return mute_add(rule, added, false);
+}
+
+void observore_mute_save(void)
+{
+    MUTE_LOCK();
+    mute_save();
+    MUTE_UNLOCK();
 }
 
 esp_err_t observore_mute_remove(size_t index)
@@ -270,6 +265,20 @@ size_t observore_mute_count(void)
     size_t n = s_count;
     MUTE_UNLOCK();
     return n;
+}
+
+bool observore_mute_get(size_t index, observore_mute_rule_t *out)
+{
+    if (!out) {
+        return false;
+    }
+    MUTE_LOCK();
+    bool ok = index < s_count;
+    if (ok) {
+        *out = s_rules[index];
+    }
+    MUTE_UNLOCK();
+    return ok;
 }
 
 size_t observore_mute_list(observore_mute_rule_t *out, size_t max)

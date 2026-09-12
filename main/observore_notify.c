@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "observore_notify.h"
+#include "observore_util.h"
 #include "observore_wifi.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
@@ -196,25 +197,6 @@ const char *observore_notify_last_error(void) { return s_last_error; }
 /* Triggers                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Gotify priority: 8 shows as a high-priority alert on Android, 5 is a normal
- * notification, 2 is quiet. */
-static uint8_t priority_for(observore_class_t cls)
-{
-    switch (cls) {
-        case OBSERVORE_CLASS_BODYCAM:
-        case OBSERVORE_CLASS_ALPR:
-            return 8;
-        case OBSERVORE_CLASS_FOLLOWER:
-        case OBSERVORE_CLASS_TRACKER:
-            return 7;
-        case OBSERVORE_CLASS_DRONE:
-        case OBSERVORE_CLASS_SMARTGLASSES:
-            return 5;
-        default:
-            return 2;
-    }
-}
-
 void observore_notify_event(const observore_event_t *ev)
 {
     if (!ev) {
@@ -224,17 +206,16 @@ void observore_notify_event(const observore_event_t *ev)
     char msg[OBSERVORE_NOTIFY_MSG_LEN];
 
     snprintf(title, sizeof(title), "%s detected", observore_class_name(ev->cls));
-    snprintf(msg, sizeof(msg),
-             "%s%s%s\n%02X:%02X:%02X:%02X:%02X:%02X %s\n%d dBm, via %s, %s",
+    char macbuf[OBSERVORE_MAC_STR_LEN];
+    snprintf(msg, sizeof(msg), "%s%s%s\n%s %s\n%d dBm, via %s, %s",
              ev->label,
              ev->detail[0] ? " / " : "", ev->detail,
-             ev->mac[0], ev->mac[1], ev->mac[2],
-             ev->mac[3], ev->mac[4], ev->mac[5],
+             observore_mac_str(ev->mac, macbuf),
              ev->vendor ? ev->vendor : (ev->addr_random ? "(random)" : ""),
              ev->rssi, observore_source_name(ev->src),
              observore_evidence_name(ev->evidence));
 
-    enqueue(title, msg, priority_for(ev->cls));
+    enqueue(title, msg, observore_class_desc(ev->cls)->notify_priority);
 }
 
 void observore_notify_level(observore_level_t from, observore_level_t to, uint16_t score)
@@ -254,27 +235,6 @@ void observore_notify_level(observore_level_t from, observore_level_t to, uint16
 /* Sending                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Escape a string into a JSON body. */
-static void json_escape(const char *in, char *out, size_t out_len)
-{
-    size_t o = 0;
-    for (size_t i = 0; in[i] && o + 7 < out_len; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '"' || c == '\\') {
-            out[o++] = '\\';
-            out[o++] = (char)c;
-        } else if (c == '\n') {
-            out[o++] = '\\';
-            out[o++] = 'n';
-        } else if (c >= 0x20 && c < 0x7F) {
-            out[o++] = (char)c;
-        } else {
-            out[o++] = ' ';
-        }
-    }
-    out[o] = '\0';
-}
-
 static esp_err_t send_now(const observore_notice_t *n)
 {
     char url[OBSERVORE_NOTIFY_URL_LEN + 16];
@@ -290,8 +250,8 @@ static esp_err_t send_now(const observore_notice_t *n)
 
     char title[OBSERVORE_NOTIFY_TITLE_LEN * 2];
     char message[OBSERVORE_NOTIFY_MSG_LEN * 2];
-    json_escape(n->title, title, sizeof(title));
-    json_escape(n->message, message, sizeof(message));
+    observore_json_escape(n->title, title, sizeof(title));
+    observore_json_escape(n->message, message, sizeof(message));
 
     char body[OBSERVORE_NOTIFY_TITLE_LEN * 2 + OBSERVORE_NOTIFY_MSG_LEN * 2 + 64];
     int len = snprintf(body, sizeof(body),

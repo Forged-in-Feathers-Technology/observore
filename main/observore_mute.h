@@ -33,11 +33,6 @@ typedef enum {
     OBSERVORE_MUTE_KIND_MAX
 } observore_mute_kind_t;
 
-/* Kept for the wire format and the existing API spelling; a name rule matches
- * a Wi-Fi SSID and a BLE local name alike, since both end up in the same
- * field. */
-#define OBSERVORE_MUTE_SSID OBSERVORE_MUTE_NAME
-
 typedef struct {
     uint8_t  kind;                       /* observore_mute_kind_t */
     uint8_t  mac[OBSERVORE_MAC_LEN];         /* MAC and OUI kinds */
@@ -65,13 +60,30 @@ bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_clas
 /* True for classes a fingerprint rule must never silence. */
 bool observore_mute_class_is_protected(observore_class_t cls);
 
-/* Adding a rule that already exists succeeds without duplicating it. */
-esp_err_t observore_mute_add(const observore_mute_rule_t *rule);
+/* Adding a rule that already exists succeeds without duplicating it.
+ * `added` (optional) reports whether the list actually grew, so a caller does
+ * not have to bracket the call with observore_mute_count(). */
+esp_err_t observore_mute_add(const observore_mute_rule_t *rule, bool *added);
+
+/* Add without writing to flash; call observore_mute_save() once when done.
+ *
+ * Persisting inside the loop was costing a full blob rewrite and commit per
+ * rule: taking a baseline of ~130 devices pushed several hundred kilobytes
+ * through a 24 KB NVS partition, and the page erases stall the flash cache --
+ * which stalls the BLE and Wi-Fi code running from it, blinding the detector
+ * for the duration of an operation whose whole point is to be unobtrusive. */
+esp_err_t observore_mute_add_deferred(const observore_mute_rule_t *rule,
+                                      bool *added);
+void observore_mute_save(void);
 esp_err_t observore_mute_remove(size_t index);
 esp_err_t observore_mute_clear(void);
 
 size_t observore_mute_count(void);
 size_t observore_mute_list(observore_mute_rule_t *out, size_t max);
+
+/* Copy rule `index` out.  Lets a caller walk the list without standing up a
+ * 6 KB copy of the whole table in internal RAM. */
+bool observore_mute_get(size_t index, observore_mute_rule_t *out);
 uint32_t observore_mute_suppressed(void);
 
 const char *observore_mute_kind_name(observore_mute_kind_t kind);

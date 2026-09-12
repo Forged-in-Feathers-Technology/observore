@@ -47,6 +47,12 @@ const char *observore_vendor_lookup(const uint8_t mac[OBSERVORE_MAC_LEN]);
 bool observore_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len);
 bool observore_mac_is_random(const uint8_t mac[OBSERVORE_MAC_LEN]);
 
+/* Case-insensitive substring search.  Exported because a NAME mute rule has to
+ * match exactly the way the keyword tables match -- otherwise a user mutes a
+ * string that still trips the classifier.  strcasestr() is a GNU extension and
+ * is absent from the host test toolchain, hence the hand-rolled version. */
+bool observore_contains_ci(const char *hay, const char *needle);
+
 /* Whether an address carries no usable vendor information.
  *
  * Measured on real air, the two available signals disagree in BOTH
@@ -78,6 +84,23 @@ bool observore_adv_name(const uint8_t *adv, size_t adv_len, char *buf, size_t bu
  *
  * Returns 0 when there is nothing stable to hash. */
 uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len);
+
+/* Everything that varies per class, in one place.
+ *
+ * These four attributes used to live in four switch statements across three
+ * modules, plus a positional name array kept index-aligned with the enum by
+ * convention alone -- so inserting a class mid-enum silently mislabelled every
+ * class after it, and a new class silently scored zero and notified quietly
+ * because both switches fell through to a default.  Designated initialisers
+ * make the alignment explicit and a missing row obvious. */
+typedef struct {
+    const char *name;
+    uint8_t     points;           /* contribution to the threat score */
+    uint8_t     notify_priority;  /* Gotify priority */
+    bool        protected_cls;    /* a fingerprint rule may never silence it */
+} observore_class_desc_t;
+
+const observore_class_desc_t *observore_class_desc(observore_class_t cls);
 
 /* Points a class contributes to the threat score on each scored sighting. */
 uint8_t observore_class_points(observore_class_t cls);

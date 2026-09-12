@@ -5,6 +5,8 @@
 
 #define OBSERVORE_MAC_LEN 6
 
+#define OBSERVORE_ARRLEN(a) (sizeof(a) / sizeof((a)[0]))
+
 /* What a sighting was classified as.  The order is meaningful: higher value =
  * more specific / more alarming, and OBSERVORE_CLASS_UNKNOWN must stay first so a
  * zeroed struct reads as "not classified". */
