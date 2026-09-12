@@ -28,6 +28,12 @@ const char *argus_wifi_uplink_ip(void);
 /* Why the last uplink attempt failed, in plain words, or an empty string. */
 const char *argus_wifi_uplink_error(void);
 
+/* True while the station actually holds an address.  Distinct from being in
+ * uplink mode: the mode can outlive the association when the access point goes
+ * away, and sitting in a mode that cannot transmit while the sniffer is
+ * switched off is the worst of both. */
+bool argus_wifi_uplink_connected(void);
+
 esp_err_t argus_wifi_init(void);
 
 /* Switch modes.  Safe to call with the mode already active (no-op). */

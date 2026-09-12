@@ -639,7 +639,14 @@ esp_err_t argus_web_start(void)
         }
     }
 
-    ESP_LOGI(TAG, "console at http://192.168.4.1/ (SSID %s)", argus_wifi_ap_ssid());
+    /* Report the address that is actually reachable in this mode; naming the
+     * SoftAP while joined to a network sends you to the wrong place. */
+    if (argus_wifi_mode() == ARGUS_MODE_UPLINK) {
+        ESP_LOGI(TAG, "console at http://%s/", argus_wifi_uplink_ip());
+    } else {
+        ESP_LOGI(TAG, "console at http://192.168.4.1/ (SSID %s)",
+                 argus_wifi_ap_ssid());
+    }
     return ESP_OK;
 }
 

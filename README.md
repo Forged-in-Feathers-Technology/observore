@@ -83,14 +83,34 @@ The ESP32-S3 has one radio on one channel. Channel-hopping to sniff and staying
 associated to an access point are mutually exclusive — so Argus cannot both
 watch the band and serve you a web page at the same time.
 
-- **Patrol** (default) — unassociated, scanning and sniffing. No network.
-- **Console** — SoftAP up, web UI served, sniffing suspended.
-- **Uplink** — joined to your own network, web UI reachable on your LAN,
-  sniffing suspended.
+- **Patrol** — unassociated, scanning and sniffing. No network.
+- **Uplink** — joined to your own network. The console is on your LAN and
+  notifications can be sent. Wi-Fi sniffing is suspended.
+- **Console** — SoftAP, for first-time setup or when away from your network.
 
-Hold the BOOT button for 1.5 s to cycle. Uplink is skipped when no network is
-configured. BLE scanning continues in all three modes; it is unaffected by the
-Wi-Fi channel, and it is where most detections come from.
+BLE scanning continues in all three; it is unaffected by the Wi-Fi channel, and
+it is where most detections come from.
+
+| Gesture | Effect |
+|---|---|
+| hold 1.5 s | swap between patrol and uplink |
+| hold 4 s | raise the console SoftAP |
+
+With no network configured the short hold gives you the console instead, since
+that is where a network gets configured. The firmware logs how long it saw the
+button held, so a press a shade too short is distinguishable from a button that
+is not responding.
+
+### Uplink is the resting state
+
+Once a network is configured, Argus joins it at boot and returns to it on its
+own: a lost association reconnects, and if it stays down past
+`ARGUS_UPLINK_GRACE_S` (45 s) it patrols instead and retries every
+`ARGUS_UPLINK_RETRY_S` (5 minutes). Carry it out and it patrols; come home and
+it rejoins by itself and flushes whatever it queued while away.
+
+Choosing patrol with the button suppresses the automatic return until you
+select uplink again — an explicit choice is not second-guessed.
 
 ## Joining your network
 

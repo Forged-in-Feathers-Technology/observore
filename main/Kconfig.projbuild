@@ -48,6 +48,28 @@ config ARGUS_WIFI_AUTOJOIN
         only on demand.  If the network cannot be joined, Argus falls back to
         patrol rather than sitting associated to nothing.
 
+config ARGUS_UPLINK_RETRY_S
+    int "Seconds between attempts to regain the uplink"
+    default 300
+    range 30 3600
+    help
+        When the network is configured, uplink is the resting state.  After a
+        failed join or a lost association Argus patrols instead, and retries
+        the uplink on this interval so it rejoins by itself when you come back
+        into range -- which is what delivers any notices queued while away.
+
+        Choosing patrol with the button suppresses this until you select
+        uplink again: an explicit choice is not second-guessed.
+
+config ARGUS_UPLINK_GRACE_S
+    int "Seconds to tolerate a dropped uplink before patrolling"
+    default 45
+    range 5 600
+    help
+        Brief drops are normal and reconnect on their own.  Past this, staying
+        in uplink mode means the Wi-Fi sniffer is off and there is no network
+        either, so patrolling is strictly better.
+
 config ARGUS_WIFI_CONNECT_TIMEOUT_S
     int "Uplink connect timeout (seconds)"
     default 15

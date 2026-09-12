@@ -43,6 +43,7 @@ static uint32_t           s_sniffed_frames;
 static EventGroupHandle_t s_sta_events;
 static char               s_uplink_ip[16];
 static char               s_uplink_error[160];
+static bool               s_uplink_connected;
 static int                s_connect_attempts;
 
 #define STA_BIT_GOT_IP  BIT0
@@ -269,6 +270,7 @@ static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
         /* Log EVERY attempt, not just the last.  Logging only the final one
          * reported reason 36 -- our own disconnect in the timeout path --
          * which says nothing about why the join actually failed. */
+        s_uplink_connected = false;
         if (e->reason != WIFI_REASON_STA_LEAVING) {
             snprintf(s_uplink_error, sizeof(s_uplink_error), "%s (reason %d)",
                      wifi_reason_text(e->reason), e->reason);
@@ -285,6 +287,12 @@ static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *e = data;
         snprintf(s_uplink_ip, sizeof(s_uplink_ip), IPSTR, IP2STR(&e->ip_info.ip));
+        s_uplink_connected = true;
+        s_uplink_error[0] = '\0';
+        /* Reset the retry budget on success, so a later drop gets a fresh set
+         * of attempts instead of inheriting an exhausted counter and never
+         * reconnecting. */
+        s_connect_attempts = 0;
         ESP_LOGI(TAG, "uplink up at %s", s_uplink_ip);
         xEventGroupSetBits(s_sta_events, STA_BIT_GOT_IP);
     }
@@ -298,6 +306,11 @@ const char *argus_wifi_uplink_ip(void)
 const char *argus_wifi_uplink_error(void)
 {
     return s_uplink_error;
+}
+
+bool argus_wifi_uplink_connected(void)
+{
+    return s_uplink_connected && s_mode == ARGUS_MODE_UPLINK;
 }
 
 esp_err_t argus_wifi_uplink_connect(void)
@@ -339,6 +352,7 @@ esp_err_t argus_wifi_uplink_connect(void)
 
     s_uplink_ip[0] = '\0';
     s_uplink_error[0] = '\0';
+    s_uplink_connected = false;
     s_connect_attempts = 0;
     xEventGroupClearBits(s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED);
 
@@ -471,6 +485,7 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
         esp_wifi_disconnect();
     }
     s_uplink_ip[0] = '\0';
+    s_uplink_connected = false;
 
     esp_wifi_set_promiscuous(false);
     esp_wifi_stop();

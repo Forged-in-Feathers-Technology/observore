@@ -27,28 +27,22 @@
 static const char *TAG = "argus";
 
 #define BUTTON_GPIO        ((gpio_num_t)CONFIG_ARGUS_BUTTON_GPIO)
+/* A short hold alternates the two modes you actually live in.  A long hold
+ * raises the SoftAP, which is only needed for first-time setup or when you are
+ * away from the configured network -- so it should not be in the way the rest
+ * of the time. */
 #define BUTTON_HOLD_MS     1500
+#define BUTTON_CONSOLE_MS  4000
 #define BUTTON_POLL_MS     50
 #define HEARTBEAT_US       (15 * 1000000LL)
 
-/* One button, so it cycles rather than toggles.  Uplink is skipped when no
- * network is configured -- offering a mode that cannot work would just look
- * like the button is broken. */
-static void cycle_mode(void)
-{
-    argus_mode_t next;
-    switch (argus_wifi_mode()) {
-        case ARGUS_MODE_PATROL:
-            next = ARGUS_MODE_CONSOLE;
-            break;
-        case ARGUS_MODE_CONSOLE:
-            next = argus_netcfg_is_set() ? ARGUS_MODE_UPLINK : ARGUS_MODE_PATROL;
-            break;
-        default:
-            next = ARGUS_MODE_PATROL;
-            break;
-    }
+/* Set when patrol was chosen deliberately.  An explicit choice is not
+ * second-guessed by the automatic return to uplink. */
+static bool s_patrol_by_choice;
+static int64_t s_next_uplink_try_us;
 
+static void enter_mode(argus_mode_t next)
+{
     if (next == ARGUS_MODE_PATROL) {
         argus_web_stop();
         argus_wifi_set_mode(ARGUS_MODE_PATROL);
@@ -62,7 +56,13 @@ static void cycle_mode(void)
      * where we actually ended up rather than assuming. */
     if (argus_wifi_mode() == ARGUS_MODE_PATROL) {
         argus_led_set_console(false);
-        ESP_LOGW(TAG, "could not join the network -- staying on patrol");
+        /* Schedule the next attempt here.  Leaving it unset meant the main
+         * loop saw a due time of zero and retried immediately, stalling the
+         * boot for a second fifteen-second timeout back to back. */
+        s_next_uplink_try_us = esp_timer_get_time() +
+                               (int64_t)CONFIG_ARGUS_UPLINK_RETRY_S * 1000000;
+        ESP_LOGW(TAG, "could not join the network -- patrolling, retrying in %ds",
+                 CONFIG_ARGUS_UPLINK_RETRY_S);
         return;
     }
 
@@ -75,6 +75,26 @@ static void cycle_mode(void)
         ESP_LOGI(TAG, "console up: join \"%s\" (password \"%s\"), "
                       "then open http://192.168.4.1/",
                  argus_wifi_ap_ssid(), argus_wifi_ap_password());
+    }
+}
+
+/* Short hold: alternate the two working modes.  With no network configured
+ * there is only one sensible destination, the console, since that is where a
+ * network gets configured. */
+static void toggle_mode(void)
+{
+    if (!argus_netcfg_is_set()) {
+        enter_mode(argus_wifi_mode() == ARGUS_MODE_CONSOLE ? ARGUS_MODE_PATROL
+                                                           : ARGUS_MODE_CONSOLE);
+        return;
+    }
+    if (argus_wifi_mode() == ARGUS_MODE_UPLINK) {
+        s_patrol_by_choice = true;
+        enter_mode(ARGUS_MODE_PATROL);
+    } else {
+        s_patrol_by_choice = false;
+        s_next_uplink_try_us = 0;
+        enter_mode(ARGUS_MODE_UPLINK);
     }
 }
 
@@ -98,10 +118,17 @@ static void button_task(void *arg)
         bool down = gpio_get_level(BUTTON_GPIO) == 0;
 
         if (!down) {
-            /* Say what was actually seen.  Without this, a press that was a
-             * shade too short is indistinguishable from a button that is not
-             * wired up, and the only thing to do is guess and try again. */
-            if (held_ms > 150 && !acted) {
+            /* The short gesture fires on release, because a hold has to be
+             * allowed to continue into the long gesture before it can be
+             * judged short. */
+            if (!acted && held_ms >= BUTTON_HOLD_MS) {
+                ESP_LOGI(TAG, "button held %" PRIu32 " ms -- switching mode",
+                         held_ms);
+                toggle_mode();
+            } else if (!acted && held_ms > 150) {
+                /* Say what was actually seen.  A press a shade too short is
+                 * otherwise indistinguishable from a button that is not wired
+                 * up, and the only recourse is to guess and try again. */
                 ESP_LOGW(TAG, "button held %" PRIu32 " ms -- %d ms needed",
                          held_ms, BUTTON_HOLD_MS);
             }
@@ -109,13 +136,12 @@ static void button_task(void *arg)
             acted = false;
         } else {
             held_ms += BUTTON_POLL_MS;
-            /* Act on the hold, once, without waiting for release -- you should
-             * be able to feel the mode change while still pressing. */
-            if (held_ms >= BUTTON_HOLD_MS && !acted) {
+            /* The long gesture fires while still held, so you can feel that it
+             * took without having to guess how long to keep holding. */
+            if (held_ms >= BUTTON_CONSOLE_MS && !acted) {
                 acted = true;
-                ESP_LOGI(TAG, "button held %" PRIu32 " ms -- switching mode",
-                         held_ms);
-                cycle_mode();
+                ESP_LOGI(TAG, "button held %" PRIu32 " ms -- console", held_ms);
+                enter_mode(ARGUS_MODE_CONSOLE);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
@@ -144,22 +170,17 @@ void app_main(void)
         char ssid[ARGUS_SSID_LEN];
         argus_netcfg_ssid(ssid, sizeof(ssid));
         ESP_LOGI(TAG, "joining \"%s\"", ssid);
-        if (argus_wifi_set_mode(ARGUS_MODE_UPLINK) == ESP_OK &&
-            argus_wifi_mode() == ARGUS_MODE_UPLINK) {
-            argus_web_start();
-            argus_led_set_console(true);
-            ESP_LOGW(TAG, "console at http://%s/ -- Wi-Fi sniffing is suspended "
-                          "while joined; BLE scanning continues",
-                     argus_wifi_uplink_ip());
-        }
+        enter_mode(ARGUS_MODE_UPLINK);
     }
 #endif
 
-    ESP_LOGI(TAG, "hold the button %d ms to change mode.", BUTTON_HOLD_MS);
+    ESP_LOGI(TAG, "hold %d ms to swap patrol/uplink, %d ms for the console.",
+             BUTTON_HOLD_MS, BUTTON_CONSOLE_MS);
 
     argus_level_t last_level = ARGUS_LEVEL_CLEAR;
     static argus_event_t found[16];
     int64_t last_heartbeat_us = 0;
+    int64_t uplink_lost_us = 0;
 
     for (;;) {
         int64_t now = esp_timer_get_time();
@@ -198,6 +219,35 @@ void app_main(void)
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */
         argus_notify_pump();
+
+        /* Uplink is the resting state once a network is configured.  Come back
+         * to it by itself after a drop or a failed join, unless patrol was
+         * chosen deliberately. */
+        if (argus_netcfg_is_set() && !s_patrol_by_choice) {
+            if (argus_wifi_mode() == ARGUS_MODE_UPLINK &&
+                !argus_wifi_uplink_connected()) {
+                if (uplink_lost_us == 0) {
+                    uplink_lost_us = now;
+                } else if (now - uplink_lost_us >
+                           (int64_t)CONFIG_ARGUS_UPLINK_GRACE_S * 1000000) {
+                    /* No network and no sniffer is the worst of both. */
+                    ESP_LOGW(TAG, "uplink down for %ds -- patrolling",
+                             CONFIG_ARGUS_UPLINK_GRACE_S);
+                    uplink_lost_us = 0;
+                    s_next_uplink_try_us =
+                        now + (int64_t)CONFIG_ARGUS_UPLINK_RETRY_S * 1000000;
+                    enter_mode(ARGUS_MODE_PATROL);
+                }
+            } else if (argus_wifi_mode() == ARGUS_MODE_UPLINK) {
+                uplink_lost_us = 0;
+            } else if (argus_wifi_mode() == ARGUS_MODE_PATROL &&
+                       now >= s_next_uplink_try_us) {
+                ESP_LOGI(TAG, "retrying the uplink");
+                s_next_uplink_try_us =
+                    now + (int64_t)CONFIG_ARGUS_UPLINK_RETRY_S * 1000000;
+                enter_mode(ARGUS_MODE_UPLINK);
+            }
+        }
 
         /* Heartbeat.  Without it, "nothing is out there" and "the radio is
          * not running" produce identical output: silence. */
