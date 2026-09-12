@@ -663,6 +663,22 @@ Read these before trusting it.
 - **Fast Pair is noisy.** Ordinary headphones advertise `0xFE2C`. It is
   reported because Google's Find Hub trackers use it too.
 - **2.4 GHz only.** The sniffer sweeps channels 1–13.
+- **Vendor lookup covers MA-L only.** The IEEE also issues smaller MA-M and
+  MA-S blocks, which the generator does not read, so some genuinely assigned
+  prefixes resolve to nothing. A miss is reported as unknown rather than
+  guessed at.
+- **Muting is a blunt instrument.** A `class` or `oui` rule will hide a real
+  threat that happens to share a category or vendor with something you
+  dismissed. Prefer `mac`, `name` or `fingerprint` rules where you can.
+- **The console is authenticated but not encrypted.** It asks for the console
+  password and then carries a session cookie, which stops casual and
+  accidental access — but over plain HTTP that cookie can be read by anything
+  sniffing the LAN, which on Wi-Fi is any device in range holding the
+  passphrase. Authentication is not a substitute for encryption.
+- **Notification delivery is verified for two providers of three.** Gotify has
+  been sent end to end from the device; ntfy accepted the exact request the
+  firmware builds; Pushover accepted the request's shape but delivery has not
+  been confirmed, since that needs an account.
 
 ## Legal note
 
