@@ -440,9 +440,15 @@ hardware. C6 is compile-tested only.
 The C5 was verified on a Waveshare ESP32-C5-WIFI6-KIT-N16R8, flashed with the
 released artifacts rather than a local build, so the release pipeline is
 covered too. Confirmed working: 8 MB PSRAM detected and tested, dual-band scan,
-BLE passive scan, Wi-Fi uplink, mDNS, and the web console including a 6 KB
-`/api/nearby` response. The WS2812 LED and the GPIO28 button are wired from the
-datasheet and build correctly, but have not been physically observed.
+BLE passive scan, Wi-Fi uplink, mDNS, the web console including a 6 KB
+`/api/nearby` response, and Set baseline.
+
+The WS2812 and the button were checked directly rather than assumed. The pixel
+was driven through a known red-green-blue sequence and observed in that order,
+which rules out the failure actually worth worrying about: blue is the third
+byte in both RGB and GRB ordering, so a wrong colour format looks *correct* on
+blue while silently swapping red and green — an alert would show green. It does
+not. The BOOT button on GPIO28 reads high at rest and low when pressed.
 
 **The dual-band result, measured in an ordinary flat:**
 
