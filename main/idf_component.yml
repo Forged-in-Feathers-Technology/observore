@@ -2,5 +2,9 @@ dependencies:
   # mDNS left core IDF in v5.0 and is now a managed component.  Pinned to a
   # minor range so a build is reproducible without freezing out patch fixes.
   espressif/mdns: "^1.2.0"
+  # Drives the WS2812 pixel that most C5 and C6 boards carry in place of a
+  # plain LED.  Depended on unconditionally rather than per target, because the
+  # LED backend is a Kconfig choice: any board could be wired either way.
+  espressif/led_strip: "^3.0.0"
   idf:
     version: ">=5.0"

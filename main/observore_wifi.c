@@ -15,13 +15,44 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
+#include "soc/soc_caps.h"
 
 static const char *TAG = "observore.wifi";
 
 #define OBSERVORE_SNIFF_MS     5000
-#define OBSERVORE_CHANNEL_MIN  1
-#define OBSERVORE_CHANNEL_MAX  13
 #define OBSERVORE_MAX_AP       32
+
+#define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+/* The sniffer sweeps a list rather than a range, because 5 GHz channel numbers
+ * are not contiguous.  esp_wifi_set_channel() moves the radio across bands by
+ * itself -- Espressif recommends it over esp_wifi_set_band() -- so one table of
+ * channel numbers is enough to drive a dual-band sweep. */
+static const uint8_t CHANNELS_2G[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+
+#if SOC_WIFI_SUPPORT_5G
+/* UNII-1, UNII-2A, UNII-2C and UNII-3.  DFS channels are included: the radar
+ * obligations that come with them apply to transmitting, and this radio only
+ * ever listens.  Channels the configured country forbids are skipped at
+ * runtime rather than pruned here, because the regulatory domain is not known
+ * at compile time. */
+static const uint8_t CHANNELS_5G[] = {
+     36,  40,  44,  48,
+     52,  56,  60,  64,
+    100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+    149, 153, 157, 161, 165,
+};
+
+/* 5 GHz is swept a slice at a time.  Covering all twenty-five channels in one
+ * cycle would push the per-channel dwell under a beacon interval (~102 ms),
+ * and missing beacons outright costs more than a slower rotation does: this
+ * way 2.4 GHz stays fully covered every cycle and 5 GHz comes round in five.
+ * The cursor persists across cycles, so the slice advances each sweep. */
+#define OBSERVORE_SLICE_5G 5
+static size_t s_5g_cursor;
+#else
+#define OBSERVORE_SLICE_5G 0
+#endif
 
 /* ASTM F3411 Remote ID over Wi-Fi: a vendor-specific IE (element 0xDD) whose
  * OUI is FA:0B:BC with vendor type 0x0D. */
@@ -621,6 +652,23 @@ void observore_wifi_patrol_cycle(void (*between)(void))
         return;
     }
 
+#if SOC_WIFI_SUPPORT_5G
+    /* Set once per cycle, and deliberately not once at init: the API returns
+     * ESP_ERR_WIFI_NOT_STARTED on a stopped driver, and a mode change performs
+     * an esp_wifi_stop()/start() that an init-time call would not survive --
+     * the same trap the promiscuous callback below falls into.  Without this
+     * the radio stays on 2.4 GHz and every 5 GHz channel is refused.
+     *
+     * It goes before run_ap_scan() rather than before the sniff sweep so that
+     * the scan covers both bands as well.  A 5 GHz AP is found by the scan far
+     * more cheaply than by waiting for a beacon to land in a sniff dwell. */
+    esp_err_t berr = esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO);
+    if (berr != ESP_OK) {
+        ESP_LOGW(TAG, "could not enable dual-band scanning: %s",
+                 esp_err_to_name(berr));
+    }
+#endif
+
     run_ap_scan();
     if (between) {
         between();   /* the scan alone blocks for about three seconds */
@@ -629,8 +677,19 @@ void observore_wifi_patrol_cycle(void (*between)(void))
     /* Sniff sweep.  Dwell is split evenly across the channels; a shorter dwell
      * covers the band faster but a beacon interval is typically ~102 ms, so
      * anything under about 120 ms per channel starts missing APs outright. */
-    const int channels = OBSERVORE_CHANNEL_MAX - OBSERVORE_CHANNEL_MIN + 1;
-    const int dwell_ms = OBSERVORE_SNIFF_MS / channels;
+    /* This cycle's sweep: the whole of 2.4 GHz, then the next slice of 5 GHz. */
+    uint8_t sweep[ARRAY_COUNT(CHANNELS_2G) + OBSERVORE_SLICE_5G];
+    size_t  n = 0;
+    for (size_t i = 0; i < ARRAY_COUNT(CHANNELS_2G); i++) {
+        sweep[n++] = CHANNELS_2G[i];
+    }
+#if SOC_WIFI_SUPPORT_5G
+    for (size_t i = 0; i < OBSERVORE_SLICE_5G; i++) {
+        sweep[n++]  = CHANNELS_5G[s_5g_cursor];
+        s_5g_cursor = (s_5g_cursor + 1) % ARRAY_COUNT(CHANNELS_5G);
+    }
+#endif
+    const int dwell_ms = OBSERVORE_SNIFF_MS / (int)n;
 
     /* Register the filter and callback here, immediately before enabling
      * promiscuous mode, rather than once at init.  Registering them on a
@@ -646,11 +705,19 @@ void observore_wifi_patrol_cycle(void (*between)(void))
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(sniffer_cb));
 
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-    for (int ch = OBSERVORE_CHANNEL_MIN; ch <= OBSERVORE_CHANNEL_MAX; ch++) {
+    for (size_t i = 0; i < n; i++) {
         if (s_mode != OBSERVORE_MODE_PATROL) {
             break;  /* a mode switch landed mid-sweep */
         }
-        esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+        /* A channel the regulatory domain forbids is refused here rather than
+         * being absent at compile time.  Skip it instead of dwelling on a
+         * channel the radio never actually moved to. */
+        esp_err_t cerr = esp_wifi_set_channel(sweep[i], WIFI_SECOND_CHAN_NONE);
+        if (cerr != ESP_OK) {
+            ESP_LOGD(TAG, "channel %u unavailable: %s",
+                     sweep[i], esp_err_to_name(cerr));
+            continue;
+        }
         vTaskDelay(pdMS_TO_TICKS(dwell_ms));
         if (between) {
             between();   /* BLE keeps finding things during the sweep */

@@ -15,9 +15,17 @@ permissions:
   contents: write
 
 jobs:
-  firmware:
-    name: Build and attach firmware
+  build:
+    name: Build ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per chip the flasher can install onto. ESP Web Tools reads
+        # the chip on the other end of the cable and picks the matching build
+        # itself, so adding a target here is all it takes to support it in the
+        # browser -- there is no menu for the user to get wrong.
+        target: [esp32s3, esp32c5]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,13 +35,37 @@ jobs:
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5
-          target: esp32s3
+          target: ${{ matrix.target }}
 
       - name: Collect the flashable parts
+        run: python3 tools/collect_release.py --target ${{ matrix.target }} --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+          retention-days: 1
+
+  publish:
+    name: Attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Build the manifest
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          mkdir -p dist
+          BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
 
           # Deliberately NOT a single merged image.
           #
@@ -45,34 +77,19 @@ jobs:
           # writes only those regions, so an upgrade keeps its settings and a
           # clean install stays an explicit choice (ESP Web Tools offers an
           # erase checkbox).
-          cp build/bootloader/bootloader.bin              dist/bootloader.bin
-          cp build/partition_table/partition-table.bin    dist/partition-table.bin
-          cp build/observore.bin                          dist/observore.bin
+          #
+          # The offsets come from each build's flash_args, never from this
+          # file: the S3 bootloader lives at 0x0 and the C5 bootloader at
+          # 0x2000, and a manifest that assumes one of them flashes the other
+          # into a board that will not boot.
+          python3 tools/make_manifest.py \
+            --version "$TAG" --base "$BASE" \
+            --out dist/manifest.json 'dist/builds-*.json'
 
-          BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
-          cat > dist/manifest.json <<JSON
-          {
-            "name": "Observore",
-            "version": "${TAG}",
-            "new_install_prompt_erase": false,
-            "builds": [
-              {
-                "chipFamily": "ESP32-S3",
-                "parts": [
-                  { "path": "${BASE}/bootloader.bin",       "offset": 0 },
-                  { "path": "${BASE}/partition-table.bin",  "offset": 32768 },
-                  { "path": "${BASE}/observore.bin",        "offset": 65536 }
-                ]
-              }
-            ]
-          }
-          JSON
-
-          python3 -c "import json,sys; json.load(open('dist/manifest.json'))"
           ( cd dist && sha256sum *.bin manifest.json > SHA256SUMS )
           ls -l dist
 
-      - name: Attach to the release
+      - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

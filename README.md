@@ -3,7 +3,8 @@
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
-A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/),
+A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
+and the dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5),
 built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com).
 
 It tells you what is watching you. Built to sit in one place and watch that
@@ -16,8 +17,10 @@ Observer and carnivore: it eats surveillance signals.
 
 ## Getting started
 
-You need a XIAO ESP32S3 and a USB-C cable. The whole first run takes about ten
-minutes, most of it waiting.
+You need a XIAO ESP32S3 or an ESP32-C5 board and a USB-C cable. The whole first
+run takes about ten minutes, most of it waiting. The browser flasher reads which
+chip you plugged in and installs the matching build, so there is nothing to
+choose.
 
 **The quickest route is the [browser
 flasher](https://observore.forgedinfeatherstechnology.com/)** — Chrome
@@ -146,12 +149,42 @@ glasses 3, telematics 2, camera 1). The score decays one point per minute and
 each device can only re-score every 120 seconds, so one loud beacon cannot run
 it away while sustained presence keeps it lit.
 
-- **0–2 clear** — LED winks once every 5 s
-- **3–5 caution** — LED pulses once a second
-- **6+ alert** — LED flutters
+- **0–2 clear** — LED winks once every 5 s (green)
+- **3–5 caution** — LED pulses once a second (amber)
+- **6+ alert** — LED flutters (red)
+
+The rhythm is what the XIAO's single monochrome LED can say, and it is the same
+on every board. Boards with an addressable WS2812 — the C5 kits — add the
+colour on top of it. They keep the rhythm rather than sitting lit, because a
+device meant to sit unattended in a room should not also be a lit beacon
+announcing itself; colour adds a second channel of information without making
+the thing easier to spot. Brightness is deliberately low and is tunable under
+`menuconfig`.
 
 Adverts weaker than −90 dBm are discarded; they are far enough away to be
 someone else's problem and they dominate the false-positive rate.
+
+### Channels
+
+The sniffer sweeps a list of channels, not a range, because 5 GHz channel
+numbers are not contiguous.
+
+**2.4 GHz — every chip.** Channels 1–13, swept in full every patrol cycle, with
+the dwell split evenly across them. A beacon interval is typically ~102 ms, so
+anything under about 120 ms per channel starts missing APs outright; 13
+channels in a 5 s sweep leaves comfortable margin.
+
+**5 GHz — ESP32-C5 only.** Twenty-five channels across UNII-1, UNII-2A, UNII-2C
+and UNII-3. Sweeping all of them in one cycle would push the dwell under a
+beacon interval, so 5 GHz is covered **a slice of five channels per cycle**,
+advancing each sweep: 2.4 GHz stays fully covered every cycle and 5 GHz comes
+round in five. The practical consequence is latency, not blindness — a 5 GHz
+camera takes a few cycles longer to appear than a 2.4 GHz one.
+
+DFS channels are included. The radar obligations that come with them apply to
+transmitting, and this radio only ever listens. Channels the configured
+regulatory domain refuses are skipped at runtime rather than being compiled
+out, because the country setting is not known at build time.
 
 ### The radio is shared, and it shows
 
@@ -273,11 +306,12 @@ says nothing about the real cause.
 | Reason | Meaning |
 |---|---|
 | 210 | security mismatch — most often **no password stored** |
-| 201 | network not found — check the SSID, and that it is 2.4 GHz |
+| 201 | network not found — check the SSID, and that the band is one your chip has |
 | 202, 15, 204 | authentication or handshake failed — wrong password |
 | 203 | association refused — MAC filtering? |
 
-The ESP32-S3 has no 5 GHz radio, so a 5 GHz-only SSID can never be joined.
+The ESP32-S3 and C6 have no 5 GHz radio, so a 5 GHz-only SSID can never be
+joined on those chips. A C5 can join either band.
 
 ### Finding the device on your network
 
@@ -375,19 +409,39 @@ idf.py -p /dev/ttyACM0 flash monitor
 ### Other targets
 
 The reference board is the XIAO ESP32S3 and every measurement here was taken on
-it, but the firmware builds for `esp32c6` and `esp32c5` too, and CI builds all
+it. The firmware also builds for `esp32c5` and `esp32c6`, and CI builds all
 three so portability breaks surface immediately rather than months later.
 
+The **ESP32-C5 is the interesting one**, because it is dual-band: it is the only
+supported chip that can see 5 GHz at all. On a C5 the sniffer sweeps both bands
+(see [Channels](#channels)); on every other chip 5 GHz is simply invisible.
+
 Per-chip settings live in `sdkconfig.defaults.<target>`, which ESP-IDF loads on
-top of the shared `sdkconfig.defaults`. Two things differ in practice: neither
-RISC-V target has PSRAM, so the console runs on its smaller internal budget;
-and a RISC-V build is about a fifth larger than Xtensa, which is why the
+top of the shared `sdkconfig.defaults`. What differs in practice:
+
+| | XIAO ESP32S3 | ESP32-C5 | ESP32-C6 |
+|---|---|---|---|
+| Bands | 2.4 GHz | 2.4 + 5 GHz | 2.4 GHz |
+| LED | one GPIO, active low | WS2812 pixel | board-dependent |
+| LED / button GPIO | 21 / 0 | 27 / 28 | set them yourself |
+| PSRAM | 8 MB | on `R` modules only | none |
+
+A RISC-V build is about a fifth larger than Xtensa, which is why the
 application partition is sized the way it is.
 
-Those builds are compile-tested only — running Observore on a C5 or C6 has not
-been verified, and the 5 GHz radio the C5 has is not used yet. The XIAO uses
-the S3's native USB-Serial/JTAG, so it enumerates as `/dev/ttyACM0`, not
-`/dev/ttyUSB0`.
+The C5 image is built with `SPIRAM_IGNORE_NOTFOUND`, so one binary boots on
+boards with PSRAM and without: the console sizes its scratch from what it can
+actually allocate. That matters because the browser flasher cannot tell an
+`N16R8` from a module with no PSRAM at all.
+
+**On hardware verification:** the S3 is verified on real hardware continuously.
+The C5 build is complete but its radio behaviour — 5 GHz capture, and the
+BLE/Wi-Fi coexistence numbers below — has not yet been measured on a board.
+Treat the coexistence table as S3 measurements until that happens. C6 is
+compile-tested only.
+
+The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
+`/dev/ttyACM0`, not `/dev/ttyUSB0`.
 
 Everything tunable lives under `idf.py menuconfig` → **Observore**: the LED and
 button pins, the hostname, the patrol and uplink windows, the BLE duty cycle,
@@ -462,7 +516,7 @@ make -C test test
 ```
 
 CI runs these on every push, alongside the credential scan, an ESP-IDF build
-for the esp32s3, and a validation of the generated OUI table — that both tables
+for every supported target, and a validation of the generated OUI table — that both tables
 are sorted for binary search, carry no duplicates, stay disjoint from each
 other, and index only names that exist.
 
@@ -693,7 +747,8 @@ Read these before trusting it.
   address. Observore catches devices with static or slowly-rotating addresses; it
   will miss a well-behaved rotating one.
 - **Absence of evidence is not evidence of absence.** Wired cameras, cellular
-  ALPR units with the radio off, and anything on 5 GHz are invisible to it.
+  ALPR units with the radio off, and — on anything but a C5 — 5 GHz devices
+  are invisible to it.
   A clear reading means nothing was detected, not that nothing is there.
 - **Vendor prefixes identify manufacturers, not purpose.** A Ring OUI is a
   Ring device; it is a doorbell far more often than it is surveillance aimed
@@ -704,7 +759,10 @@ Read these before trusting it.
   `smart-glasses` hit as a lead.
 - **Fast Pair is noisy.** Ordinary headphones advertise `0xFE2C`. It is
   reported because Google's Find Hub trackers use it too.
-- **2.4 GHz only.** The sniffer sweeps channels 1–13.
+- **2.4 GHz only, unless you have a C5.** On every chip but the ESP32-C5 the
+  sniffer sweeps channels 1–13 and nothing above them. A C5 sweeps 5 GHz as
+  well, but a slice per cycle rather than all of it at once, so a 5 GHz device
+  takes longer to appear than a 2.4 GHz one.
 - **Vendor lookup covers MA-L only.** The IEEE also issues smaller MA-M and
   MA-S blocks, which the generator does not read, so some genuinely assigned
   prefixes resolve to nothing. A miss is reported as unknown rather than

@@ -19,17 +19,66 @@ config OBSERVORE_HOSTNAME
 
 config OBSERVORE_LED_GPIO
     int "User LED GPIO"
+    default 27 if IDF_TARGET_ESP32C5
     default 21
     help
-        The XIAO ESP32S3 user LED is GPIO21 and is active low.
+        GPIO21 is the XIAO ESP32S3 user LED.  GPIO27 is the addressable RGB LED
+        on the ESP32-C5-DevKitC-1 and on Waveshare's ESP32-C5-WIFI6-KIT, which
+        share a pinout.
+
+choice OBSERVORE_LED_KIND
+    prompt "User LED type"
+    default OBSERVORE_LED_ADDRESSABLE if IDF_TARGET_ESP32C5
+    default OBSERVORE_LED_MONO
+    help
+        Which kind of LED is on OBSERVORE_LED_GPIO.  Driving an addressable
+        pixel as a plain GPIO leaves it dark or stuck on a random colour, and
+        driving a plain LED as a pixel does nothing at all, so this has to
+        match the board.
+
+config OBSERVORE_LED_MONO
+    bool "Single-colour LED on a GPIO"
+    help
+        One monochrome LED driven directly.  Threat level is a blink rhythm,
+        because there is no colour to carry it.
+
+config OBSERVORE_LED_ADDRESSABLE
+    bool "Addressable RGB pixel (WS2812)"
+    help
+        A WS2812 or compatible pixel on a single data line.  Threat level is a
+        colour, which is legible at a glance in a way that counting flashes
+        never is.
+
+endchoice
+
+config OBSERVORE_LED_ACTIVE_LOW
+    bool "The LED is active low"
+    depends on OBSERVORE_LED_MONO
+    default y
+    help
+        True when the pin sinks the LED, so driving it low lights it -- which
+        is how the XIAO ESP32S3 is wired.  Boards that source the LED from the
+        pin want this off, otherwise the LED is lit whenever it should be dark.
+
+config OBSERVORE_LED_BRIGHTNESS
+    int "Addressable LED brightness (1-255)"
+    depends on OBSERVORE_LED_ADDRESSABLE
+    range 1 255
+    default 24
+    help
+        WS2812 pixels are painfully bright at full scale, and this device is
+        meant to sit in a room unattended.  The default is dim enough to live
+        with overnight and still be obvious in daylight.
 
 config OBSERVORE_BUTTON_GPIO
     int "Mode button GPIO"
+    default 28 if IDF_TARGET_ESP32C5
     default 0
     help
-        GPIO0 is the BOOT button on the XIAO ESP32S3, active low.  Holding it
-        while running toggles the console SoftAP; it only enters download mode
-        when held across a reset, so reusing it here is safe.
+        The BOOT button, active low: GPIO0 on the XIAO ESP32S3, GPIO28 on the
+        ESP32-C5.  Holding it while running toggles the console SoftAP; it only
+        enters download mode when held across a reset, so reusing it here is
+        safe.
 
 comment "Wi-Fi uplink -- leave blank here and set it with menuconfig or NVS"
 

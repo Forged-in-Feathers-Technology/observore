@@ -1,10 +1,25 @@
-# ESP32-C5. No PSRAM, so the console runs on its internal fallback.
-#
-# The reason to care about this target is that it is dual-band: it can see
-# 5 GHz networks, which every other supported chip is blind to.
+# ESP32-C5.  The reason to care about this target is that it is dual-band: it
+# can see 5 GHz networks, which every other supported chip is blind to.
 
 # ESP-IDF defaults this target to 2 MB, which the 3 MB application partition
 # does not fit -- the build fails at the partition table, before any code is
-# compiled. 4 MB is the smallest size found on boards for this chip and leaves
-# roughly 900 KB spare; raise it if yours has more.
+# compiled.  4 MB is the smallest size found on boards for this chip.  It is
+# deliberately the floor rather than the size of any particular board: a chip
+# with more flash boots an image configured for less, while an image configured
+# for more than the chip has does not boot at all.  The cost is unused flash on
+# a 16 MB board, which buys a single image that works everywhere.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# PSRAM is present on the R-suffixed modules (an ESP32-C5-WIFI6-KIT-N16R8 has
+# 8 MB of it) and absent on the rest, and a web flasher cannot tell which board
+# is on the other end of the cable.  IGNORE_NOTFOUND is what makes one image
+# serve both: without it, a board with no PSRAM panics at boot instead of
+# starting.  The firmware already expects this -- the console sizes its scratch
+# buffers from what it can actually allocate and falls back to a smaller
+# internal budget when PSRAM is missing.
+#
+# Note that IGNORE_NOTFOUND also pins the Wi-Fi and lwip buffer sizes to their
+# no-PSRAM defaults on every board, PSRAM or not.  That is a fair trade here:
+# the console's scratch is what wanted PSRAM, and it allocates explicitly.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
