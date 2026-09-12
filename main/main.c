@@ -43,6 +43,8 @@ static const char *TAG = "observore";
  * runs only while patrolling, so a device parked permanently on the uplink is
  * a BLE-only detector.  Alternating keeps the full sensor and still delivers
  * notifications and a reachable console. */
+static void enter_mode(observore_mode_t next);
+
 static int64_t s_mode_since_us;
 static int64_t s_next_uplink_try_us;
 static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
@@ -59,24 +61,26 @@ static void enter_mode(observore_mode_t next)
         return;
     }
 
-    observore_wifi_set_mode(next);
-    /* set_mode falls back to patrol when the uplink cannot be joined, so ask
-     * where we actually ended up rather than assuming. */
-    if (observore_wifi_mode() == OBSERVORE_MODE_PATROL) {
-        observore_led_set_console(false);
-        /* Schedule the next attempt here.  Leaving it unset meant the main
-         * loop saw a due time of zero and retried immediately, stalling the
-         * boot for a second fifteen-second timeout back to back. */
+    /* The driver applies exactly what it is asked and reports failure, so the
+     * decision about what to do instead is made here, next to the LED, the
+     * console and the retry backoff that it affects. */
+    esp_err_t err = observore_wifi_set_mode(next);
+    if (err != ESP_OK) {
+        /* Scheduling the next attempt matters: leaving it unset meant the main
+         * loop saw a due time of zero and retried immediately, stalling boot
+         * for a second fifteen-second timeout back to back. */
         s_next_uplink_try_us = esp_timer_get_time() +
                                (int64_t)CONFIG_OBSERVORE_UPLINK_RETRY_S * 1000000;
-        ESP_LOGW(TAG, "could not join the network -- patrolling, retrying in %ds",
-                 CONFIG_OBSERVORE_UPLINK_RETRY_S);
+        ESP_LOGW(TAG, "could not join the network (%s) -- patrolling, "
+                      "retrying in %ds",
+                 esp_err_to_name(err), CONFIG_OBSERVORE_UPLINK_RETRY_S);
+        enter_mode(OBSERVORE_MODE_PATROL);
         return;
     }
 
     observore_web_start();
     observore_led_set_console(true);
-    if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
+    if (next == OBSERVORE_MODE_UPLINK) {
         ESP_LOGI(TAG, "console at http://%s/ or http://%s/ on your network",
                  observore_wifi_uplink_ip(), observore_wifi_hostname());
     } else {

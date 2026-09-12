@@ -36,7 +36,11 @@ bool observore_wifi_uplink_connected(void);
 
 esp_err_t observore_wifi_init(void);
 
-/* Switch modes.  Safe to call with the mode already active (no-op). */
+/* Switch modes.  Safe to call with the mode already active (no-op).
+ *
+ * Applies exactly the mode requested.  A failed uplink join returns the error
+ * rather than silently falling back, so the caller -- which owns the LED, the
+ * console and the retry backoff -- decides what happens next. */
 esp_err_t observore_wifi_set_mode(observore_mode_t mode);
 observore_mode_t observore_wifi_mode(void);
 
