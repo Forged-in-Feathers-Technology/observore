@@ -20,7 +20,7 @@ You need a XIAO ESP32S3 and a USB-C cable. The whole first run takes about ten
 minutes, most of it waiting.
 
 **The quickest route is the [browser
-flasher](https://forged-in-feathers-technology.github.io/observore/)** — Chrome
+flasher](https://observore.forgedinfeatherstechnology.com/)** — Chrome
 or Edge on a desktop, no toolchain. It writes the firmware without touching the
 stored configuration, so it upgrades an existing device without losing its mute
 rules, credentials or console password. Skip to step 2 below once it finishes.
