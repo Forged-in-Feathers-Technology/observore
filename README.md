@@ -315,6 +315,49 @@ says nothing about the real cause.
 The ESP32-S3 and C6 have no 5 GHz radio, so a 5 GHz-only SSID can never be
 joined on those chips. A C5 can join either band.
 
+### Provisioning from the browser (Improv)
+
+The quickest way onto a network is to let the browser that just flashed the
+device also configure it, over the same USB cable, using
+[Improv Serial](https://www.improv-wifi.com/serial/). The
+[flasher page](https://observore.forgedinfeatherstechnology.com/) offers it
+straight after installing.
+
+That matters more than convenience. The console password is printed on the
+serial log and nowhere else, so **a device you flash for somebody else is a
+device they cannot configure** — they have no way to read the password, so
+they cannot join the setup SoftAP, so they cannot enter their Wi-Fi. Improv
+removes the password from the setup path entirely: it is still needed to open
+the console later, but no longer to get the device onto a network.
+
+From a terminal, without a browser:
+
+```bash
+tools/improv_client.py --port /dev/ttyACM0 info
+tools/improv_client.py --port /dev/ttyACM0 provision --ssid MyAP --password secret
+```
+
+Three things worth knowing:
+
+- **Serial only, deliberately.** Improv also defines a BLE transport, and it is
+  the wrong choice here: it would make a counter-surveillance detector
+  advertise. This one only answers on a cable somebody has physically plugged
+  in.
+- **Both USB sockets work on a C5.** The console can only *read* from one of
+  them — ESP-IDF's secondary console is output-only — so the firmware listens
+  on the USB peripheral directly as well as on the console. Whichever socket
+  you used to flash is the one that provisions.
+- **A failed join costs nothing.** Credentials must be stored before the
+  station can try them, so a mistyped password would otherwise replace a
+  working network with a broken one. The previous network is put back if the
+  join fails.
+
+The offered network list comes from the patrol sweep that is already running,
+rather than from a scan started on demand — this chip has one radio, and a scan
+requested here would fight the sweep for it. An unconfigured device patrols, so
+the list fills within a cycle of boot; before that first sweep completes the
+list is empty and the SSID can be typed instead.
+
 ### Finding the device on your network
 
 Observore offers the name **`observore`** (configurable as

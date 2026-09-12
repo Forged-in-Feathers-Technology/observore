@@ -14,6 +14,7 @@ idf_component_register(
         "observore_wifi.c"
         "observore_web.c"
         "observore_led.c"
+        "observore_improv.c"
     INCLUDE_DIRS "."
     REQUIRES
         bt
@@ -26,6 +27,7 @@ idf_component_register(
         esp-tls
         esp_http_client
         esp_wifi
+        app_update
         nvs_flash
     EMBED_FILES "www/index.html"
 )
