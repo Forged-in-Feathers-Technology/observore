@@ -12,6 +12,7 @@
 #include "argus_led.h"
 #include "argus_mute.h"
 #include "argus_netcfg.h"
+#include "argus_notify.h"
 #include "argus_track.h"
 #include "argus_web.h"
 #include "argus_wifi.h"
@@ -123,6 +124,7 @@ void app_main(void)
     ESP_ERROR_CHECK(argus_wifi_init());
     argus_mute_init();
     argus_netcfg_init();
+    argus_notify_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", argus_mute_count());
     ESP_ERROR_CHECK(argus_ble_start());
 
@@ -160,6 +162,7 @@ void app_main(void)
         size_t n = argus_track_drain_new(found, sizeof(found) / sizeof(found[0]));
         for (size_t i = 0; i < n; i++) {
             const argus_event_t *e = &found[i];
+            argus_notify_event(e);
             ESP_LOGW(TAG,
                      "%-16s %02X:%02X:%02X:%02X:%02X:%02X %4d dBm  via %-10s "
                      "%-13s  %s%s%s",
@@ -179,19 +182,25 @@ void app_main(void)
             ESP_LOGW(TAG, "%s -> %s (score %u, %u devices)",
                      argus_level_name(last_level), argus_level_name(st.level),
                      st.score, st.device_count);
+            argus_notify_level(last_level, st.level, st.score);
             last_level = st.level;
         }
+
+        /* Queued notices go out here, so a detection made while patrolling is
+         * delivered the next time the uplink is up rather than lost. */
+        argus_notify_pump();
 
         /* Heartbeat.  Without it, "nothing is out there" and "the radio is
          * not running" produce identical output: silence. */
         if (now - last_heartbeat_us >= HEARTBEAT_US) {
             last_heartbeat_us = now;
             ESP_LOGI(TAG, "%s | score %u | %u devices | %" PRIu32 " sightings | "
-                          "%" PRIu32 "/%" PRIu32 " frames | heap %u free, "
+                          "%" PRIu32 "/%" PRIu32 " frames | %zu queued | "
+                          "heap %u free, "
                           "%u min, %u largest",
                      argus_level_name(st.level), st.score, st.device_count,
                      st.total_sightings, argus_wifi_sniffed_frames(),
-                     argus_wifi_sniffer_calls(),
+                     argus_wifi_sniffer_calls(), argus_notify_pending(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));

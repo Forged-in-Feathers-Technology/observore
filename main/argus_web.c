@@ -5,6 +5,7 @@
 
 #include "argus_mute.h"
 #include "argus_netcfg.h"
+#include "argus_notify.h"
 #include "argus_track.h"
 #include "argus_web.h"
 #include "argus_wifi.h"
@@ -502,6 +503,72 @@ static esp_err_t baseline_handler(httpd_req_t *req)
     return send_json(req, body);
 }
 
+static esp_err_t notify_get_handler(httpd_req_t *req)
+{
+    char url[ARGUS_NOTIFY_URL_LEN] = {0};
+    bool set = argus_notify_url(url, sizeof(url));
+    char escaped[ARGUS_NOTIFY_URL_LEN * 2];
+    json_escape(url, escaped, sizeof(escaped));
+    char err[144];
+    json_escape(argus_notify_last_error(), err, sizeof(err));
+
+    char body[ARGUS_NOTIFY_URL_LEN * 2 + sizeof(err) + 256];
+    /* The token is absent by design, exactly like the Wi-Fi password. */
+    snprintf(body, sizeof(body),
+             "{\"configured\":%s,\"url\":\"%s\",\"sent\":%" PRIu32 ","
+             "\"failed\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"queued\":%zu,"
+             "\"can_send\":%s,\"error\":\"%s\"}",
+             set ? "true" : "false", escaped, argus_notify_sent(),
+             argus_notify_failed(), argus_notify_dropped(),
+             argus_notify_pending(),
+             argus_wifi_mode() == ARGUS_MODE_UPLINK ? "true" : "false", err);
+    return send_json(req, body);
+}
+
+static esp_err_t notify_set_handler(httpd_req_t *req)
+{
+    char value[16];
+    if (query_param(req, "clear", value, sizeof(value))) {
+        argus_notify_clear();
+        return send_json(req, "{\"ok\":true}");
+    }
+    if (query_param(req, "test", value, sizeof(value))) {
+        if (argus_wifi_mode() != ARGUS_MODE_UPLINK) {
+            return fail(req, "a test needs the uplink -- the SoftAP has no "
+                             "route to your server");
+        }
+        esp_err_t err = argus_notify_test();
+        if (err == ESP_ERR_INVALID_STATE) {
+            return fail(req, "no server configured");
+        }
+        if (err != ESP_OK) {
+            return fail(req, argus_notify_last_error());
+        }
+        return send_json(req, "{\"ok\":true}");
+    }
+
+    char url[ARGUS_NOTIFY_URL_LEN] = {0};
+    char token[ARGUS_NOTIFY_TOKEN_LEN] = {0};
+    if (!query_param(req, "url", url, sizeof(url))) {
+        return fail(req, "url is required");
+    }
+    query_param(req, "token", token, sizeof(token));
+
+    esp_err_t err = argus_notify_set(url, token);
+    memset(token, 0, sizeof(token));
+    if (err == ESP_ERR_INVALID_ARG) {
+        return fail(req, "url must start with http:// or https://");
+    }
+    if (err == ESP_ERR_INVALID_SIZE) {
+        return fail(req, "url or token is too long");
+    }
+    if (err != ESP_OK) {
+        return fail(req, "could not store the notifier settings");
+    }
+    ESP_LOGI(TAG, "notifier set to %s", url);
+    return send_json(req, "{\"ok\":true}");
+}
+
 static esp_err_t clear_handler(httpd_req_t *req)
 {
     argus_track_clear();
@@ -527,6 +594,8 @@ esp_err_t argus_web_start(void)
         {.uri = "/api/baseline", .method = HTTP_POST, .handler = baseline_handler},
         {.uri = "/api/netcfg",   .method = HTTP_GET,  .handler = netcfg_get_handler},
         {.uri = "/api/netcfg",   .method = HTTP_POST, .handler = netcfg_set_handler},
+        {.uri = "/api/notify",   .method = HTTP_GET,  .handler = notify_get_handler},
+        {.uri = "/api/notify",   .method = HTTP_POST, .handler = notify_set_handler},
     };
     if (!scratch_alloc()) {
         return ESP_ERR_NO_MEM;

@@ -14,7 +14,7 @@
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    padding: 16px; max-width: 900px; margin-inline: auto;
+    padding: 16px 20px; max-width: min(1680px, 97vw); margin-inline: auto;
   }
   header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
   h1 { font-size: 18px; margin: 0; letter-spacing: 0.12em; text-transform: uppercase; }
@@ -36,6 +36,10 @@
   .stats b { color: var(--fg); font-weight: 600; }
   .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
   table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  /* Let the name and MAC breathe on a wide screen; everything else stays
+     as narrow as its content. */
+  td:first-child, th:first-child { width: 1%; }
+  .grow { width: auto; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th { background: var(--panel); color: var(--dim); font-weight: 600; font-size: 11px;
        text-transform: uppercase; letter-spacing: 0.06em; position: sticky; top: 0; }
@@ -124,6 +128,24 @@
       <tbody id="nearbyrows"></tbody>
     </table>
   </div>
+</div>
+
+<div class="panel">
+  <h2>Notifications <span id="notifyinfo" class="dim"></span></h2>
+  <div class="add">
+    <input id="gurl" placeholder="https://gotify.example.com" autocomplete="off"
+           style="min-width:280px">
+    <input id="gtoken" type="password" placeholder="application token"
+           autocomplete="new-password">
+    <button id="gsave">Save</button>
+    <button id="gtest" class="mini">Send test</button>
+    <button id="gclear" class="mini">Forget</button>
+  </div>
+  <p class="note" id="gnote">
+    Pushes to a Gotify server. Detections found while patrolling are queued and
+    delivered the next time the uplink is up &mdash; the SoftAP has no route to
+    your server, so sending only works while joined to your network.
+  </p>
 </div>
 
 <div class="panel">
@@ -304,6 +326,19 @@ async function refresh() {
       nrows.appendChild(tr);
     }
 
+    const nt = await getJSON('/api/notify', { configured: false });
+    $('notifyinfo').textContent = nt.configured
+      ? '— ' + nt.url + ' · ' + nt.sent + ' sent' +
+        (nt.queued ? ', ' + nt.queued + ' queued' : '') +
+        (nt.failed ? ', ' + nt.failed + ' failed' : '') +
+        (nt.dropped ? ', ' + nt.dropped + ' dropped' : '') +
+        (nt.error ? ' · last error: ' + nt.error : '') +
+        (nt.can_send ? '' : ' · not sending (needs uplink)')
+      : '— none configured';
+    if (nt.configured && !$('gurl').matches(':focus')) {
+      $('gurl').placeholder = nt.url;
+    }
+
     const net = await getJSON('/api/netcfg',
       { configured: false, ssid: '', ip: '' });
     $('netinfo').textContent = net.configured
@@ -347,6 +382,32 @@ async function refresh() {
       : 'updated ' + new Date().toLocaleTimeString();
   }
 }
+
+async function notifyPost(q, okMsg) {
+  try {
+    const out = await fetch('/api/notify?' + q, { method: 'POST' })
+      .then(r => r.json());
+    $('gnote').textContent = out.ok ? okMsg : 'failed: ' + out.error;
+  } catch (e) {
+    $('gnote').textContent = 'failed: ' + e.message;
+  }
+  refresh();
+}
+
+$('gsave').addEventListener('click', () => {
+  const url = $('gurl').value.trim();
+  if (!url) { $('gnote').textContent = 'enter a server URL'; return; }
+  const q = 'url=' + encodeURIComponent(url) +
+            '&token=' + encodeURIComponent($('gtoken').value);
+  $('gtoken').value = '';   // never leave a token sitting in the DOM
+  notifyPost(q, 'saved — use Send test while on the uplink');
+});
+$('gtest').addEventListener('click', () => notifyPost('test=1', 'test sent'));
+$('gclear').addEventListener('click', () => {
+  $('gurl').value = '';
+  $('gurl').placeholder = 'https://gotify.example.com';
+  notifyPost('clear=1', 'notifier forgotten');
+});
 
 $('netsave').addEventListener('click', async () => {
   const ssid = $('ssid').value.trim();

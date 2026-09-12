@@ -295,6 +295,38 @@ MAC rules. A minute later, after rotation, the score was still zero.
 
 Up to 128 rules are stored, in NVS, surviving reboots.
 
+## Notifications
+
+Argus pushes to a [Gotify](https://gotify.net/) server. Configure it in the
+console's **Notifications** panel, or:
+
+```
+GET  /api/notify
+POST /api/notify?url=https://gotify.example.com&token=YOUR_APP_TOKEN
+POST /api/notify?test=1
+POST /api/notify?clear=1
+```
+
+It POSTs `{"title","message","priority"}` to `<url>/message` with the token in
+an `X-Gotify-Key` header. Priority is mapped from what was found: 8 for a
+bodycam or ALPR, 7 for a follower or tracker, 5 for a drone or smart glasses,
+2 for a camera. Escalations of the overall threat level are pushed too; drops
+are not, because an alert that clears is not news.
+
+The token is stored in NVS and is **write-only** from outside the device — no
+endpoint returns it, exactly like the Wi-Fi password.
+
+**Sending needs the uplink.** Detections happen during patrol, which has no
+network, so notices are queued and flushed the next time you are joined to your
+network. The queue holds 24 and drops the oldest when full: a detector that
+stops noticing new things because its outbox is full would be worse than one
+that loses the oldest notice. A failed send stays queued and is retried rather
+than discarded.
+
+The console shows sent, queued, failed and dropped counts, plus the last
+transport error — a `401 (bad token)` is reported as such rather than as a bare
+number.
+
 ## A note on internal RAM
 
 The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,

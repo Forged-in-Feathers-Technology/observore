@@ -5,6 +5,7 @@ idf_component_register(
         "argus_track.c"
         "argus_mute.c"
         "argus_netcfg.c"
+        "argus_notify.c"
         "argus_ble.c"
         "argus_wifi.c"
         "argus_web.c"
@@ -17,6 +18,8 @@ idf_component_register(
         esp_http_server
         esp_netif
         esp_timer
+        esp-tls
+        esp_http_client
         esp_wifi
         nvs_flash
     EMBED_FILES "www/index.html"

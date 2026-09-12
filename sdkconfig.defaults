@@ -45,3 +45,8 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # See README, "Joining your network".
 CONFIG_ARGUS_WIFI_SSID=""
 CONFIG_ARGUS_WIFI_PASSWORD=""
+
+# Gotify pushes go over TLS to whatever host you run, so the Mozilla root
+# bundle is compiled in rather than pinning a single certificate.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
