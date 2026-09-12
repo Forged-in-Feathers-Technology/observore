@@ -17,6 +17,12 @@
 static const char *TAG = "observore.web";
 
 static httpd_handle_t s_server;
+static int64_t        s_last_request_us;
+
+int64_t observore_web_last_request_us(void)
+{
+    return s_last_request_us;
+}
 
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
@@ -96,6 +102,7 @@ static void json_escape(const char *in, char *out, size_t out_len)
 
 static esp_err_t send_json(httpd_req_t *req, const char *body)
 {
+    s_last_request_us = esp_timer_get_time();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_sendstr(req, body);
@@ -103,6 +110,7 @@ static esp_err_t send_json(httpd_req_t *req, const char *body)
 
 static esp_err_t index_handler(httpd_req_t *req)
 {
+    s_last_request_us = esp_timer_get_time();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, (const char *)index_html_start,
                            index_html_end - index_html_start - 1);

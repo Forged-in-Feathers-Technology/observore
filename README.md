@@ -102,16 +102,34 @@ that is where a network gets configured. The firmware logs how long it saw the
 button held, so a press a shade too short is distinguishable from a button that
 is not responding.
 
-### Uplink is the resting state
+### Patrol and uplink alternate
 
-Once a network is configured, Observore joins it at boot and returns to it on its
-own: a lost association reconnects, and if it stays down past
-`OBSERVORE_UPLINK_GRACE_S` (45 s) it patrols instead and retries every
-`OBSERVORE_UPLINK_RETRY_S` (5 minutes). Carry it out and it patrols; come home and
-it rejoins by itself and flushes whatever it queued while away.
+**All Wi-Fi detection — the access-point scan and the promiscuous sniff both —
+runs only while patrolling.** A device parked permanently on the uplink is a
+BLE-only detector: no Remote ID drones, no hidden access points. So Observore
+alternates.
 
-Choosing patrol with the button suppresses the automatic return until you
-select uplink again — an explicit choice is not second-guessed.
+| Setting | Default | Meaning |
+|---|---|---|
+| `OBSERVORE_PATROL_WINDOW_S` | 120 s | patrolling, full sensor |
+| `OBSERVORE_UPLINK_WINDOW_S` | 30 s | on your network, pushing and serving |
+| `OBSERVORE_UPLINK_MAX_S` | 180 s | hard ceiling on one uplink visit |
+| `OBSERVORE_CONSOLE_IDLE_S` | 45 s | console silence before the window may close |
+| `OBSERVORE_UPLINK_GRACE_S` | 45 s | tolerate a dropped uplink before patrolling |
+| `OBSERVORE_UPLINK_RETRY_S` | 300 s | backoff after a *failed* join |
+
+The uplink window is held open while somebody is reading the console, so you
+are never cut off mid-page — but only up to `OBSERVORE_UPLINK_MAX_S`. The
+console page polls every two seconds, so a tab left open would otherwise keep
+the device on the uplink indefinitely. **A user interface must not be able to
+blind the detector**, so the hold has a hard ceiling.
+
+The console is therefore reachable within about two minutes rather than
+continuously. If it does not answer, it is patrolling; wait, or hold the button
+to bring it up now.
+
+The button means "switch now" and alternation continues from there, so a single
+press can never strand the device in a mode it will not leave.
 
 ## Joining your network
 

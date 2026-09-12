@@ -37,13 +37,18 @@ static const char *TAG = "observore";
 #define BUTTON_POLL_MS     50
 #define HEARTBEAT_US       (15 * 1000000LL)
 
-/* Set when patrol was chosen deliberately.  An explicit choice is not
- * second-guessed by the automatic return to uplink. */
-static bool s_patrol_by_choice;
+/* Observore alternates between patrolling and being on the network.  All
+ * Wi-Fi detection -- the access-point scan and the promiscuous sniff both --
+ * runs only while patrolling, so a device parked permanently on the uplink is
+ * a BLE-only detector.  Alternating keeps the full sensor and still delivers
+ * notifications and a reachable console. */
+static int64_t s_mode_since_us;
 static int64_t s_next_uplink_try_us;
 
 static void enter_mode(observore_mode_t next)
 {
+    s_mode_since_us = esp_timer_get_time();
+
     if (next == OBSERVORE_MODE_PATROL) {
         observore_web_stop();
         observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
@@ -89,12 +94,13 @@ static void toggle_mode(void)
                                                            : OBSERVORE_MODE_CONSOLE);
         return;
     }
+    /* The button means "switch now"; alternation carries on from there rather
+     * than being disabled, so one press can never strand the device in a mode
+     * it will not leave. */
     if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
-        s_patrol_by_choice = true;
         enter_mode(OBSERVORE_MODE_PATROL);
     } else {
-        s_patrol_by_choice = false;
-        s_next_uplink_try_us = 0;
+        s_next_uplink_try_us = 0;   /* an explicit ask clears any backoff */
         enter_mode(OBSERVORE_MODE_UPLINK);
     }
 }
@@ -225,49 +231,71 @@ void app_main(void)
          * delivered the next time the uplink is up rather than lost. */
         observore_notify_pump();
 
-        /* Uplink is the resting state once a network is configured.  Come back
-         * to it by itself after a drop or a failed join, unless patrol was
-         * chosen deliberately. */
-        if (observore_netcfg_is_set() && !s_patrol_by_choice) {
-            if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK &&
-                !observore_wifi_uplink_connected()) {
-                if (uplink_lost_us == 0) {
-                    uplink_lost_us = now;
-                } else if (now - uplink_lost_us >
-                           (int64_t)CONFIG_OBSERVORE_UPLINK_GRACE_S * 1000000) {
-                    /* No network and no sniffer is the worst of both. */
-                    ESP_LOGW(TAG, "uplink down for %ds -- patrolling",
-                             CONFIG_OBSERVORE_UPLINK_GRACE_S);
-                    uplink_lost_us = 0;
-                    s_next_uplink_try_us =
-                        now + (int64_t)CONFIG_OBSERVORE_UPLINK_RETRY_S * 1000000;
-                    enter_mode(OBSERVORE_MODE_PATROL);
-                }
-            } else if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
-                uplink_lost_us = 0;
-            } else if (observore_wifi_mode() == OBSERVORE_MODE_PATROL &&
-                       now >= s_next_uplink_try_us) {
-                ESP_LOGI(TAG, "retrying the uplink");
-                s_next_uplink_try_us =
-                    now + (int64_t)CONFIG_OBSERVORE_UPLINK_RETRY_S * 1000000;
-                enter_mode(OBSERVORE_MODE_UPLINK);
-            }
-        }
-
-        /* Heartbeat.  Without it, "nothing is out there" and "the radio is
-         * not running" produce identical output: silence. */
         if (now - last_heartbeat_us >= HEARTBEAT_US) {
             last_heartbeat_us = now;
-            ESP_LOGI(TAG, "%s | score %u | %u devices | %" PRIu32 " sightings | "
-                          "%" PRIu32 "/%" PRIu32 " frames | %zu queued | "
-                          "heap %u free, "
-                          "%u min, %u largest",
+            ESP_LOGI(TAG, "%s | %s | score %u | %u devices | %" PRIu32
+                          " sightings | %" PRIu32 "/%" PRIu32 " frames | "
+                          "%zu queued | heap %u free, %u min, %u largest",
+                     observore_mode_name(observore_wifi_mode()),
                      observore_level_name(st.level), st.score, st.device_count,
                      st.total_sightings, observore_wifi_sniffed_frames(),
                      observore_wifi_sniffer_calls(), observore_notify_pending(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        }
+
+        /* Alternate patrol and uplink.  Console mode is never alternated out
+         * of: it is chosen deliberately, usually because the network is not
+         * reachable and the SoftAP is the only way in. */
+        if (observore_netcfg_is_set() &&
+            observore_wifi_mode() != OBSERVORE_MODE_CONSOLE) {
+            int64_t in_mode = now - s_mode_since_us;
+
+            if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
+                if (!observore_wifi_uplink_connected()) {
+                    if (uplink_lost_us == 0) {
+                        uplink_lost_us = now;
+                    } else if (now - uplink_lost_us >
+                               (int64_t)CONFIG_OBSERVORE_UPLINK_GRACE_S * 1000000) {
+                        ESP_LOGW(TAG, "uplink down for %ds -- patrolling",
+                                 CONFIG_OBSERVORE_UPLINK_GRACE_S);
+                        uplink_lost_us = 0;
+                        s_next_uplink_try_us =
+                            now + (int64_t)CONFIG_OBSERVORE_UPLINK_RETRY_S * 1000000;
+                        enter_mode(OBSERVORE_MODE_PATROL);
+                    }
+                } else {
+                    uplink_lost_us = 0;
+                    int64_t idle = now - observore_web_last_request_us();
+                    bool console_in_use =
+                        observore_web_last_request_us() != 0 &&
+                        idle < (int64_t)CONFIG_OBSERVORE_CONSOLE_IDLE_S * 1000000;
+                    /* Hold the window open while the console is being read,
+                     * but only so far.  The page polls every two seconds, so
+                     * a tab left open would otherwise keep the device on the
+                     * uplink forever -- and on the uplink it does no Wi-Fi
+                     * detection at all.  A user interface must not be able to
+                     * blind the detector indefinitely, so the hold has a hard
+                     * ceiling. */
+                    bool overdue =
+                        in_mode >= (int64_t)CONFIG_OBSERVORE_UPLINK_MAX_S * 1000000;
+                    bool window_done =
+                        in_mode >= (int64_t)CONFIG_OBSERVORE_UPLINK_WINDOW_S * 1000000;
+
+                    if (overdue || (window_done && !console_in_use &&
+                                    observore_notify_pending() == 0)) {
+                        ESP_LOGI(TAG, "uplink window done (%llds%s) -- patrolling",
+                                 (long long)(in_mode / 1000000),
+                                 overdue ? ", capped" : "");
+                        enter_mode(OBSERVORE_MODE_PATROL);
+                    }
+                }
+            } else if (now >= s_next_uplink_try_us &&
+                       in_mode >= (int64_t)CONFIG_OBSERVORE_PATROL_WINDOW_S * 1000000) {
+                ESP_LOGI(TAG, "patrol window done -- visiting the uplink");
+                enter_mode(OBSERVORE_MODE_UPLINK);
+            }
         }
 
         if (observore_wifi_mode() == OBSERVORE_MODE_PATROL) {

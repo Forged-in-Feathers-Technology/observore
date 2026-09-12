@@ -48,18 +48,52 @@ config OBSERVORE_WIFI_AUTOJOIN
         only on demand.  If the network cannot be joined, Observore falls back to
         patrol rather than sitting associated to nothing.
 
+config OBSERVORE_PATROL_WINDOW_S
+    int "Seconds spent patrolling before visiting the uplink"
+    default 120
+    range 20 3600
+    help
+        Observore is built to sit in one place, and all Wi-Fi detection -- the
+        access-point scan and the promiscuous sniff both -- runs only while
+        patrolling.  A device parked permanently on the uplink is a BLE-only
+        detector, which gives up Remote ID drone and hidden-AP detection
+        entirely.  So it alternates: patrol for this long, then join the
+        network briefly to push what it found.
+
+config OBSERVORE_UPLINK_WINDOW_S
+    int "Seconds spent on the uplink before returning to patrol"
+    default 30
+    range 10 3600
+    help
+        Long enough to flush queued notifications.  The window is held open
+        while somebody is actually reading the console, so browsing is never
+        cut off mid-page.
+
+config OBSERVORE_UPLINK_MAX_S
+    int "Hard ceiling on one uplink visit (seconds)"
+    default 180
+    range 30 3600
+    help
+        The uplink window is extended while the console is being read, and the
+        page polls every two seconds -- so a browser tab left open would keep
+        the device on the uplink indefinitely, where it does no Wi-Fi detection
+        at all.  Past this, it returns to patrol regardless.  A user interface
+        must not be able to blind the detector.
+
+config OBSERVORE_CONSOLE_IDLE_S
+    int "Seconds of console silence before the uplink window may close"
+    default 45
+    range 5 600
+
 config OBSERVORE_UPLINK_RETRY_S
-    int "Seconds between attempts to regain the uplink"
+    int "Backoff after a failed uplink join (seconds)"
     default 300
     range 30 3600
     help
-        When the network is configured, uplink is the resting state.  After a
-        failed join or a lost association Observore patrols instead, and retries
-        the uplink on this interval so it rejoins by itself when you come back
-        into range -- which is what delivers any notices queued while away.
-
-        Choosing patrol with the button suppresses this until you select
-        uplink again: an explicit choice is not second-guessed.
+        A join that fails costs the connect timeout, so after a failure the
+        next attempt waits this long rather than retrying every patrol window
+        and spending a fifteen-second stall each time.  A successful join
+        resumes the ordinary alternation.
 
 config OBSERVORE_UPLINK_GRACE_S
     int "Seconds to tolerate a dropped uplink before patrolling"
