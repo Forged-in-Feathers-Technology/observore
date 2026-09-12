@@ -434,11 +434,37 @@ boards with PSRAM and without: the console sizes its scratch from what it can
 actually allocate. That matters because the browser flasher cannot tell an
 `N16R8` from a module with no PSRAM at all.
 
-**On hardware verification:** the S3 is verified on real hardware continuously.
-The C5 build is complete but its radio behaviour — 5 GHz capture, and the
-BLE/Wi-Fi coexistence numbers below — has not yet been measured on a board.
-Treat the coexistence table as S3 measurements until that happens. C6 is
-compile-tested only.
+**On hardware verification:** the S3 and the C5 are both verified on real
+hardware. C6 is compile-tested only.
+
+The C5 was verified on a Waveshare ESP32-C5-WIFI6-KIT-N16R8, flashed with the
+released artifacts rather than a local build, so the release pipeline is
+covered too. Confirmed working: 8 MB PSRAM detected and tested, dual-band scan,
+BLE passive scan, Wi-Fi uplink, mDNS, the web console including a 6 KB
+`/api/nearby` response, and Set baseline.
+
+The WS2812 and the button were checked directly rather than assumed. The pixel
+was driven through a known red-green-blue sequence and observed in that order,
+which rules out the failure actually worth worrying about: blue is the third
+byte in both RGB and GRB ordering, so a wrong colour format looks *correct* on
+blue while silently swapping red and green — an alert would show green. It does
+not. The BOOT button on GPIO28 reads high at rest and low when pressed.
+
+**The dual-band result, measured in an ordinary flat:**
+
+| | 2.4 GHz APs | 5 GHz APs | total |
+|---|---|---|---|
+| XIAO ESP32S3 | 15 | — | 15 |
+| ESP32-C5 | 12–15 | 15–17 | 27–30 |
+
+Slightly more than double, and the 2.4 GHz counts agree between the two chips,
+which is what makes the extra APs credible rather than an artefact. Everything
+in the 5 GHz column was previously invisible to this project.
+
+The BLE/Wi-Fi coexistence table below is still an S3 measurement. At the
+default 60/160 duty the C5 sniffed a comparable number of management frames per
+sweep, so the shape carries over, but the table has not been re-measured
+point-by-point on that chip.
 
 The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
 `/dev/ttyACM0`, not `/dev/ttyUSB0`.
