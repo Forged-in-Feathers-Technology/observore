@@ -13,8 +13,7 @@ static void mute_save(void) {}
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "nvs.h"
-#include "nvs_flash.h"
+#include "observore_nvs.h"
 
 static const char *TAG = "observore.mute";
 static SemaphoreHandle_t s_lock;
@@ -22,8 +21,6 @@ static SemaphoreHandle_t s_lock;
 #define MUTE_UNLOCK() xSemaphoreGiveRecursive(s_lock)
 
 #include "observore_nvs.h"
-#define NVS_NAMESPACE OBSERVORE_NVS_NAMESPACE
-#define NVS_KEY       "mutes"
 #endif
 
 static observore_mute_rule_t s_rules[OBSERVORE_MUTE_MAX];
@@ -37,45 +34,35 @@ static uint32_t          s_suppressed;
 #ifndef OBSERVORE_HOST_TEST
 static void mute_load(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
-        return;  /* nothing stored yet -- not an error */
-    }
-    size_t len = sizeof(s_rules);
-    esp_err_t err = nvs_get_blob(h, NVS_KEY, s_rules, &len);
-    nvs_close(h);
+    observore_nvs_item_t item = {.key = "mutes", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = s_rules, .len = sizeof(s_rules)};
+    observore_nvs_read(&item, 1);
 
-    if (err == ESP_OK && len % sizeof(observore_mute_rule_t) == 0) {
-        s_count = len / sizeof(observore_mute_rule_t);
-        if (s_count > OBSERVORE_MUTE_MAX) {
-            s_count = OBSERVORE_MUTE_MAX;
-        }
-        ESP_LOGI(TAG, "loaded %zu mute rules", s_count);
-    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+    if (!item.found) {
+        return;
+    }
+    if (item.len % sizeof(observore_mute_rule_t) != 0) {
         /* A short or corrupt blob would otherwise be read as garbage rules
          * that silently suppress real detections. */
-        ESP_LOGW(TAG, "discarding stored mutes: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "discarding a stored mute list of %zu bytes, which is "
+                      "not a whole number of rules", item.len);
         memset(s_rules, 0, sizeof(s_rules));
         s_count = 0;
+        return;
     }
+    s_count = item.len / sizeof(observore_mute_rule_t);
+    if (s_count > OBSERVORE_MUTE_MAX) {
+        s_count = OBSERVORE_MUTE_MAX;
+    }
+    ESP_LOGI(TAG, "loaded %zu mute rules", s_count);
 }
 
 static void mute_save(void)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return;
-    }
-    err = nvs_set_blob(h, NVS_KEY, s_rules, s_count * sizeof(observore_mute_rule_t));
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to persist mutes: %s", esp_err_to_name(err));
-    }
+    const observore_nvs_item_t item = {
+        .key = "mutes", .type = OBSERVORE_NVS_BLOB, .buf = s_rules,
+        .len = s_count * sizeof(observore_mute_rule_t)};
+    observore_nvs_write(&item, 1);
 }
 #endif
 
