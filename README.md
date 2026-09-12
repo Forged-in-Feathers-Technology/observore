@@ -630,6 +630,21 @@ trailing slashes, header names, body encoding, and the priority mapping. The
 Pushover body is form-encoded, so an advertised device name containing `&`
 cannot inject a field — there is a test for exactly that.
 
+## Partition layout
+
+`partitions.csv` keeps `nvs` and `phy_init` at exactly the offsets ESP-IDF's
+`partitions_singleapp_large` used, and grows only the application partition,
+which is last. A device flashed with this table therefore keeps everything it
+has stored — the mute rules, the Wi-Fi credentials, the notifier token and its
+generated console password all live in `nvs` at `0x9000` and are untouched.
+
+The old 1500 KB application partition was sized for the ESP32-S3, where the
+firmware is about 1.24 MB. The same source built for a RISC-V target is roughly
+a fifth larger — 1.49 MB on the C6 — which overflowed it by 27 KB and failed
+the build outright. Rather than trimming features to fit, the table now claims
+some of the flash that was sitting unused: it previously described 1.5 MB of an
+8 MB part.
+
 ## A note on internal RAM
 
 The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,

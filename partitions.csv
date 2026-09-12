@@ -1,0 +1,23 @@
+# Observore partition table.
+#
+# The offsets of nvs and phy_init are deliberately identical to ESP-IDF's
+# partitions_singleapp_large.csv, which is what earlier firmware used. Only the
+# application partition grows, and it is last -- so a device flashed with this
+# table keeps every stored setting: the mute rules, the Wi-Fi credentials, the
+# notifier token and the generated console password all live in nvs at 0x9000
+# and are not touched.
+#
+# The old 1500K application partition was sized for the ESP32-S3, where the
+# firmware is about 1.24 MB. The same source compiled for a RISC-V target is
+# roughly a fifth larger -- 1.49 MB on the C6 -- which overflowed that
+# partition by 27 KB and made the build fail outright. Rather than trimming
+# features to fit, this claims some of the flash that was sitting unused: the
+# table previously described 1.5 MB of an 8 MB part.
+#
+# 3M leaves room for growth on every supported target and still fits a 4 MB
+# board, which many C6 and C5 development kits are.
+#
+# Name,     Type, SubType, Offset,   Size, Flags
+nvs,        data, nvs,     0x9000,   24K,
+phy_init,   data, phy,     0xf000,   4K,
+factory,    app,  factory, 0x10000,  3M,
