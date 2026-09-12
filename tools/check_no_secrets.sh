@@ -25,6 +25,34 @@ fi
 status=0
 for f in $files; do
     [[ -f "$f" ]] || continue
+
+    # A real generated console password, pasted into documentation.
+    #
+    # This is not hypothetical: the README and the flasher page both once
+    # carried a live device's SoftAP name and WPA2 key, because the "example"
+    # was copied straight out of a serial log.  Documenting the format means
+    # showing a sample, and the nearest sample to hand is always a real one.
+    #
+    # Generated passwords are 12 characters of "abcdefghjkmnpqrstuvwxyz23456789"
+    # (no i/l/o/0/1, to stay readable off a serial log).  A placeholder of
+    # repeated x's is the documented stand-in and is allowed through.
+    if matches=$(grep -nE 'password: [abcdefghjkmnpqrstuvwxyz23456789]{12}' "$f" 2>/dev/null \
+                 | grep -vE 'password: x{12}'); then
+        echo "error: what looks like a real console password is in $f" >&2
+        echo "$matches" | sed 's/^/  /' >&2
+        echo "  use 'password: xxxxxxxxxxxx' in documentation" >&2
+        status=1
+    fi
+
+    # A real SoftAP name gives away the device's MAC suffix, and pairs with the
+    # password above to identify exactly which device was exposed.
+    if matches=$(grep -nE '"console-[0-9A-F]{6}"' "$f" 2>/dev/null \
+                 | grep -vE '"console-X{6}"'); then
+        echo "error: a real console SoftAP name is in $f" >&2
+        echo "$matches" | sed 's/^/  /' >&2
+        echo "  use \"console-XXXXXX\" in documentation" >&2
+        status=1
+    fi
     # A credential option set to anything other than the empty string.
     if matches=$(grep -nE '^[[:space:]]*CONFIG_OBSERVORE_(WIFI_SSID|WIFI_PASSWORD|AP_PASSWORD)[[:space:]]*=[[:space:]]*"[^"]+"' "$f" 2>/dev/null); then
         # The example file is allowed to carry obvious placeholders.
