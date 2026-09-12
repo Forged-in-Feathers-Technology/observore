@@ -16,9 +16,17 @@ Observer and carnivore: it eats surveillance signals.
 
 ## Getting started
 
-You need a XIAO ESP32S3, a USB-C cable and
-[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.5 or later. The
-whole first run takes about ten minutes, most of it waiting.
+You need a XIAO ESP32S3 and a USB-C cable. The whole first run takes about ten
+minutes, most of it waiting.
+
+**The quickest route is the [browser
+flasher](https://forged-in-feathers-technology.github.io/observore/)** — Chrome
+or Edge on a desktop, no toolchain. It writes the firmware without touching the
+stored configuration, so it upgrades an existing device without losing its mute
+rules, credentials or console password. Skip to step 2 below once it finishes.
+
+To build it yourself instead you also need
+[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.5 or later.
 
 **1. Build and flash.**
 

@@ -1,0 +1,89 @@
+name: Flasher page
+
+# Publishes the browser flasher (issue #9).
+#
+# The firmware is copied into the site rather than linked from the release.
+# GitHub's release downloads send no Access-Control-Allow-Origin header, and
+# they arrive as application/octet-stream with a content-disposition of
+# attachment -- so a browser fetch from the page is blocked by CORS and ESP Web
+# Tools cannot read them. Serving the same bytes same-origin avoids all of it,
+# and keeps binaries out of the repository.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release to publish on the page (default: latest)'
+        required: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "${{ github.repository }}" \
+                    --json tagName -q .tagName)
+          fi
+          echo "publishing $TAG"
+
+          mkdir -p _site/firmware
+          cp web/index.html _site/index.html
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+             --pattern '*.bin' --dir _site/firmware
+
+          # Same manifest, but relative so the browser fetches from this origin.
+          cat > _site/firmware/manifest.json <<JSON
+          {
+            "name": "Observore",
+            "version": "${TAG}",
+            "new_install_prompt_erase": false,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin",      "offset": 0 },
+                  { "path": "partition-table.bin", "offset": 32768 },
+                  { "path": "observore.bin",       "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          JSON
+
+          python3 -c "import json;json.load(open('_site/firmware/manifest.json'))"
+          for f in bootloader.bin partition-table.bin observore.bin; do
+            test -s "_site/firmware/$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          ls -l _site _site/firmware
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

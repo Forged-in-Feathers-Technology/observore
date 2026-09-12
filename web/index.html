@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Observore</title>
+<meta name="description" content="Install Observore, a passive counter-surveillance detector for the Seeed XIAO ESP32S3, straight from your browser.">
+<style>
+  :root {
+    --bg:#0d0f12; --panel:#16191f; --line:#262b33; --fg:#e6e9ef; --dim:#8b93a1;
+    --accent:#3fb950; --warn:#d29922;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding:32px 20px; max-width:760px; margin-inline:auto;
+  }
+  h1 { font-size:22px; letter-spacing:.12em; text-transform:uppercase; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 28px; }
+  h2 { font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+       color:var(--dim); margin:32px 0 10px; }
+  .panel { border:1px solid var(--line); background:var(--panel);
+           border-radius:8px; padding:20px 22px; }
+  .cta { text-align:center; padding:28px 22px; }
+  esp-web-install-button { --esp-tools-button-color:var(--fg);
+                           --esp-tools-button-text-color:var(--bg); }
+  .unsupported { color:var(--warn); }
+  code, pre { background:#0a0c0f; border:1px solid var(--line); border-radius:5px; }
+  code { padding:1px 5px; font-size:13px; }
+  pre { padding:12px 14px; overflow-x:auto; font-size:13px; }
+  ul { padding-left:20px; } li { margin:6px 0; }
+  a { color:var(--accent); }
+  .note { color:var(--dim); font-size:13px; }
+  footer { margin-top:40px; color:var(--dim); font-size:13px;
+           border-top:1px solid var(--line); padding-top:16px; }
+  .ver { font-size:13px; color:var(--dim); }
+</style>
+</head>
+<body>
+
+<h1>Observore</h1>
+<p class="sub">A passive counter-surveillance detector for the Seeed XIAO ESP32S3.
+It sits in one place, learns what is normally there, and reports what is new.</p>
+
+<div class="panel cta">
+  <esp-web-install-button manifest="firmware/manifest.json">
+    <button slot="activate">Install Observore</button>
+    <span slot="unsupported" class="unsupported">
+      This browser cannot talk to serial devices. Use Chrome or Edge on a
+      desktop — Web Serial is not available in Firefox or Safari, or on iOS.
+    </span>
+    <span slot="not-allowed" class="unsupported">
+      This page must be served over HTTPS to reach a serial device.
+    </span>
+  </esp-web-install-button>
+  <p class="ver" id="ver">&nbsp;</p>
+  <p class="note">Plug the board in over USB-C first. It appears as a serial
+  device on its own — no driver, no button to hold.</p>
+</div>
+
+<h2>What this installs, and what it leaves alone</h2>
+<div class="panel">
+  <ul>
+    <li><strong>Your settings survive an upgrade.</strong> The bootloader,
+      partition table and application are written at their own offsets, so the
+      stored configuration is untouched — the mute rules, the Wi-Fi
+      credentials, the notifier token and the device's console password all
+      stay.</li>
+    <li><strong>Tick “erase device” only if you mean it.</strong> That wipes
+      the stored configuration, including the console password, and a new one
+      is generated on the next boot.</li>
+    <li><strong>Nothing is sent anywhere.</strong> The firmware is fetched from
+      this page and written by your browser over USB. No account, no telemetry.</li>
+  </ul>
+</div>
+
+<h2>Straight after flashing: note the console password</h2>
+<div class="panel">
+  <p>Each device generates its own console password on first boot and prints it
+  on the serial log — it is the only place it appears:</p>
+  <pre>console SoftAP: "console-F964FD"  password: 2p78ggedb4bj</pre>
+  <p class="note">Use <strong>Logs &amp; Console</strong> on the button above to
+  read it without any other software. It is both the Wi-Fi password for the
+  device's setup network and the password that unlocks its web console, so it
+  is worth writing down before you close this page.</p>
+</div>
+
+<h2>Then</h2>
+<div class="panel">
+  <ul>
+    <li>Hold the small BOOT button for 1.5&nbsp;s. Join the
+      <code>console-XXXXXX</code> Wi-Fi network with that password and open
+      <a href="http://192.168.4.1/">192.168.4.1</a>.</li>
+    <li>Enter your own Wi-Fi in the <strong>Network</strong> panel, then hold
+      the button again to join it.</li>
+    <li>Leave it where it will live, let it patrol for ten minutes, and press
+      <strong>Set baseline</strong>. After that it reports what is
+      <em>new</em> rather than the whole neighbourhood.</li>
+  </ul>
+  <p class="note">The full walkthrough, and an honest list of what this device
+  cannot see, is in the
+  <a href="https://github.com/Forged-in-Feathers-Technology/observore#getting-started">README</a>.</p>
+</div>
+
+<h2>Prefer a terminal?</h2>
+<div class="panel">
+  <p class="note">Every release carries the same three files and a
+  <code>SHA256SUMS</code>.</p>
+  <pre>esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
+    0x0 bootloader.bin 0x8000 partition-table.bin 0x10000 observore.bin</pre>
+</div>
+
+<footer>
+  <a href="https://github.com/Forged-in-Feathers-Technology/observore">Source</a> ·
+  <a href="https://github.com/Forged-in-Feathers-Technology/observore/releases">Releases</a> ·
+  built by <a href="https://www.forgedinfeatherstechnology.com">Forged in Feathers Technology</a>
+</footer>
+
+<script type="module"
+        src="https://unpkg.com/esp-web-tools@10.0.3/dist/web/install-button.js?module"></script>
+<script>
+  // Name the version being served, read from the same manifest the button uses.
+  fetch('firmware/manifest.json')
+    .then(r => r.json())
+    .then(m => { document.getElementById('ver').textContent =
+                   'firmware ' + m.version; })
+    .catch(() => { document.getElementById('ver').textContent =
+                     'could not read the firmware manifest'; });
+</script>
+</body>
+</html>
