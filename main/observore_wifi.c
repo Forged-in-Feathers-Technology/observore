@@ -20,7 +20,15 @@
 static const char *TAG = "observore.wifi";
 
 #define OBSERVORE_SNIFF_MS     5000
+#if SOC_WIFI_SUPPORT_5G
+/* A dual-band scan returns both bands at once.  Measured in an ordinary flat,
+ * that is 29 access points where the 2.4 GHz-only count was 13 -- already 29 of
+ * 32 records, one neighbour away from silently dropping the rest.  The failure
+ * would be invisible: a truncated list looks exactly like a quiet street. */
+#define OBSERVORE_MAX_AP       64
+#else
 #define OBSERVORE_MAX_AP       32
+#endif
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -250,7 +258,26 @@ static void run_ap_scan(void)
         };
         observore_track_observe(&obs, now);
     }
-    ESP_LOGI(TAG, "scan: %u APs", count);
+    /* Report the band split when there is one.  On a dual-band chip this is
+     * the only cheap confirmation that 5 GHz is actually being swept rather
+     * than silently refused by the regulatory domain, and on a 2.4 GHz-only
+     * chip the extra clause never appears. */
+    uint16_t on_5g = 0;
+    for (uint16_t i = 0; i < count; i++) {
+        if (records[i].primary > 14) {
+            on_5g++;
+        }
+    }
+    if (on_5g) {
+        ESP_LOGI(TAG, "scan: %u APs (%u on 2.4 GHz, %u on 5 GHz)",
+                 count, (unsigned)(count - on_5g), (unsigned)on_5g);
+    } else {
+        ESP_LOGI(TAG, "scan: %u APs", count);
+    }
+    if (count >= OBSERVORE_MAX_AP) {
+        ESP_LOGW(TAG, "scan filled the %d-record buffer; some APs were dropped",
+                 OBSERVORE_MAX_AP);
+    }
 }
 
 /* ------------------------------------------------------------------ */
