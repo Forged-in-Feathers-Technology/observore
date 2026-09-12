@@ -17,6 +17,7 @@
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 #include "driver/usb_serial_jtag_vfs.h"
 #else
+#include "driver/uart.h"
 #include "driver/uart_vfs.h"
 #endif
 
@@ -79,23 +80,55 @@ static volatile bool s_provisioned;
  * Receive is switched to raw once and left there: nothing else on this device
  * reads stdin.  Transmit is switched only around a packet and put back, so the
  * log keeps its CRLF and terminals do not staircase. */
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 static void tx_raw(bool raw)
 {
     esp_line_endings_t mode = raw ? ESP_LINE_ENDINGS_LF : ESP_LINE_ENDINGS_CRLF;
-#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     usb_serial_jtag_vfs_set_tx_line_endings(mode);
-#else
-    uart_vfs_dev_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, mode);
-#endif
 }
+#endif
 
-static void rx_raw(void)
+#if !CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+static bool s_uart_ready;
+#endif
+
+/* Set up the console-side transport.
+ *
+ * On a UART console this bypasses stdio and the VFS completely and uses the
+ * driver, because going through them does not work -- and both halves failed
+ * for different reasons, each measured on hardware rather than guessed:
+ *
+ *   read   Without the driver installed, the VFS reads the hardware FIFO at
+ *          the instant it is asked and nothing buffers what arrives between
+ *          polls.  An instrumented build logged "stdin read -> -1 (errno 11)"
+ *          forever while packets were being sent at it.
+ *
+ *   write  With the driver installed, write(STDOUT_FILENO) returns -1 having
+ *          written nothing: "console write: 0 of 11 (last -1)".  Log output
+ *          still appeared, so the failure was invisible from the outside --
+ *          the device looked alive and simply never answered.
+ *
+ * uart_read_bytes and uart_write_bytes have neither problem, and as a bonus
+ * they carry no line-ending translation, so nothing has to be toggled around
+ * a binary packet. */
+static void transport_init(void)
 {
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
 #else
-    uart_vfs_dev_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM,
-                                          ESP_LINE_ENDINGS_LF);
+    esp_err_t err = uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM, 256, 256, 0, NULL, 0);
+    s_uart_ready = (err == ESP_OK || err == ESP_ERR_INVALID_STATE);
+    if (!s_uart_ready) {
+        ESP_LOGW(TAG, "no UART transport: %s", esp_err_to_name(err));
+        return;
+    }
+    /* Route the log through the driver as well, so it queues behind a packet
+     * instead of racing it.  Without this the two reach the UART by different
+     * paths -- the log straight at the registers through the VFS, packets
+     * through the driver's ring -- and a log line emitted mid-packet lands in
+     * the middle of one, which the client sees as a checksum failure on
+     * roughly every other reply. */
+    uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
 #endif
 }
 
@@ -114,6 +147,7 @@ static void write_raw(const uint8_t *buf, size_t len)
         return;
     }
 #endif
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     tx_raw(true);
     fflush(stdout);                       /* don't interleave with buffered log */
     size_t sent = 0;
@@ -125,6 +159,12 @@ static void write_raw(const uint8_t *buf, size_t len)
         sent += (size_t)n;
     }
     tx_raw(false);
+#else
+    if (s_uart_ready) {
+        fflush(stdout);                   /* keep the log out of the packet */
+        uart_write_bytes(CONFIG_ESP_CONSOLE_UART_NUM, buf, len);
+    }
+#endif
 }
 
 static void send_packet(uint8_t type, const uint8_t *data, size_t len)
@@ -299,6 +339,19 @@ static void handle_wifi_settings(const uint8_t *data, size_t len)
     }
     memset(pass, 0, sizeof(pass));
 
+    /* Drop the existing association first.  Asking for uplink while already
+     * on uplink is a no-op that returns success, so a device provisioned while
+     * connected would report the *old* link as proof the *new* credentials
+     * work -- accepting a wrong password without ever trying it.  Observed:
+     * the same request failed correctly mid-patrol and passed while
+     * associated, purely on which half of the cycle it landed in.
+     *
+     * This project has been caught by that guard once before, when a fallback
+     * to patrol silently did nothing. */
+    if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
+        observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
+    }
+
     /* The uplink is what proves the credentials, so report the result of
      * actually joining rather than the fact that we stored something. */
     if (observore_wifi_set_mode(OBSERVORE_MODE_UPLINK) != ESP_OK ||
@@ -452,7 +505,7 @@ static void improv_task(void *arg)
 
 #if IMPROV_SECOND_TRANSPORT
     improv_parser_t usb = {0};
-    const usb_serial_jtag_driver_config_t cfg = {
+    usb_serial_jtag_driver_config_t cfg = {
         .rx_buffer_size = 256,
         .tx_buffer_size = 256,
     };
@@ -463,7 +516,7 @@ static void improv_task(void *arg)
     }
 #endif
 
-    rx_raw();
+    transport_init();
     /* Announce unprompted at startup: the specification has the device do this
      * so a client that attaches mid-boot does not have to ask. */
     send_state(provisioned() ? STATE_PROVISIONED : STATE_READY);
@@ -475,10 +528,20 @@ static void improv_task(void *arg)
          * non-blocking, and stdio latches its EOF indicator the first time a
          * read comes back empty -- after which every later fgetc() returns EOF
          * without looking at the port again, and the device goes deaf. */
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+        /* read() on the descriptor, not fgetc(): stdio latches its EOF
+         * indicator the first time a non-blocking read comes back empty, and
+         * every later call then returns EOF without looking at the port --
+         * the device goes deaf while appearing perfectly healthy. */
         ssize_t n = read(STDIN_FILENO, in, sizeof(in));
+#else
+        int n = s_uart_ready
+                    ? uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, in, sizeof(in), 0)
+                    : 0;
+#endif
         if (n > 0) {
             idle = false;
-            for (ssize_t i = 0; i < n; i++) {
+            for (int i = 0; i < (int)n; i++) {
                 feed(&console, in[i], VIA_CONSOLE);
             }
         }

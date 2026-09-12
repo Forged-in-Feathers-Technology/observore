@@ -344,9 +344,12 @@ Three things worth knowing:
   advertise. This one only answers on a cable somebody has physically plugged
   in.
 - **Both USB sockets work on a C5.** The console can only *read* from one of
-  them — ESP-IDF's secondary console is output-only — so the firmware listens
-  on the USB peripheral directly as well as on the console. Whichever socket
-  you used to flash is the one that provisions.
+  them — ESP-IDF's secondary console is output-only — so the firmware talks to
+  each peripheral directly rather than through stdio. Whichever socket you used
+  to flash is the one that provisions. Both are verified on hardware.
+- **Provisioning drops the existing link first.** Asking to join while already
+  joined is a no-op that reports success, which would accept a wrong password
+  without ever trying it.
 - **A failed join costs nothing.** Credentials must be stored before the
   station can try them, so a mistyped password would otherwise replace a
   working network with a broken one. The previous network is put back if the
