@@ -345,22 +345,21 @@ uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len)
     return h ? h : 1u;
 }
 
-/* Gotify priorities: 8 raises a high-priority alert on Android, 5 is an
- * ordinary notification, 2 is quiet.
+/* Urgency is abstract and translated per provider in observore_notify_fmt.c.
  *
  * "Protected" means a fingerprint mute rule may never silence the class: a
  * fingerprint identifies a KIND of device, so muting your own tracker that way
  * would silence a stranger's too. */
 static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
-    [OBSERVORE_CLASS_UNKNOWN]          = {"unknown",          0, 2, false},
-    [OBSERVORE_CLASS_CAMERA]           = {"camera",           1, 2, false},
-    [OBSERVORE_CLASS_FLEET_TELEMATICS] = {"fleet-telematics", 2, 2, false},
-    [OBSERVORE_CLASS_TRACKER]          = {"tracker",          3, 7, true },
-    [OBSERVORE_CLASS_SMARTGLASSES]     = {"smart-glasses",    3, 5, true },
-    [OBSERVORE_CLASS_DRONE]            = {"drone",            3, 5, true },
-    [OBSERVORE_CLASS_ALPR]             = {"alpr",             5, 8, true },
-    [OBSERVORE_CLASS_BODYCAM]          = {"bodycam",          5, 8, true },
-    [OBSERVORE_CLASS_FOLLOWER]         = {"follower",         4, 7, true },
+    [OBSERVORE_CLASS_UNKNOWN]          = {"unknown",          0, OBSERVORE_URGENCY_LOW,    false},
+    [OBSERVORE_CLASS_CAMERA]           = {"camera",           1, OBSERVORE_URGENCY_LOW,    false},
+    [OBSERVORE_CLASS_FLEET_TELEMATICS] = {"fleet-telematics", 2, OBSERVORE_URGENCY_LOW,    false},
+    [OBSERVORE_CLASS_TRACKER]          = {"tracker",          3, OBSERVORE_URGENCY_HIGH,   true },
+    [OBSERVORE_CLASS_SMARTGLASSES]     = {"smart-glasses",    3, OBSERVORE_URGENCY_NORMAL, true },
+    [OBSERVORE_CLASS_DRONE]            = {"drone",            3, OBSERVORE_URGENCY_NORMAL, true },
+    [OBSERVORE_CLASS_ALPR]             = {"alpr",             5, OBSERVORE_URGENCY_URGENT, true },
+    [OBSERVORE_CLASS_BODYCAM]          = {"bodycam",          5, OBSERVORE_URGENCY_URGENT, true },
+    [OBSERVORE_CLASS_FOLLOWER]         = {"follower",         4, OBSERVORE_URGENCY_HIGH,   true },
 };
 
 const observore_class_desc_t *observore_class_desc(observore_class_t cls)

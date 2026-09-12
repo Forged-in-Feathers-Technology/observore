@@ -23,14 +23,16 @@ static const char *TAG = "observore.notify";
 #define MAX_PER_PUMP 2
 
 typedef struct {
-    char    title[OBSERVORE_NOTIFY_TITLE_LEN];
-    char    message[OBSERVORE_NOTIFY_MSG_LEN];
-    uint8_t priority;
+    char                title[OBSERVORE_NOTIFY_TITLE_LEN];
+    char                message[OBSERVORE_NOTIFY_MSG_LEN];
+    observore_urgency_t urgency;
 } observore_notice_t;
 
 static SemaphoreHandle_t s_lock;
 static char     s_url[OBSERVORE_NOTIFY_URL_LEN];
 static char     s_token[OBSERVORE_NOTIFY_TOKEN_LEN];
+static char     s_user[OBSERVORE_NOTIFY_USER_LEN];
+static observore_provider_t s_provider = OBSERVORE_PROVIDER_GOTIFY;
 static observore_notice_t s_queue[OBSERVORE_NOTIFY_QUEUE];
 static size_t   s_head, s_count;
 static uint32_t s_sent, s_failed, s_dropped;
@@ -43,11 +45,16 @@ static char     s_last_error[64];
 
 static void load(void)
 {
+    char prov[16] = {0};
     observore_nvs_item_t items[] = {
         {.key = "gotify_url", .type = OBSERVORE_NVS_STR,
          .buf = s_url,   .len = sizeof(s_url)},
         {.key = "gotify_tok", .type = OBSERVORE_NVS_STR,
          .buf = s_token, .len = sizeof(s_token)},
+        {.key = "notify_user", .type = OBSERVORE_NVS_STR,
+         .buf = s_user,  .len = sizeof(s_user)},
+        {.key = "notify_prov", .type = OBSERVORE_NVS_STR,
+         .buf = prov,    .len = sizeof(prov)},
     };
     observore_nvs_read(items, OBSERVORE_ARRLEN(items));
     if (!items[0].found) {
@@ -56,8 +63,18 @@ static void load(void)
     if (!items[1].found) {
         s_token[0] = '\0';
     }
-    if (s_url[0]) {
-        ESP_LOGI(TAG, "notifying %s", s_url);
+    if (!items[2].found) {
+        s_user[0] = '\0';
+    }
+    /* Absent means a device configured before providers existed, which could
+     * only have been Gotify. */
+    if (!items[3].found || !observore_provider_from_name(prov, &s_provider)) {
+        s_provider = OBSERVORE_PROVIDER_GOTIFY;
+    }
+    if (s_url[0] || observore_provider_default_url(s_provider)[0]) {
+        ESP_LOGI(TAG, "notifying via %s: %s",
+                 observore_provider_name(s_provider),
+                 s_url[0] ? s_url : observore_provider_default_url(s_provider));
     }
 }
 
@@ -66,6 +83,9 @@ static void save(void)
     const observore_nvs_item_t items[] = {
         {.key = "gotify_url", .type = OBSERVORE_NVS_STR, .buf = s_url},
         {.key = "gotify_tok", .type = OBSERVORE_NVS_STR, .buf = s_token},
+        {.key = "notify_user", .type = OBSERVORE_NVS_STR, .buf = s_user},
+        {.key = "notify_prov", .type = OBSERVORE_NVS_STR,
+         .buf = (void *)observore_provider_name(s_provider)},
     };
     observore_nvs_write(items, OBSERVORE_ARRLEN(items));
 }
@@ -78,6 +98,8 @@ void observore_notify_init(void)
     LOCK();
     memset(s_url, 0, sizeof(s_url));
     memset(s_token, 0, sizeof(s_token));
+    memset(s_user, 0, sizeof(s_user));
+    s_provider = OBSERVORE_PROVIDER_GOTIFY;
     s_head = s_count = 0;
     s_sent = s_failed = s_dropped = 0;
     s_last_error[0] = '\0';
@@ -88,9 +110,29 @@ void observore_notify_init(void)
 bool observore_notify_configured(void)
 {
     LOCK();
-    bool ok = s_url[0] != '\0';
+    /* Pushover needs no URL of its own, so "configured" means the provider has
+     * everything it needs, not merely that a URL was typed. */
+    bool ok = (s_url[0] != '\0' ||
+               observore_provider_default_url(s_provider)[0] != '\0') &&
+              (!observore_provider_needs_user(s_provider) || s_user[0] != '\0');
     UNLOCK();
     return ok;
+}
+
+observore_provider_t observore_notify_provider(void)
+{
+    LOCK();
+    observore_provider_t p = s_provider;
+    UNLOCK();
+    return p;
+}
+
+bool observore_notify_has_user(void)
+{
+    LOCK();
+    bool set = s_user[0] != '\0';
+    UNLOCK();
+    return set;
 }
 
 bool observore_notify_url(char *out, size_t len)
@@ -105,21 +147,34 @@ bool observore_notify_url(char *out, size_t len)
     return ok;
 }
 
-esp_err_t observore_notify_set(const char *url, const char *token)
+esp_err_t observore_notify_set(observore_provider_t provider, const char *url,
+                               const char *token, const char *user)
 {
-    if (!url || !*url) {
+    if (provider >= OBSERVORE_PROVIDER_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
+    /* A URL is required unless the provider supplies its own. */
+    bool have_url = url && *url;
+    if (!have_url && observore_provider_default_url(provider)[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-    if (strlen(url) >= OBSERVORE_NOTIFY_URL_LEN ||
-        (token && strlen(token) >= OBSERVORE_NOTIFY_TOKEN_LEN)) {
+    if (have_url && strncmp(url, "http://", 7) != 0 &&
+        strncmp(url, "https://", 8) != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (observore_provider_needs_user(provider) && (!user || !*user)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((have_url && strlen(url) >= OBSERVORE_NOTIFY_URL_LEN) ||
+        (token && strlen(token) >= OBSERVORE_NOTIFY_TOKEN_LEN) ||
+        (user && strlen(user) >= OBSERVORE_NOTIFY_USER_LEN)) {
         return ESP_ERR_INVALID_SIZE;
     }
     LOCK();
-    snprintf(s_url, sizeof(s_url), "%s", url);
+    s_provider = provider;
+    snprintf(s_url, sizeof(s_url), "%s", have_url ? url : "");
     snprintf(s_token, sizeof(s_token), "%s", token ? token : "");
+    snprintf(s_user, sizeof(s_user), "%s", user ? user : "");
     save();
     UNLOCK();
     return ESP_OK;
@@ -130,6 +185,8 @@ esp_err_t observore_notify_clear(void)
     LOCK();
     memset(s_url, 0, sizeof(s_url));
     memset(s_token, 0, sizeof(s_token));
+    memset(s_user, 0, sizeof(s_user));
+    s_provider = OBSERVORE_PROVIDER_GOTIFY;
     s_head = s_count = 0;
     save();
     UNLOCK();
@@ -140,7 +197,7 @@ esp_err_t observore_notify_clear(void)
 /* Queue                                                              */
 /* ------------------------------------------------------------------ */
 
-static void enqueue(const char *title, const char *message, uint8_t priority)
+static void enqueue(const char *title, const char *message, observore_urgency_t urgency)
 {
     LOCK();
     if (!s_url[0]) {
@@ -157,7 +214,7 @@ static void enqueue(const char *title, const char *message, uint8_t priority)
     observore_notice_t *n = &s_queue[(s_head + s_count) % OBSERVORE_NOTIFY_QUEUE];
     snprintf(n->title, sizeof(n->title), "%s", title);
     snprintf(n->message, sizeof(n->message), "%s", message);
-    n->priority = priority;
+    n->urgency = urgency;
     s_count++;
     UNLOCK();
 }
@@ -198,7 +255,7 @@ void observore_notify_event(const observore_event_t *ev)
              ev->rssi, observore_source_name(ev->src),
              observore_evidence_name(ev->evidence));
 
-    enqueue(title, msg, observore_class_desc(ev->cls)->notify_priority);
+    enqueue(title, msg, observore_class_desc(ev->cls)->notify_urgency);
 }
 
 void observore_notify_level(observore_level_t from, observore_level_t to, uint16_t score)
@@ -211,7 +268,8 @@ void observore_notify_level(observore_level_t from, observore_level_t to, uint16
     snprintf(title, sizeof(title), "Observore: %s", observore_level_name(to));
     snprintf(msg, sizeof(msg), "Threat level %s -> %s, score %u.",
              observore_level_name(from), observore_level_name(to), score);
-    enqueue(title, msg, to == OBSERVORE_LEVEL_ALERT ? 8 : 5);
+    enqueue(title, msg, to == OBSERVORE_LEVEL_ALERT ? OBSERVORE_URGENCY_URGENT
+                                                    : OBSERVORE_URGENCY_NORMAL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -220,29 +278,20 @@ void observore_notify_level(observore_level_t from, observore_level_t to, uint16
 
 static esp_err_t send_now(const observore_notice_t *n)
 {
-    char url[OBSERVORE_NOTIFY_URL_LEN + 16];
-    char token[OBSERVORE_NOTIFY_TOKEN_LEN];
+    observore_notify_request_t req;
 
     LOCK();
-    size_t ulen = strlen(s_url);
-    /* Tolerate a configured URL with or without a trailing slash. */
-    bool slash = ulen > 0 && s_url[ulen - 1] == '/';
-    snprintf(url, sizeof(url), "%s%smessage", s_url, slash ? "" : "/");
-    snprintf(token, sizeof(token), "%s", s_token);
+    bool ok = observore_notify_build(s_provider, s_url, s_token, s_user,
+                                     n->title, n->message, n->urgency, &req);
     UNLOCK();
-
-    char title[OBSERVORE_NOTIFY_TITLE_LEN * 2];
-    char message[OBSERVORE_NOTIFY_MSG_LEN * 2];
-    observore_json_escape(n->title, title, sizeof(title));
-    observore_json_escape(n->message, message, sizeof(message));
-
-    char body[OBSERVORE_NOTIFY_TITLE_LEN * 2 + OBSERVORE_NOTIFY_MSG_LEN * 2 + 64];
-    int len = snprintf(body, sizeof(body),
-                       "{\"title\":\"%s\",\"message\":\"%s\",\"priority\":%u}",
-                       title, message, n->priority);
+    if (!ok) {
+        snprintf(s_last_error, sizeof(s_last_error),
+                 "incomplete configuration for this provider");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     esp_http_client_config_t cfg = {
-        .url = url,
+        .url = req.url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = HTTP_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -253,30 +302,31 @@ static esp_err_t send_now(const observore_notice_t *n)
         return ESP_FAIL;
     }
 
-    esp_http_client_set_header(c, "Content-Type", "application/json");
-    if (token[0]) {
-        esp_http_client_set_header(c, "X-Gotify-Key", token);
+    esp_http_client_set_header(c, "Content-Type", req.content_type);
+    for (size_t i = 0; i < req.header_count; i++) {
+        esp_http_client_set_header(c, req.headers[i].name,
+                                   req.headers[i].value);
     }
-    esp_http_client_set_post_field(c, body, len);
+    esp_http_client_set_post_field(c, req.body, strlen(req.body));
 
     esp_err_t err = esp_http_client_perform(c);
     int status = esp_http_client_get_status_code(c);
     esp_http_client_cleanup(c);
 
-    /* What matters is whether the server accepted the message.  Some servers
-     * and reverse proxies answer without a Content-Length and simply close,
-     * which the client reports as an incomplete read even though the POST was
-     * delivered and acknowledged.  Judge by the status code when there is
-     * one. */
+    /* Judge by the status code when there is one.  Some servers and reverse
+     * proxies answer without a Content-Length and simply close, which the
+     * client reports as an incomplete read even though the POST was delivered
+     * and acknowledged. */
     if (err != ESP_OK && !(status >= 200 && status < 300)) {
         snprintf(s_last_error, sizeof(s_last_error), "%s", esp_err_to_name(err));
         return err;
     }
     if (status < 200 || status >= 300) {
-        /* 401 here almost always means a wrong or missing application token,
-         * which is worth saying plainly rather than as a bare number. */
+        /* 401 and 403 almost always mean a wrong token -- or, for Pushover, a
+         * wrong user key -- which is worth saying rather than leaving a bare
+         * number. */
         snprintf(s_last_error, sizeof(s_last_error), "HTTP %d%s", status,
-                 status == 401 ? " (bad token)" : "");
+                 (status == 401 || status == 403) ? " (bad token or key)" : "");
         return ESP_FAIL;
     }
     s_last_error[0] = '\0';
@@ -321,7 +371,7 @@ esp_err_t observore_notify_test(void)
     if (!observore_notify_configured()) {
         return ESP_ERR_INVALID_STATE;
     }
-    observore_notice_t n = {.priority = 5};
+    observore_notice_t n = {.urgency = OBSERVORE_URGENCY_NORMAL};
     snprintf(n.title, sizeof(n.title), "Observore test");
     snprintf(n.message, sizeof(n.message),
              "Notifications are working. Sent from the console.");

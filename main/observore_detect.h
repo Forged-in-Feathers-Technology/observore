@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "observore_notify_fmt.h"
 #include "observore_types.h"
 
 /* A single raw sighting handed to the classifier.  Fields that do not apply to
@@ -87,6 +88,9 @@ uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len);
 
 /* Everything that varies per class, in one place.
  *
+ * The urgency is abstract on purpose: it used to be a Gotify priority number,
+ * which made one notification provider's numbering part of the threat model.
+ *
  * These four attributes used to live in four switch statements across three
  * modules, plus a positional name array kept index-aligned with the enum by
  * convention alone -- so inserting a class mid-enum silently mislabelled every
@@ -96,7 +100,7 @@ uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len);
 typedef struct {
     const char *name;
     uint8_t     points;           /* contribution to the threat score */
-    uint8_t     notify_priority;  /* Gotify priority */
+    observore_urgency_t notify_urgency;  /* mapped per provider when sending */
     bool        protected_cls;    /* a fingerprint rule may never silence it */
 } observore_class_desc_t;
 

@@ -532,10 +532,18 @@ static esp_err_t notify_get_handler(httpd_req_t *req)
     char body[OBSERVORE_NOTIFY_URL_LEN * 2 + sizeof(err) + 256];
     /* The token is absent by design, exactly like the Wi-Fi password. */
     snprintf(body, sizeof(body),
-             "{\"configured\":%s,\"url\":\"%s\",\"sent\":%" PRIu32 ","
+             "{\"configured\":%s,\"url\":\"%s\",\"provider\":\"%s\","
+             "\"needs_user\":%s,\"has_user\":%s,\"url_hint\":\"%s\","
+             "\"sent\":%" PRIu32 ","
              "\"failed\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"queued\":%zu,"
              "\"can_send\":%s,\"error\":\"%s\"}",
-             set ? "true" : "false", escaped, observore_notify_sent(),
+             set ? "true" : "false", escaped,
+             observore_provider_name(observore_notify_provider()),
+             observore_provider_needs_user(observore_notify_provider())
+                 ? "true" : "false",
+             observore_notify_has_user() ? "true" : "false",
+             observore_provider_url_hint(observore_notify_provider()),
+             observore_notify_sent(),
              observore_notify_failed(), observore_notify_dropped(),
              observore_notify_pending(),
              observore_wifi_mode() == OBSERVORE_MODE_UPLINK ? "true" : "false", err);
@@ -566,15 +574,30 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
 
     char url[OBSERVORE_NOTIFY_URL_LEN] = {0};
     char token[OBSERVORE_NOTIFY_TOKEN_LEN] = {0};
-    if (!query_param(req, "url", url, sizeof(url))) {
-        return fail(req, "url is required");
-    }
-    query_param(req, "token", token, sizeof(token));
+    char user[OBSERVORE_NOTIFY_USER_LEN] = {0};
+    char provname[16] = {0};
 
-    esp_err_t err = observore_notify_set(url, token);
+    observore_provider_t provider = OBSERVORE_PROVIDER_GOTIFY;
+    if (query_param(req, "provider", provname, sizeof(provname))) {
+        if (!observore_provider_from_name(provname, &provider)) {
+            return fail(req, "unknown provider -- expected gotify, ntfy or "
+                             "pushover");
+        }
+    } else {
+        provider = observore_notify_provider();
+    }
+    query_param(req, "url", url, sizeof(url));
+    query_param(req, "token", token, sizeof(token));
+    query_param(req, "user", user, sizeof(user));
+
+    esp_err_t err = observore_notify_set(provider, url, token, user);
     memset(token, 0, sizeof(token));
+    memset(user, 0, sizeof(user));
     if (err == ESP_ERR_INVALID_ARG) {
-        return fail(req, "url must start with http:// or https://");
+        if (observore_provider_needs_user(provider) && !*user) {
+            return fail(req, "this provider needs a user key as well as a token");
+        }
+        return fail(req, "a url is required, starting with http:// or https://");
     }
     if (err == ESP_ERR_INVALID_SIZE) {
         return fail(req, "url or token is too long");
@@ -582,7 +605,8 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         return fail(req, "could not store the notifier settings");
     }
-    ESP_LOGI(TAG, "notifier set to %s", url);
+    ESP_LOGI(TAG, "notifier set to %s via %s", url,
+             observore_provider_name(provider));
     return ok(req);
 }
 

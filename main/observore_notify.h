@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "observore_notify_fmt.h"
 #include "observore_track.h"
 
 #ifndef OBSERVORE_HOST_TEST
@@ -22,6 +23,7 @@
 
 #define OBSERVORE_NOTIFY_URL_LEN   128
 #define OBSERVORE_NOTIFY_TOKEN_LEN 64
+#define OBSERVORE_NOTIFY_USER_LEN  64
 #define OBSERVORE_NOTIFY_QUEUE     24
 #define OBSERVORE_NOTIFY_TITLE_LEN 48
 #define OBSERVORE_NOTIFY_MSG_LEN   160
@@ -31,7 +33,11 @@ void observore_notify_init(void);
 bool observore_notify_configured(void);
 /* Copies the server URL only.  There is no way to read the token back. */
 bool observore_notify_url(char *out, size_t len);
-esp_err_t observore_notify_set(const char *url, const char *token);
+esp_err_t observore_notify_set(observore_provider_t provider, const char *url,
+                               const char *token, const char *user);
+observore_provider_t observore_notify_provider(void);
+/* Whether a second credential is stored, reported without revealing it. */
+bool observore_notify_has_user(void);
 esp_err_t observore_notify_clear(void);
 
 /* Queue a notice about a newly identified device. */
