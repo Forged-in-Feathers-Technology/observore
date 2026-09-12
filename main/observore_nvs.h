@@ -21,7 +21,9 @@
     X(STA_PASS,   "sta_pass",   OBSERVORE_NVS_STR)  \
     X(AP_PASS,    "ap_pass",    OBSERVORE_NVS_STR)  \
     X(GOTIFY_URL, "gotify_url", OBSERVORE_NVS_STR)  \
-    X(GOTIFY_TOK, "gotify_tok", OBSERVORE_NVS_STR)
+    X(GOTIFY_TOK, "gotify_tok",  OBSERVORE_NVS_STR) \
+    X(NOTIFY_PROV, "notify_prov", OBSERVORE_NVS_STR) \
+    X(NOTIFY_USER, "notify_user", OBSERVORE_NVS_STR)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 

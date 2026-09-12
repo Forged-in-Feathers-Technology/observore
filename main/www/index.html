@@ -133,16 +133,23 @@
 <div class="panel">
   <h2>Notifications <span id="notifyinfo" class="dim"></span></h2>
   <div class="add">
+    <select id="gprov">
+      <option value="gotify">Gotify</option>
+      <option value="ntfy">ntfy</option>
+      <option value="pushover">Pushover</option>
+    </select>
     <input id="gurl" placeholder="https://gotify.example.com" autocomplete="off"
-           style="min-width:280px">
+           style="min-width:260px">
     <input id="gtoken" type="password" placeholder="application token"
+           autocomplete="new-password">
+    <input id="guser" type="password" placeholder="user key" hidden
            autocomplete="new-password">
     <button id="gsave">Save</button>
     <button id="gtest" class="mini">Send test</button>
     <button id="gclear" class="mini">Forget</button>
   </div>
   <p class="note" id="gnote">
-    Pushes to a Gotify server. Detections found while patrolling are queued and
+    Pushes to Gotify, ntfy or Pushover. Detections found while patrolling are queued and
     delivered the next time the uplink is up &mdash; the SoftAP has no route to
     your server, so sending only works while joined to your network.
   </p>
@@ -371,15 +378,22 @@ async function refreshLive() {
 // Wi-Fi detection at all -- until the hard cap expires.
 
 function renderNotify(n) {
+  if (n.provider && $('gprov').value !== n.provider && !$('gprov').matches(':focus')) {
+    $('gprov').value = n.provider;
+  }
+  $('guser').hidden = !n.needs_user;
+  if (n.url_hint && !$('gurl').matches(':focus')) {
+    $('gurl').placeholder = n.url_hint;
+  }
   $('notifyinfo').textContent = n.configured
-    ? '— ' + n.url + ' · ' + n.sent + ' sent' +
+    ? '— ' + (n.provider || '') + (n.url ? ' ' + n.url : '') + ' · ' + n.sent + ' sent' +
       (n.queued ? ', ' + n.queued + ' queued' : '') +
       (n.failed ? ', ' + n.failed + ' failed' : '') +
       (n.dropped ? ', ' + n.dropped + ' dropped' : '') +
       (n.error ? ' · last error: ' + n.error : '') +
       (n.can_send ? '' : ' · not sending (needs uplink)')
     : '— none configured';
-  if (n.configured && !$('gurl').matches(':focus')) $('gurl').placeholder = n.url;
+
 }
 
 function renderNet(n) {
@@ -515,12 +529,30 @@ $('netclear').addEventListener('click', () => {
   post('/api/netcfg?clear=1', 'network forgotten');
 });
 
+// Pushover supplies its own endpoint, so a URL is only required elsewhere.
+const PROVIDER_NEEDS_URL = { gotify: true, ntfy: true, pushover: false };
+
+$('gprov').addEventListener('change', () => {
+  const p = $('gprov').value;
+  $('guser').hidden = p !== 'pushover';
+  $('gurl').placeholder = { gotify: 'https://gotify.example.com',
+                            ntfy: 'https://ntfy.sh/your-topic',
+                            pushover: 'leave blank for api.pushover.net' }[p];
+});
+
 $('gsave').addEventListener('click', () => {
+  const p = $('gprov').value;
   const url = $('gurl').value.trim();
-  if (!url) { $('gnote').textContent = 'enter a server URL'; return; }
-  const q = '/api/notify?url=' + encodeURIComponent(url) +
-            '&token=' + encodeURIComponent($('gtoken').value);
-  $('gtoken').value = '';   // never leave a token sitting in the DOM
+  if (!url && PROVIDER_NEEDS_URL[p]) {
+    $('gnote').textContent = 'enter a server URL'; return;
+  }
+  let q = '/api/notify?provider=' + p +
+          '&url=' + encodeURIComponent(url) +
+          '&token=' + encodeURIComponent($('gtoken').value);
+  if (p === 'pushover') q += '&user=' + encodeURIComponent($('guser').value);
+  // never leave credentials sitting in the DOM
+  $('gtoken').value = '';
+  $('guser').value = '';
   post(q, 'saved — use Send test while on the uplink', 'gnote');
 });
 $('gtest').addEventListener('click', () => post('/api/notify?test=1', 'test sent', 'gnote'));

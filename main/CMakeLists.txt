@@ -8,6 +8,7 @@ idf_component_register(
         "observore_nvs.c"
         "observore_util.c"
         "observore_notify.c"
+        "observore_notify_fmt.c"
         "observore_ble.c"
         "observore_wifi.c"
         "observore_web.c"

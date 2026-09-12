@@ -10,6 +10,7 @@
 #include "observore_detect.h"
 #include "observore_mute.h"
 #include "observore_track.h"
+#include "observore_notify_fmt.h"
 #include "observore_util.h"
 
 static int g_failures;
@@ -977,10 +978,112 @@ static void test_json_builder(void)
     CHECK(strlen(tiny) == 0, "nothing should have been written");
 }
 
+static const observore_notify_header_t *hdr(const observore_notify_request_t *r,
+                                            const char *name)
+{
+    for (size_t i = 0; i < r->header_count; i++) {
+        if (strcmp(r->headers[i].name, name) == 0) {
+            return &r->headers[i];
+        }
+    }
+    return NULL;
+}
+
+static void test_notify_providers(void)
+{
+    banner("notification providers");
+
+    observore_notify_request_t r;
+
+    /* --- Gotify: JSON body, token in a header, numeric priority --- */
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_GOTIFY,
+                                 "https://gotify.example.com", "TOK", NULL,
+                                 "bodycam detected", "Axon", 
+                                 OBSERVORE_URGENCY_URGENT, &r), "gotify build");
+    CHECK(strcmp(r.url, "https://gotify.example.com/message") == 0,
+          "url '%s'", r.url);
+    CHECK(hdr(&r, "X-Gotify-Key") &&
+          strcmp(hdr(&r, "X-Gotify-Key")->value, "TOK") == 0, "token header");
+    CHECK(json_balanced(r.body), "body should be valid JSON: %s", r.body);
+    CHECK(strstr(r.body, "\"priority\":8") != NULL, "urgent -> 8: %s", r.body);
+
+    /* A trailing slash must not produce a doubled path. */
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_GOTIFY,
+                                 "https://gotify.example.com/", "T", NULL,
+                                 "t", "m", OBSERVORE_URGENCY_LOW, &r), "build");
+    CHECK(strcmp(r.url, "https://gotify.example.com/message") == 0,
+          "trailing slash: '%s'", r.url);
+    CHECK(strstr(r.body, "\"priority\":2") != NULL, "low -> 2");
+
+    /* --- ntfy: plain body, title and priority as headers --- */
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_NTFY,
+                                 "https://ntfy.sh/my-topic", "", NULL,
+                                 "tracker detected", "Find My tracker\n-50 dBm",
+                                 OBSERVORE_URGENCY_HIGH, &r), "ntfy build");
+    CHECK(strcmp(r.url, "https://ntfy.sh/my-topic") == 0, "url '%s'", r.url);
+    CHECK(strcmp(r.content_type, "text/plain") == 0, "content type");
+    CHECK(hdr(&r, "Title") &&
+          strcmp(hdr(&r, "Title")->value, "tracker detected") == 0, "title");
+    CHECK(hdr(&r, "Priority") &&
+          strcmp(hdr(&r, "Priority")->value, "high") == 0, "priority name");
+    CHECK(strcmp(r.body, "Find My tracker\n-50 dBm") == 0, "body is the message");
+    /* No token means no Authorization header at all, not an empty one. */
+    CHECK(hdr(&r, "Authorization") == NULL, "no empty auth header");
+
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_NTFY, "https://ntfy.sh/t",
+                                 "tk_secret", NULL, "t", "m",
+                                 OBSERVORE_URGENCY_URGENT, &r), "build");
+    CHECK(hdr(&r, "Authorization") &&
+          strcmp(hdr(&r, "Authorization")->value, "Bearer tk_secret") == 0,
+          "bearer token");
+    CHECK(strcmp(hdr(&r, "Priority")->value, "urgent") == 0, "urgent");
+
+    /* --- Pushover: form body, needs a user key, default URL --- */
+    CHECK(!observore_notify_build(OBSERVORE_PROVIDER_PUSHOVER, "", "APP", NULL,
+                                  "t", "m", OBSERVORE_URGENCY_NORMAL, &r),
+          "pushover without a user key must be refused");
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_PUSHOVER, "", "APP", "USER",
+                                 "t", "m", OBSERVORE_URGENCY_NORMAL, &r),
+          "pushover build");
+    CHECK(strcmp(r.url, "https://api.pushover.net/1/messages.json") == 0,
+          "default url used when none configured: '%s'", r.url);
+    CHECK(strstr(r.body, "token=APP") && strstr(r.body, "user=USER"),
+          "credentials in the form body: %s", r.body);
+    CHECK(strstr(r.body, "priority=0") != NULL, "normal -> 0");
+
+    /* An advertised name is attacker-chosen text going into a form body, so
+     * an unescaped '&' would inject a field. */
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_PUSHOVER, "", "APP", "USER",
+                                 "x", "evil&priority=2&x= y", 
+                                 OBSERVORE_URGENCY_LOW, &r), "build");
+    CHECK(strstr(r.body, "evil%26priority%3D2") != NULL,
+          "form injection not escaped: %s", r.body);
+    CHECK(strstr(r.body, "%20y") != NULL, "space not escaped: %s", r.body);
+    /* Exactly one priority field, and it is ours. */
+    const char *p1 = strstr(r.body, "&priority=");
+    CHECK(p1 && strstr(p1 + 1, "&priority=") == NULL,
+          "more than one priority field: %s", r.body);
+
+    /* Names round-trip, and an unknown one is refused. */
+    observore_provider_t pv;
+    CHECK(observore_provider_from_name("ntfy", &pv) &&
+          pv == OBSERVORE_PROVIDER_NTFY, "name lookup");
+    CHECK(!observore_provider_from_name("telegram", &pv), "unknown provider");
+    for (int i = 0; i < OBSERVORE_PROVIDER_MAX; i++) {
+        CHECK(observore_provider_from_name(observore_provider_name(i), &pv) &&
+              (int)pv == i, "round trip for %s", observore_provider_name(i));
+    }
+    CHECK(observore_provider_needs_user(OBSERVORE_PROVIDER_PUSHOVER),
+          "pushover needs a user key");
+    CHECK(!observore_provider_needs_user(OBSERVORE_PROVIDER_GOTIFY),
+          "gotify does not");
+}
+
 int main(void)
 {
     test_oui_lookup();
     test_json_builder();
+    test_notify_providers();
     test_vendor_lookup();
     test_vendor_labelling();
     test_name_capture();

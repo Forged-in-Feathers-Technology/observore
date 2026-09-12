@@ -520,35 +520,60 @@ Up to 128 rules are stored, in NVS, surviving reboots.
 
 ## Notifications
 
-Observore pushes to a [Gotify](https://gotify.net/) server. Configure it in the
-console's **Notifications** panel, or:
+Observore pushes to **[Gotify](https://gotify.net/)**, **[ntfy](https://ntfy.sh/)**
+or **[Pushover](https://pushover.net/)**. Choose one in the console's
+**Notifications** panel, or:
 
 ```
 GET  /api/notify
-POST /api/notify?url=https://gotify.example.com&token=YOUR_APP_TOKEN
+POST /api/notify?provider=gotify&url=https://gotify.example.com&token=APP_TOKEN
+POST /api/notify?provider=ntfy&url=https://ntfy.sh/your-topic[&token=TOKEN]
+POST /api/notify?provider=pushover&token=APP_TOKEN&user=USER_KEY
 POST /api/notify?test=1
 POST /api/notify?clear=1
 ```
 
-It POSTs `{"title","message","priority"}` to `<url>/message` with the token in
-an `X-Gotify-Key` header. Priority is mapped from what was found: 8 for a
-bodycam or ALPR, 7 for a follower or tracker, 5 for a drone or smart glasses,
-2 for a camera. Escalations of the overall threat level are pushed too; drops
-are not, because an alert that clears is not news.
+| Provider | URL | Credentials |
+|---|---|---|
+| Gotify | your server; `/message` is appended | application token |
+| ntfy | the full topic URL, e.g. `https://ntfy.sh/your-topic` | optional bearer token |
+| Pushover | none — it has one endpoint | application token **and** user key |
 
-The token is stored in NVS and is **write-only** from outside the device — no
-endpoint returns it, exactly like the Wi-Fi password.
+Urgency is chosen by what was found — a body camera or licence-plate reader is
+urgent, a follower or tracker is high, a drone or smart glasses normal, a
+camera low — and translated into each service's own scale. Pushover's urgent
+maps to *high* rather than *emergency*: emergency requires retry and expire
+parameters and keeps re-alerting until a human acknowledges, which is not a
+reasonable default for a device that can see a police car drive past.
+
+Escalations of the overall threat level are pushed too; drops are not, because
+an alert that clears is not news.
+
+Tokens and user keys are stored in NVS and are **write-only** — no endpoint
+returns them, exactly like the Wi-Fi password.
 
 **Sending needs the uplink.** Detections happen during patrol, which has no
-network, so notices are queued and flushed the next time you are joined to your
-network. The queue holds 24 and drops the oldest when full: a detector that
-stops noticing new things because its outbox is full would be worse than one
-that loses the oldest notice. A failed send stays queued and is retried rather
-than discarded.
+network, so notices are queued and flushed the next time you are joined. The
+queue holds 24 and drops the oldest when full: a detector that stops noticing
+new things because its outbox is full would be worse than one that loses the
+oldest notice. A failed send stays queued and is retried.
 
 The console shows sent, queued, failed and dropped counts, plus the last
-transport error — a `401 (bad token)` is reported as such rather than as a bare
-number.
+transport error — `401`/`403` is reported as a bad token or key rather than as
+a bare number.
+
+### How far each provider has been tested
+
+| Provider | Status |
+|---|---|
+| Gotify | **sent end to end** from the device to a live server over TLS |
+| ntfy | the exact request the firmware builds was **accepted by ntfy.sh**, with the title, multi-line body and priority arriving intact |
+| Pushover | the request shape was **accepted by api.pushover.net**, which parsed the form body and rejected only the deliberately invalid token — delivery itself is **unverified**, since that needs an account |
+
+All three wire formats are pinned by host tests: URL construction including
+trailing slashes, header names, body encoding, and the priority mapping. The
+Pushover body is form-encoded, so an advertised device name containing `&`
+cannot inject a field — there is a test for exactly that.
 
 ## A note on internal RAM
 
