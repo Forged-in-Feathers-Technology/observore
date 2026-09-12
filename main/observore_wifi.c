@@ -171,11 +171,22 @@ static void run_ap_scan(void)
         .bssid = NULL,
         .channel = 0,           /* all channels */
         .show_hidden = true,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        /* scan_time is deliberately left at zero.  With Bluetooth enabled the
-         * driver rejects custom active-scan timing outright ("Should use
-         * default active scan time parameter") and the scan returns nothing,
-         * so the coexistence arbiter picks the dwell instead. */
+        /* PASSIVE, and that is the whole point.
+         *
+         * An active scan broadcasts probe requests carrying this device's MAC
+         * on every channel, every patrol cycle.  Probe requests are exactly
+         * what presence analytics and Wi-Fi tracking systems collect -- so a
+         * detector built to notice trackers was announcing itself to them
+         * every couple of minutes, while claiming to listen without answering.
+         *
+         * Passive scanning waits for beacons instead.  Access points beacon
+         * about ten times a second, including hidden ones (with a blank SSID),
+         * so the cost is dwell time rather than coverage.
+         *
+         * scan_time is left at zero: with Bluetooth enabled the driver rejects
+         * custom scan timing and returns nothing, so the coexistence arbiter
+         * picks the dwell. */
+        .scan_type = WIFI_SCAN_TYPE_PASSIVE,
     };
 
     esp_err_t err = esp_wifi_scan_start(&cfg, true /* block */);

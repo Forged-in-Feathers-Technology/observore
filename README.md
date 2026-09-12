@@ -1,6 +1,7 @@
 # Observore
 
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
 A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/),
 built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com).
@@ -15,17 +16,36 @@ Observer and carnivore: it eats surveillance signals.
 
 ## What it does
 
-**It listens, and it does not answer.** BLE scanning is passive — the radio
-never emits a `SCAN_REQ`, so nothing it observes can observe it back. Wi-Fi
-sniffing is receive-only. The device transmits exactly once: when you hold the
-button to raise the console, and only for as long as you leave it up.
+**While patrolling, it listens and does not answer.** Nothing it observes can
+observe it back, because nothing leaves the radio:
+
+| | |
+|---|---|
+| BLE scan | passive — no `SCAN_REQ` is ever emitted |
+| Wi-Fi access-point scan | **passive** — no probe requests |
+| Wi-Fi sniff | receive-only |
+
+The Wi-Fi scan being passive matters as much as the BLE one. An active scan
+broadcasts probe requests carrying the device's own MAC on every channel, every
+cycle — and probe requests are exactly what presence analytics and Wi-Fi
+tracking systems collect. A detector that announced itself to the things it
+was built to notice would be self-defeating. The cost is dwell time, not
+coverage: access points beacon around ten times a second, hidden ones included.
+
+It does transmit in the other two modes, and there is no way around that:
+
+- **Console** — the SoftAP beacons and serves the page.
+- **Uplink** — it is associated to your network and pushes notifications.
+
+Both are entered deliberately, and patrol is where it spends most of its
+time.
 
 Detection runs across three phases:
 
 | Phase | What it catches |
 |---|---|
 | BLE passive scan (continuous) | trackers, body cameras, smart glasses, Remote ID drones, followers |
-| Wi-Fi active scan (~3 s/cycle) | camera and ALPR vendor APs, camera-keyword SSIDs |
+| Wi-Fi passive scan (~8 s/cycle) | camera and ALPR vendor APs, camera-keyword SSIDs |
 | Wi-Fi promiscuous sniff (~5 s/cycle, ch 1–13) | Remote ID beacons, hidden and non-broadcasting APs |
 
 Classification uses four independent kinds of evidence, and the UI tells you
