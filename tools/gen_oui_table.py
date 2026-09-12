@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate main/argus_oui_table.h from the IEEE MA-L registry.
+"""Generate main/observore_oui_table.h from the IEEE MA-L registry.
 
 OUI assignments are public facts published by the IEEE Registration Authority.
 Regenerating from the source keeps the table current and auditable instead of
@@ -140,7 +140,7 @@ def fetch(path):
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return fh.read()
     sys.stderr.write("downloading %s ...\n" % OUI_URL)
-    req = urllib.request.Request(OUI_URL, headers={"User-Agent": "argus-oui-gen"})
+    req = urllib.request.Request(OUI_URL, headers={"User-Agent": "observore-oui-gen"})
     with urllib.request.urlopen(req, timeout=180) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
@@ -159,7 +159,7 @@ def normalise(org):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", help="local oui.csv instead of downloading")
-    ap.add_argument("--out", default="main/argus_oui_table.h")
+    ap.add_argument("--out", default="main/observore_oui_table.h")
     args = ap.parse_args()
 
     compiled = OrderedDict(
@@ -220,38 +220,38 @@ def main():
                  " * Vendor-to-category mapping lives in the generator.\n"
                  " */\n\n"
                  "#pragma once\n\n"
-                 "#include \"argus_types.h\"\n\n" % OUI_URL)
+                 "#include \"observore_types.h\"\n\n" % OUI_URL)
         fh.write("/* %d prefixes: %s */\n" % (
             len(rows), ", ".join("%s=%d" % (c, n) for c, n in counts.items())))
-        fh.write("static const argus_oui_t ARGUS_OUI_TABLE[] = {\n")
+        fh.write("static const observore_oui_t OBSERVORE_OUI_TABLE[] = {\n")
         for oui, cat, label in rows:
-            fh.write("    {{0x%s, 0x%s, 0x%s}, ARGUS_CLASS_%s, \"%s\"},\n"
+            fh.write("    {{0x%s, 0x%s, 0x%s}, OBSERVORE_CLASS_%s, \"%s\"},\n"
                      % (oui[0:2], oui[2:4], oui[4:6], cat, label))
         fh.write("};\n\n")
-        fh.write("#define ARGUS_OUI_TABLE_LEN "
-                 "(sizeof(ARGUS_OUI_TABLE) / sizeof(ARGUS_OUI_TABLE[0]))\n")
+        fh.write("#define OBSERVORE_OUI_TABLE_LEN "
+                 "(sizeof(OBSERVORE_OUI_TABLE) / sizeof(OBSERVORE_OUI_TABLE[0]))\n")
 
         fh.write("\n/* Benign vendors -- LABELLING ONLY.  A match here never\n"
                  " * classifies, never scores, and never raises the threat\n"
                  " * level.  It exists so an unknown MAC can be recognised as\n"
                  " * your own handset and muted in one click.\n"
                  " */\n")
-        fh.write("static const char *const ARGUS_VENDOR_NAMES[] = {\n")
+        fh.write("static const char *const OBSERVORE_VENDOR_NAMES[] = {\n")
         for name in vendor_names:
             fh.write('    "%s",\n' % name)
         fh.write("};\n\n")
-        fh.write("#define ARGUS_VENDOR_NAMES_LEN "
-                 "(sizeof(ARGUS_VENDOR_NAMES) / sizeof(ARGUS_VENDOR_NAMES[0]))"
+        fh.write("#define OBSERVORE_VENDOR_NAMES_LEN "
+                 "(sizeof(OBSERVORE_VENDOR_NAMES) / sizeof(OBSERVORE_VENDOR_NAMES[0]))"
                  "\n\n")
         fh.write("/* %d prefixes, 4 bytes each (%.1f KB of flash). */\n"
                  % (len(vendor_rows), len(vendor_rows) * 4 / 1024))
-        fh.write("static const argus_vendor_oui_t ARGUS_VENDOR_OUIS[] = {\n")
+        fh.write("static const observore_vendor_oui_t OBSERVORE_VENDOR_OUIS[] = {\n")
         for oui, idx in vendor_rows:
             fh.write("    {{0x%s, 0x%s, 0x%s}, %d},\n"
                      % (oui[0:2], oui[2:4], oui[4:6], idx))
         fh.write("};\n\n")
-        fh.write("#define ARGUS_VENDOR_OUIS_LEN "
-                 "(sizeof(ARGUS_VENDOR_OUIS) / sizeof(ARGUS_VENDOR_OUIS[0]))\n")
+        fh.write("#define OBSERVORE_VENDOR_OUIS_LEN "
+                 "(sizeof(OBSERVORE_VENDOR_OUIS) / sizeof(OBSERVORE_VENDOR_OUIS[0]))\n")
 
     sys.stderr.write("wrote %s: %d threat prefixes (%s)\n" % (
         args.out, len(rows),

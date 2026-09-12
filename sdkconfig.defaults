@@ -43,8 +43,8 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # by git.  Set them with `idf.py menuconfig` (sdkconfig is gitignored), or with
 # a gitignored credentials.conf, or at runtime from the console.
 # See README, "Joining your network".
-CONFIG_ARGUS_WIFI_SSID=""
-CONFIG_ARGUS_WIFI_PASSWORD=""
+CONFIG_OBSERVORE_WIFI_SSID=""
+CONFIG_OBSERVORE_WIFI_PASSWORD=""
 
 # Gotify pushes go over TLS to whatever host you run, so the Mozilla root
 # bundle is compiled in rather than pinning a single certificate.

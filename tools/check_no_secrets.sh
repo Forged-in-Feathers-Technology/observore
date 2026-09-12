@@ -21,7 +21,7 @@ status=0
 for f in $files; do
     [[ -f "$f" ]] || continue
     # A credential option set to anything other than the empty string.
-    if matches=$(grep -nE '^[[:space:]]*CONFIG_ARGUS_WIFI_(SSID|PASSWORD)[[:space:]]*=[[:space:]]*"[^"]+"' "$f" 2>/dev/null); then
+    if matches=$(grep -nE '^[[:space:]]*CONFIG_OBSERVORE_WIFI_(SSID|PASSWORD)[[:space:]]*=[[:space:]]*"[^"]+"' "$f" 2>/dev/null); then
         # The example file is allowed to carry obvious placeholders.
         if [[ "$f" == "credentials.conf.example" ]]; then
             continue

@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "argus_detect.h"
-#include "argus_oui_table.h"
+#include "observore_detect.h"
+#include "observore_oui_table.h"
 
 /* ------------------------------------------------------------------ */
 /* BLE assigned numbers                                               */
@@ -42,55 +42,55 @@
 
 typedef struct {
     const char   *needle;   /* lowercase substring */
-    argus_class_t cls;
+    observore_class_t cls;
     const char   *label;
-} argus_keyword_t;
+} observore_keyword_t;
 
 /* Matched against BLE local names.  Substring, case-insensitive. */
-static const argus_keyword_t BLE_NAME_KEYWORDS[] = {
-    {"axon",          ARGUS_CLASS_BODYCAM,      "Axon bodycam"},
-    {"bodycam",       ARGUS_CLASS_BODYCAM,      "body camera"},
-    {"body-worn",     ARGUS_CLASS_BODYCAM,      "body camera"},
-    {"body worn",     ARGUS_CLASS_BODYCAM,      "body camera"},
-    {"bwc",           ARGUS_CLASS_BODYCAM,      "body camera"},
-    {"motorola v",    ARGUS_CLASS_BODYCAM,      "Motorola VideoManager"},
-    {"watchguard",    ARGUS_CLASS_BODYCAM,      "WatchGuard bodycam"},
-    {"flock",         ARGUS_CLASS_ALPR,         "Flock Safety"},
-    {"falcon",        ARGUS_CLASS_ALPR,         "Flock Falcon"},
-    {"sparrow",       ARGUS_CLASS_ALPR,         "Flock Sparrow"},
-    {"vigilant",      ARGUS_CLASS_ALPR,         "Vigilant ALPR"},
-    {"leonardo",      ARGUS_CLASS_ALPR,         "Leonardo ALPR"},
-    {"ray-ban",       ARGUS_CLASS_SMARTGLASSES, "Ray-Ban Meta"},
-    {"rayban",        ARGUS_CLASS_SMARTGLASSES, "Ray-Ban Meta"},
-    {"meta glass",    ARGUS_CLASS_SMARTGLASSES, "Meta glasses"},
-    {"oakley meta",   ARGUS_CLASS_SMARTGLASSES, "Oakley Meta"},
-    {"spectacles",    ARGUS_CLASS_SMARTGLASSES, "Snap Spectacles"},
-    {"tile",          ARGUS_CLASS_TRACKER,      "Tile tracker"},
-    {"smarttag",      ARGUS_CLASS_TRACKER,      "Galaxy SmartTag"},
-    {"chipolo",       ARGUS_CLASS_TRACKER,      "Chipolo tracker"},
-    {"airtag",        ARGUS_CLASS_TRACKER,      "AirTag"},
+static const observore_keyword_t BLE_NAME_KEYWORDS[] = {
+    {"axon",          OBSERVORE_CLASS_BODYCAM,      "Axon bodycam"},
+    {"bodycam",       OBSERVORE_CLASS_BODYCAM,      "body camera"},
+    {"body-worn",     OBSERVORE_CLASS_BODYCAM,      "body camera"},
+    {"body worn",     OBSERVORE_CLASS_BODYCAM,      "body camera"},
+    {"bwc",           OBSERVORE_CLASS_BODYCAM,      "body camera"},
+    {"motorola v",    OBSERVORE_CLASS_BODYCAM,      "Motorola VideoManager"},
+    {"watchguard",    OBSERVORE_CLASS_BODYCAM,      "WatchGuard bodycam"},
+    {"flock",         OBSERVORE_CLASS_ALPR,         "Flock Safety"},
+    {"falcon",        OBSERVORE_CLASS_ALPR,         "Flock Falcon"},
+    {"sparrow",       OBSERVORE_CLASS_ALPR,         "Flock Sparrow"},
+    {"vigilant",      OBSERVORE_CLASS_ALPR,         "Vigilant ALPR"},
+    {"leonardo",      OBSERVORE_CLASS_ALPR,         "Leonardo ALPR"},
+    {"ray-ban",       OBSERVORE_CLASS_SMARTGLASSES, "Ray-Ban Meta"},
+    {"rayban",        OBSERVORE_CLASS_SMARTGLASSES, "Ray-Ban Meta"},
+    {"meta glass",    OBSERVORE_CLASS_SMARTGLASSES, "Meta glasses"},
+    {"oakley meta",   OBSERVORE_CLASS_SMARTGLASSES, "Oakley Meta"},
+    {"spectacles",    OBSERVORE_CLASS_SMARTGLASSES, "Snap Spectacles"},
+    {"tile",          OBSERVORE_CLASS_TRACKER,      "Tile tracker"},
+    {"smarttag",      OBSERVORE_CLASS_TRACKER,      "Galaxy SmartTag"},
+    {"chipolo",       OBSERVORE_CLASS_TRACKER,      "Chipolo tracker"},
+    {"airtag",        OBSERVORE_CLASS_TRACKER,      "AirTag"},
 };
 
 /* Matched against Wi-Fi SSIDs.  Deliberately narrower than the BLE list --
  * SSIDs are attacker-chosen free text and short needles produce noise. */
-static const argus_keyword_t SSID_KEYWORDS[] = {
-    {"flock",     ARGUS_CLASS_ALPR,   "Flock Safety"},
-    {"alpr",      ARGUS_CLASS_ALPR,   "ALPR"},
-    {"lpr-",      ARGUS_CLASS_ALPR,   "LPR"},
-    {"axon",      ARGUS_CLASS_BODYCAM,"Axon"},
-    {"bodycam",   ARGUS_CLASS_BODYCAM,"body camera"},
-    {"bwc-",      ARGUS_CLASS_BODYCAM,"body camera"},
-    {"cctv",      ARGUS_CLASS_CAMERA, "CCTV"},
-    {"ipcam",     ARGUS_CLASS_CAMERA, "IP camera"},
-    {"ip-cam",    ARGUS_CLASS_CAMERA, "IP camera"},
-    {"surveil",   ARGUS_CLASS_CAMERA, "surveillance"},
-    {"hikvision", ARGUS_CLASS_CAMERA, "Hikvision"},
-    {"dahua",     ARGUS_CLASS_CAMERA, "Dahua"},
-    {"verkada",   ARGUS_CLASS_CAMERA, "Verkada"},
-    {"reolink",   ARGUS_CLASS_CAMERA, "Reolink"},
-    {"amcrest",   ARGUS_CLASS_CAMERA, "Amcrest"},
-    {"wyzecam",   ARGUS_CLASS_CAMERA, "Wyze"},
-    {"ring-",     ARGUS_CLASS_CAMERA, "Ring"},
+static const observore_keyword_t SSID_KEYWORDS[] = {
+    {"flock",     OBSERVORE_CLASS_ALPR,   "Flock Safety"},
+    {"alpr",      OBSERVORE_CLASS_ALPR,   "ALPR"},
+    {"lpr-",      OBSERVORE_CLASS_ALPR,   "LPR"},
+    {"axon",      OBSERVORE_CLASS_BODYCAM,"Axon"},
+    {"bodycam",   OBSERVORE_CLASS_BODYCAM,"body camera"},
+    {"bwc-",      OBSERVORE_CLASS_BODYCAM,"body camera"},
+    {"cctv",      OBSERVORE_CLASS_CAMERA, "CCTV"},
+    {"ipcam",     OBSERVORE_CLASS_CAMERA, "IP camera"},
+    {"ip-cam",    OBSERVORE_CLASS_CAMERA, "IP camera"},
+    {"surveil",   OBSERVORE_CLASS_CAMERA, "surveillance"},
+    {"hikvision", OBSERVORE_CLASS_CAMERA, "Hikvision"},
+    {"dahua",     OBSERVORE_CLASS_CAMERA, "Dahua"},
+    {"verkada",   OBSERVORE_CLASS_CAMERA, "Verkada"},
+    {"reolink",   OBSERVORE_CLASS_CAMERA, "Reolink"},
+    {"amcrest",   OBSERVORE_CLASS_CAMERA, "Amcrest"},
+    {"wyzecam",   OBSERVORE_CLASS_CAMERA, "Wyze"},
+    {"ring-",     OBSERVORE_CLASS_CAMERA, "Ring"},
 };
 
 #define ARRLEN(a) (sizeof(a) / sizeof((a)[0]))
@@ -126,12 +126,12 @@ static bool contains_ci(const char *hay, const char *needle)
     return false;
 }
 
-static void set_label(argus_event_t *ev, const char *label)
+static void set_label(observore_event_t *ev, const char *label)
 {
     snprintf(ev->label, sizeof(ev->label), "%s", label ? label : "");
 }
 
-static void set_detail(argus_event_t *ev, const char *detail)
+static void set_detail(observore_event_t *ev, const char *detail)
 {
     snprintf(ev->detail, sizeof(ev->detail), "%s", detail ? detail : "");
 }
@@ -145,7 +145,7 @@ static uint16_t le16(const uint8_t *p)
 /* Public helpers                                                     */
 /* ------------------------------------------------------------------ */
 
-bool argus_mac_is_random(const uint8_t mac[ARGUS_MAC_LEN])
+bool observore_mac_is_random(const uint8_t mac[OBSERVORE_MAC_LEN])
 {
     /* Bit 1 of the first octet is the locally-administered flag.  Trackers and
      * modern phones rotate randomised addresses, so an OUI lookup on these is
@@ -153,20 +153,20 @@ bool argus_mac_is_random(const uint8_t mac[ARGUS_MAC_LEN])
     return (mac[0] & 0x02) != 0;
 }
 
-const argus_oui_t *argus_oui_lookup(const uint8_t mac[ARGUS_MAC_LEN])
+const observore_oui_t *observore_oui_lookup(const uint8_t mac[OBSERVORE_MAC_LEN])
 {
-    if (argus_mac_is_random(mac)) {
+    if (observore_mac_is_random(mac)) {
         return NULL;
     }
     /* The generator emits the table sorted by prefix, so this is a plain
      * binary search over three bytes. */
     size_t lo = 0;
-    size_t hi = ARGUS_OUI_TABLE_LEN;
+    size_t hi = OBSERVORE_OUI_TABLE_LEN;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        int cmp = memcmp(ARGUS_OUI_TABLE[mid].oui, mac, 3);
+        int cmp = memcmp(OBSERVORE_OUI_TABLE[mid].oui, mac, 3);
         if (cmp == 0) {
-            return &ARGUS_OUI_TABLE[mid];
+            return &OBSERVORE_OUI_TABLE[mid];
         }
         if (cmp < 0) {
             lo = mid + 1;
@@ -177,26 +177,26 @@ const argus_oui_t *argus_oui_lookup(const uint8_t mac[ARGUS_MAC_LEN])
     return NULL;
 }
 
-bool argus_obs_is_random(const argus_observation_t *obs)
+bool observore_obs_is_random(const observore_observation_t *obs)
 {
     if (!obs || !obs->mac) {
         return true;   /* nothing known means nothing may be claimed */
     }
-    return obs->addr_random || argus_mac_is_random(obs->mac);
+    return obs->addr_random || observore_mac_is_random(obs->mac);
 }
 
-const char *argus_vendor_lookup(const uint8_t mac[ARGUS_MAC_LEN])
+const char *observore_vendor_lookup(const uint8_t mac[OBSERVORE_MAC_LEN])
 {
-    if (!mac || argus_mac_is_random(mac)) {
+    if (!mac || observore_mac_is_random(mac)) {
         return NULL;
     }
-    size_t lo = 0, hi = ARGUS_VENDOR_OUIS_LEN;
+    size_t lo = 0, hi = OBSERVORE_VENDOR_OUIS_LEN;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        int cmp = memcmp(ARGUS_VENDOR_OUIS[mid].oui, mac, 3);
+        int cmp = memcmp(OBSERVORE_VENDOR_OUIS[mid].oui, mac, 3);
         if (cmp == 0) {
-            uint8_t v = ARGUS_VENDOR_OUIS[mid].vendor;
-            return (v < ARGUS_VENDOR_NAMES_LEN) ? ARGUS_VENDOR_NAMES[v] : NULL;
+            uint8_t v = OBSERVORE_VENDOR_OUIS[mid].vendor;
+            return (v < OBSERVORE_VENDOR_NAMES_LEN) ? OBSERVORE_VENDOR_NAMES[v] : NULL;
         }
         if (cmp < 0) {
             lo = mid + 1;
@@ -207,7 +207,7 @@ const char *argus_vendor_lookup(const uint8_t mac[ARGUS_MAC_LEN])
     return NULL;
 }
 
-const uint8_t *argus_adv_field(const uint8_t *adv, size_t adv_len, uint8_t type,
+const uint8_t *observore_adv_field(const uint8_t *adv, size_t adv_len, uint8_t type,
                                size_t *len_out)
 {
     size_t i = 0;
@@ -227,12 +227,12 @@ const uint8_t *argus_adv_field(const uint8_t *adv, size_t adv_len, uint8_t type,
     return NULL;
 }
 
-bool argus_adv_name(const uint8_t *adv, size_t adv_len, char *buf, size_t buf_len)
+bool observore_adv_name(const uint8_t *adv, size_t adv_len, char *buf, size_t buf_len)
 {
     size_t len = 0;
-    const uint8_t *p = argus_adv_field(adv, adv_len, AD_TYPE_NAME_COMPLETE, &len);
+    const uint8_t *p = observore_adv_field(adv, adv_len, AD_TYPE_NAME_COMPLETE, &len);
     if (!p) {
-        p = argus_adv_field(adv, adv_len, AD_TYPE_NAME_SHORT, &len);
+        p = observore_adv_field(adv, adv_len, AD_TYPE_NAME_SHORT, &len);
     }
     if (!p || len == 0 || buf_len == 0) {
         return false;
@@ -248,7 +248,7 @@ bool argus_adv_name(const uint8_t *adv, size_t adv_len, char *buf, size_t buf_le
     return true;
 }
 
-bool argus_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len)
+bool observore_ssid_is_suspicious(const char *ssid, char *label_out, size_t label_len)
 {
     if (!ssid || !*ssid) {
         return false;
@@ -278,7 +278,7 @@ static void fnv_byte(uint32_t *h, uint8_t b)
     fnv(h, &b, 1);
 }
 
-uint32_t argus_fingerprint(const uint8_t *adv, size_t adv_len)
+uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len)
 {
     if (!adv || adv_len == 0) {
         return 0;
@@ -335,17 +335,17 @@ uint32_t argus_fingerprint(const uint8_t *adv, size_t adv_len)
     return h ? h : 1u;
 }
 
-uint8_t argus_class_points(argus_class_t cls)
+uint8_t observore_class_points(observore_class_t cls)
 {
     switch (cls) {
-        case ARGUS_CLASS_BODYCAM:          return 5;
-        case ARGUS_CLASS_ALPR:             return 5;
-        case ARGUS_CLASS_FOLLOWER:         return 4;
-        case ARGUS_CLASS_TRACKER:          return 3;
-        case ARGUS_CLASS_DRONE:            return 3;
-        case ARGUS_CLASS_SMARTGLASSES:     return 3;
-        case ARGUS_CLASS_FLEET_TELEMATICS: return 2;
-        case ARGUS_CLASS_CAMERA:           return 1;
+        case OBSERVORE_CLASS_BODYCAM:          return 5;
+        case OBSERVORE_CLASS_ALPR:             return 5;
+        case OBSERVORE_CLASS_FOLLOWER:         return 4;
+        case OBSERVORE_CLASS_TRACKER:          return 3;
+        case OBSERVORE_CLASS_DRONE:            return 3;
+        case OBSERVORE_CLASS_SMARTGLASSES:     return 3;
+        case OBSERVORE_CLASS_FLEET_TELEMATICS: return 2;
+        case OBSERVORE_CLASS_CAMERA:           return 1;
         default:                           return 0;
     }
 }
@@ -360,7 +360,7 @@ static bool adv_has_uuid16(const uint8_t *adv, size_t adv_len, uint16_t uuid)
     const uint8_t types[] = {AD_TYPE_UUID16_COMPLETE, AD_TYPE_UUID16_PARTIAL};
     for (size_t t = 0; t < ARRLEN(types); t++) {
         size_t len = 0;
-        const uint8_t *p = argus_adv_field(adv, adv_len, types[t], &len);
+        const uint8_t *p = observore_adv_field(adv, adv_len, types[t], &len);
         if (!p) {
             continue;
         }
@@ -393,7 +393,7 @@ static const uint8_t *adv_service_data(const uint8_t *adv, size_t adv_len,
     return NULL;
 }
 
-static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *ev)
+static bool match_ble_signature(const observore_observation_t *obs, observore_event_t *ev)
 {
     const uint8_t *adv = obs->adv;
     size_t adv_len = obs->adv_len;
@@ -407,8 +407,8 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
     size_t sd_len = 0;
     const uint8_t *sd = adv_service_data(adv, adv_len, UUID16_ASTM_REMOTE_ID, &sd_len);
     if (sd && sd_len >= 1 && sd[0] == ASTM_APP_CODE_ODID) {
-        ev->cls = ARGUS_CLASS_DRONE;
-        ev->evidence = ARGUS_EVIDENCE_SERVICE_UUID;
+        ev->cls = OBSERVORE_CLASS_DRONE;
+        ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Remote ID drone");
         return true;
     }
@@ -420,7 +420,7 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
      * owner.  Paired-and-present Apple gear advertises other payload types
      * and is deliberately not flagged. */
     size_t mfg_len = 0;
-    const uint8_t *mfg = argus_adv_field(adv, adv_len, AD_TYPE_MFG_DATA, &mfg_len);
+    const uint8_t *mfg = observore_adv_field(adv, adv_len, AD_TYPE_MFG_DATA, &mfg_len);
     if (mfg && mfg_len >= 4) {
         uint16_t company = le16(mfg);
         const uint8_t *payload = mfg + 2;
@@ -428,8 +428,8 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
 
         if (company == COMPANY_APPLE && payload_len >= 2 &&
             payload[0] == APPLE_TYPE_FINDMY && payload[1] == APPLE_FINDMY_LEN) {
-            ev->cls = ARGUS_CLASS_TRACKER;
-            ev->evidence = ARGUS_EVIDENCE_MFG_DATA;
+            ev->cls = OBSERVORE_CLASS_TRACKER;
+            ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
             set_label(ev, "Find My tracker");
             return true;
         }
@@ -438,8 +438,8 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
          * the company ID alone reports a crowded room as four trackers.  The
          * SmartTag is identified by its 0xFD5A service data below instead. */
         if (company == COMPANY_META || company == COMPANY_META_TECH) {
-            ev->cls = ARGUS_CLASS_SMARTGLASSES;
-            ev->evidence = ARGUS_EVIDENCE_MFG_DATA;
+            ev->cls = OBSERVORE_CLASS_SMARTGLASSES;
+            ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
             set_label(ev, "Meta wearable");
             return true;
         }
@@ -447,15 +447,15 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
 
     /* --- Tracker service UUIDs --------------------------------------- */
     if (adv_has_uuid16(adv, adv_len, UUID16_TILE)) {
-        ev->cls = ARGUS_CLASS_TRACKER;
-        ev->evidence = ARGUS_EVIDENCE_SERVICE_UUID;
+        ev->cls = OBSERVORE_CLASS_TRACKER;
+        ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Tile tracker");
         return true;
     }
     if (adv_has_uuid16(adv, adv_len, UUID16_SAMSUNG_FIND) ||
         adv_service_data(adv, adv_len, UUID16_SAMSUNG_FIND, &sd_len)) {
-        ev->cls = ARGUS_CLASS_TRACKER;
-        ev->evidence = ARGUS_EVIDENCE_SERVICE_UUID;
+        ev->cls = OBSERVORE_CLASS_TRACKER;
+        ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Galaxy SmartTag");
         return true;
     }
@@ -464,8 +464,8 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
          * than the Apple case -- ordinary headphones advertise this too --
          * so it is reported as a tracker but scored like one hit, not
          * escalated on its own. */
-        ev->cls = ARGUS_CLASS_TRACKER;
-        ev->evidence = ARGUS_EVIDENCE_SERVICE_UUID;
+        ev->cls = OBSERVORE_CLASS_TRACKER;
+        ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Fast Pair / Find Hub");
         return true;
     }
@@ -477,15 +477,15 @@ static bool match_ble_signature(const argus_observation_t *obs, argus_event_t *e
 /* Entry point                                                        */
 /* ------------------------------------------------------------------ */
 
-bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
+bool observore_classify(const observore_observation_t *obs, observore_event_t *out)
 {
     if (!obs || !obs->mac || !out) {
         return false;
     }
 
-    argus_event_t ev;
+    observore_event_t ev;
     memset(&ev, 0, sizeof(ev));
-    memcpy(ev.mac, obs->mac, ARGUS_MAC_LEN);
+    memcpy(ev.mac, obs->mac, OBSERVORE_MAC_LEN);
     ev.src = obs->src;
     ev.rssi = obs->rssi;
     ev.channel = obs->channel;
@@ -496,11 +496,11 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
      * every source.  BLE reports the address type on the wire, which is
      * authoritative; the locally-administered bit is only a fallback for
      * Wi-Fi, where no such field exists. */
-    const argus_oui_t *oui = argus_obs_is_random(obs) ? NULL
-                                                     : argus_oui_lookup(obs->mac);
+    const observore_oui_t *oui = observore_obs_is_random(obs) ? NULL
+                                                     : observore_oui_lookup(obs->mac);
     if (oui) {
         ev.cls = oui->cls;
-        ev.evidence = ARGUS_EVIDENCE_OUI;
+        ev.evidence = OBSERVORE_EVIDENCE_OUI;
         set_label(&ev, oui->label);
         matched = true;
     }
@@ -509,27 +509,27 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
      * including the vendor prefix -- plenty of drones fly on a generic Wi-Fi
      * module whose OUI says nothing. */
     if (obs->remote_id) {
-        ev.cls = ARGUS_CLASS_DRONE;
-        ev.evidence = ARGUS_EVIDENCE_SERVICE_UUID;
+        ev.cls = OBSERVORE_CLASS_DRONE;
+        ev.evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(&ev, "Remote ID drone");
         if (obs->ssid && *obs->ssid) {
             set_detail(&ev, obs->ssid);
         }
-        ev.points = argus_class_points(ev.cls);
+        ev.points = observore_class_points(ev.cls);
         *out = ev;
         return true;
     }
 
-    if (obs->src == ARGUS_SRC_BLE) {
-        char name[ARGUS_LABEL_LEN];
-        bool have_name = argus_adv_name(obs->adv, obs->adv_len, name, sizeof(name));
+    if (obs->src == OBSERVORE_SRC_BLE) {
+        char name[OBSERVORE_LABEL_LEN];
+        bool have_name = observore_adv_name(obs->adv, obs->adv_len, name, sizeof(name));
         if (have_name) {
             set_detail(&ev, name);
         }
 
         /* A payload signature beats a vendor prefix: trackers rotate their
          * MACs, so the advert contents are the only reliable evidence. */
-        argus_event_t sig = ev;
+        observore_event_t sig = ev;
         if (match_ble_signature(obs, &sig)) {
             ev = sig;
             matched = true;
@@ -537,7 +537,7 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
             for (size_t i = 0; i < ARRLEN(BLE_NAME_KEYWORDS); i++) {
                 if (contains_ci(name, BLE_NAME_KEYWORDS[i].needle)) {
                     ev.cls = BLE_NAME_KEYWORDS[i].cls;
-                    ev.evidence = ARGUS_EVIDENCE_NAME;
+                    ev.evidence = OBSERVORE_EVIDENCE_NAME;
                     set_label(&ev, BLE_NAME_KEYWORDS[i].label);
                     matched = true;
                     break;
@@ -546,8 +546,8 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
         }
     } else if (obs->ssid && *obs->ssid) {
         set_detail(&ev, obs->ssid);
-        char label[ARGUS_LABEL_LEN];
-        if (argus_ssid_is_suspicious(obs->ssid, label, sizeof(label))) {
+        char label[OBSERVORE_LABEL_LEN];
+        if (observore_ssid_is_suspicious(obs->ssid, label, sizeof(label))) {
             /* Only let an SSID keyword override the OUI when the OUI said
              * nothing -- a named vendor is the better answer. */
             if (!oui) {
@@ -557,7 +557,7 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
                         break;
                     }
                 }
-                ev.evidence = ARGUS_EVIDENCE_SSID;
+                ev.evidence = OBSERVORE_EVIDENCE_SSID;
                 set_label(&ev, label);
             }
             matched = true;
@@ -568,7 +568,7 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
         return false;
     }
 
-    ev.points = argus_class_points(ev.cls);
+    ev.points = observore_class_points(ev.cls);
     *out = ev;
     return true;
 }
@@ -577,26 +577,26 @@ bool argus_classify(const argus_observation_t *obs, argus_event_t *out)
 /* Enum names                                                         */
 /* ------------------------------------------------------------------ */
 
-const char *argus_class_name(argus_class_t cls)
+const char *observore_class_name(observore_class_t cls)
 {
-    static const char *names[ARGUS_CLASS_MAX] = {
+    static const char *names[OBSERVORE_CLASS_MAX] = {
         "unknown", "camera", "fleet-telematics", "tracker",
         "smart-glasses", "drone", "alpr", "bodycam", "follower",
     };
-    return (cls < ARGUS_CLASS_MAX) ? names[cls] : "unknown";
+    return (cls < OBSERVORE_CLASS_MAX) ? names[cls] : "unknown";
 }
 
-const char *argus_source_name(argus_source_t src)
+const char *observore_source_name(observore_source_t src)
 {
-    static const char *names[ARGUS_SRC_MAX] = {"ble", "wifi-scan", "wifi-sniff"};
-    return (src < ARGUS_SRC_MAX) ? names[src] : "?";
+    static const char *names[OBSERVORE_SRC_MAX] = {"ble", "wifi-scan", "wifi-sniff"};
+    return (src < OBSERVORE_SRC_MAX) ? names[src] : "?";
 }
 
-const char *argus_evidence_name(argus_evidence_t ev)
+const char *observore_evidence_name(observore_evidence_t ev)
 {
-    static const char *names[ARGUS_EVIDENCE_MAX] = {
+    static const char *names[OBSERVORE_EVIDENCE_MAX] = {
         "none", "oui", "ble-name", "ssid", "mfg-data", "service-uuid",
         "persistence",
     };
-    return (ev < ARGUS_EVIDENCE_MAX) ? names[ev] : "?";
+    return (ev < OBSERVORE_EVIDENCE_MAX) ? names[ev] : "?";
 }

@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "argus_notify.h"
-#include "argus_wifi.h"
+#include "observore_notify.h"
+#include "observore_wifi.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -11,9 +11,10 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-static const char *TAG = "argus.notify";
+static const char *TAG = "observore.notify";
 
-#define NVS_NAMESPACE "argus"
+#include "observore_nvs.h"
+#define NVS_NAMESPACE OBSERVORE_NVS_NAMESPACE
 #define NVS_KEY_URL   "gotify_url"
 #define NVS_KEY_TOKEN "gotify_tok"
 
@@ -25,15 +26,15 @@ static const char *TAG = "argus.notify";
 #define MAX_PER_PUMP 2
 
 typedef struct {
-    char    title[ARGUS_NOTIFY_TITLE_LEN];
-    char    message[ARGUS_NOTIFY_MSG_LEN];
+    char    title[OBSERVORE_NOTIFY_TITLE_LEN];
+    char    message[OBSERVORE_NOTIFY_MSG_LEN];
     uint8_t priority;
-} argus_notice_t;
+} observore_notice_t;
 
 static SemaphoreHandle_t s_lock;
-static char     s_url[ARGUS_NOTIFY_URL_LEN];
-static char     s_token[ARGUS_NOTIFY_TOKEN_LEN];
-static argus_notice_t s_queue[ARGUS_NOTIFY_QUEUE];
+static char     s_url[OBSERVORE_NOTIFY_URL_LEN];
+static char     s_token[OBSERVORE_NOTIFY_TOKEN_LEN];
+static observore_notice_t s_queue[OBSERVORE_NOTIFY_QUEUE];
 static size_t   s_head, s_count;
 static uint32_t s_sent, s_failed, s_dropped;
 static char     s_last_error[64];
@@ -85,7 +86,7 @@ static void save(void)
     }
 }
 
-void argus_notify_init(void)
+void observore_notify_init(void)
 {
     if (!s_lock) {
         s_lock = xSemaphoreCreateRecursiveMutex();
@@ -100,7 +101,7 @@ void argus_notify_init(void)
     UNLOCK();
 }
 
-bool argus_notify_configured(void)
+bool observore_notify_configured(void)
 {
     LOCK();
     bool ok = s_url[0] != '\0';
@@ -108,7 +109,7 @@ bool argus_notify_configured(void)
     return ok;
 }
 
-bool argus_notify_url(char *out, size_t len)
+bool observore_notify_url(char *out, size_t len)
 {
     if (!out || len == 0) {
         return false;
@@ -120,7 +121,7 @@ bool argus_notify_url(char *out, size_t len)
     return ok;
 }
 
-esp_err_t argus_notify_set(const char *url, const char *token)
+esp_err_t observore_notify_set(const char *url, const char *token)
 {
     if (!url || !*url) {
         return ESP_ERR_INVALID_ARG;
@@ -128,8 +129,8 @@ esp_err_t argus_notify_set(const char *url, const char *token)
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (strlen(url) >= ARGUS_NOTIFY_URL_LEN ||
-        (token && strlen(token) >= ARGUS_NOTIFY_TOKEN_LEN)) {
+    if (strlen(url) >= OBSERVORE_NOTIFY_URL_LEN ||
+        (token && strlen(token) >= OBSERVORE_NOTIFY_TOKEN_LEN)) {
         return ESP_ERR_INVALID_SIZE;
     }
     LOCK();
@@ -140,7 +141,7 @@ esp_err_t argus_notify_set(const char *url, const char *token)
     return ESP_OK;
 }
 
-esp_err_t argus_notify_clear(void)
+esp_err_t observore_notify_clear(void)
 {
     LOCK();
     memset(s_url, 0, sizeof(s_url));
@@ -162,14 +163,14 @@ static void enqueue(const char *title, const char *message, uint8_t priority)
         UNLOCK();
         return;     /* nowhere to send it; do not accumulate */
     }
-    if (s_count == ARGUS_NOTIFY_QUEUE) {
+    if (s_count == OBSERVORE_NOTIFY_QUEUE) {
         /* Drop the oldest.  A detector that stops noticing new things because
          * its outbox is full is worse than one that loses the oldest notice. */
-        s_head = (s_head + 1) % ARGUS_NOTIFY_QUEUE;
+        s_head = (s_head + 1) % OBSERVORE_NOTIFY_QUEUE;
         s_count--;
         s_dropped++;
     }
-    argus_notice_t *n = &s_queue[(s_head + s_count) % ARGUS_NOTIFY_QUEUE];
+    observore_notice_t *n = &s_queue[(s_head + s_count) % OBSERVORE_NOTIFY_QUEUE];
     snprintf(n->title, sizeof(n->title), "%s", title);
     snprintf(n->message, sizeof(n->message), "%s", message);
     n->priority = priority;
@@ -177,7 +178,7 @@ static void enqueue(const char *title, const char *message, uint8_t priority)
     UNLOCK();
 }
 
-size_t argus_notify_pending(void)
+size_t observore_notify_pending(void)
 {
     LOCK();
     size_t n = s_count;
@@ -185,11 +186,11 @@ size_t argus_notify_pending(void)
     return n;
 }
 
-uint32_t argus_notify_sent(void)    { return s_sent; }
-uint32_t argus_notify_failed(void)  { return s_failed; }
-uint32_t argus_notify_dropped(void) { return s_dropped; }
+uint32_t observore_notify_sent(void)    { return s_sent; }
+uint32_t observore_notify_failed(void)  { return s_failed; }
+uint32_t observore_notify_dropped(void) { return s_dropped; }
 
-const char *argus_notify_last_error(void) { return s_last_error; }
+const char *observore_notify_last_error(void) { return s_last_error; }
 
 /* ------------------------------------------------------------------ */
 /* Triggers                                                           */
@@ -197,32 +198,32 @@ const char *argus_notify_last_error(void) { return s_last_error; }
 
 /* Gotify priority: 8 shows as a high-priority alert on Android, 5 is a normal
  * notification, 2 is quiet. */
-static uint8_t priority_for(argus_class_t cls)
+static uint8_t priority_for(observore_class_t cls)
 {
     switch (cls) {
-        case ARGUS_CLASS_BODYCAM:
-        case ARGUS_CLASS_ALPR:
+        case OBSERVORE_CLASS_BODYCAM:
+        case OBSERVORE_CLASS_ALPR:
             return 8;
-        case ARGUS_CLASS_FOLLOWER:
-        case ARGUS_CLASS_TRACKER:
+        case OBSERVORE_CLASS_FOLLOWER:
+        case OBSERVORE_CLASS_TRACKER:
             return 7;
-        case ARGUS_CLASS_DRONE:
-        case ARGUS_CLASS_SMARTGLASSES:
+        case OBSERVORE_CLASS_DRONE:
+        case OBSERVORE_CLASS_SMARTGLASSES:
             return 5;
         default:
             return 2;
     }
 }
 
-void argus_notify_event(const argus_event_t *ev)
+void observore_notify_event(const observore_event_t *ev)
 {
     if (!ev) {
         return;
     }
-    char title[ARGUS_NOTIFY_TITLE_LEN];
-    char msg[ARGUS_NOTIFY_MSG_LEN];
+    char title[OBSERVORE_NOTIFY_TITLE_LEN];
+    char msg[OBSERVORE_NOTIFY_MSG_LEN];
 
-    snprintf(title, sizeof(title), "%s detected", argus_class_name(ev->cls));
+    snprintf(title, sizeof(title), "%s detected", observore_class_name(ev->cls));
     snprintf(msg, sizeof(msg),
              "%s%s%s\n%02X:%02X:%02X:%02X:%02X:%02X %s\n%d dBm, via %s, %s",
              ev->label,
@@ -230,23 +231,23 @@ void argus_notify_event(const argus_event_t *ev)
              ev->mac[0], ev->mac[1], ev->mac[2],
              ev->mac[3], ev->mac[4], ev->mac[5],
              ev->vendor ? ev->vendor : (ev->addr_random ? "(random)" : ""),
-             ev->rssi, argus_source_name(ev->src),
-             argus_evidence_name(ev->evidence));
+             ev->rssi, observore_source_name(ev->src),
+             observore_evidence_name(ev->evidence));
 
     enqueue(title, msg, priority_for(ev->cls));
 }
 
-void argus_notify_level(argus_level_t from, argus_level_t to, uint16_t score)
+void observore_notify_level(observore_level_t from, observore_level_t to, uint16_t score)
 {
     if (to <= from) {
         return;   /* only escalation is news */
     }
-    char title[ARGUS_NOTIFY_TITLE_LEN];
-    char msg[ARGUS_NOTIFY_MSG_LEN];
-    snprintf(title, sizeof(title), "Argus: %s", argus_level_name(to));
+    char title[OBSERVORE_NOTIFY_TITLE_LEN];
+    char msg[OBSERVORE_NOTIFY_MSG_LEN];
+    snprintf(title, sizeof(title), "Observore: %s", observore_level_name(to));
     snprintf(msg, sizeof(msg), "Threat level %s -> %s, score %u.",
-             argus_level_name(from), argus_level_name(to), score);
-    enqueue(title, msg, to == ARGUS_LEVEL_ALERT ? 8 : 5);
+             observore_level_name(from), observore_level_name(to), score);
+    enqueue(title, msg, to == OBSERVORE_LEVEL_ALERT ? 8 : 5);
 }
 
 /* ------------------------------------------------------------------ */
@@ -274,10 +275,10 @@ static void json_escape(const char *in, char *out, size_t out_len)
     out[o] = '\0';
 }
 
-static esp_err_t send_now(const argus_notice_t *n)
+static esp_err_t send_now(const observore_notice_t *n)
 {
-    char url[ARGUS_NOTIFY_URL_LEN + 16];
-    char token[ARGUS_NOTIFY_TOKEN_LEN];
+    char url[OBSERVORE_NOTIFY_URL_LEN + 16];
+    char token[OBSERVORE_NOTIFY_TOKEN_LEN];
 
     LOCK();
     size_t ulen = strlen(s_url);
@@ -287,12 +288,12 @@ static esp_err_t send_now(const argus_notice_t *n)
     snprintf(token, sizeof(token), "%s", s_token);
     UNLOCK();
 
-    char title[ARGUS_NOTIFY_TITLE_LEN * 2];
-    char message[ARGUS_NOTIFY_MSG_LEN * 2];
+    char title[OBSERVORE_NOTIFY_TITLE_LEN * 2];
+    char message[OBSERVORE_NOTIFY_MSG_LEN * 2];
     json_escape(n->title, title, sizeof(title));
     json_escape(n->message, message, sizeof(message));
 
-    char body[ARGUS_NOTIFY_TITLE_LEN * 2 + ARGUS_NOTIFY_MSG_LEN * 2 + 64];
+    char body[OBSERVORE_NOTIFY_TITLE_LEN * 2 + OBSERVORE_NOTIFY_MSG_LEN * 2 + 64];
     int len = snprintf(body, sizeof(body),
                        "{\"title\":\"%s\",\"message\":\"%s\",\"priority\":%u}",
                        title, message, n->priority);
@@ -339,15 +340,15 @@ static esp_err_t send_now(const argus_notice_t *n)
     return ESP_OK;
 }
 
-void argus_notify_pump(void)
+void observore_notify_pump(void)
 {
-    if (!argus_notify_configured() ||
-        argus_wifi_mode() != ARGUS_MODE_UPLINK) {
+    if (!observore_notify_configured() ||
+        observore_wifi_mode() != OBSERVORE_MODE_UPLINK) {
         return;
     }
 
     for (int i = 0; i < MAX_PER_PUMP; i++) {
-        argus_notice_t notice;
+        observore_notice_t notice;
         LOCK();
         if (s_count == 0) {
             UNLOCK();
@@ -364,7 +365,7 @@ void argus_notify_pump(void)
         }
         LOCK();
         if (s_count > 0) {
-            s_head = (s_head + 1) % ARGUS_NOTIFY_QUEUE;
+            s_head = (s_head + 1) % OBSERVORE_NOTIFY_QUEUE;
             s_count--;
         }
         UNLOCK();
@@ -372,13 +373,13 @@ void argus_notify_pump(void)
     }
 }
 
-esp_err_t argus_notify_test(void)
+esp_err_t observore_notify_test(void)
 {
-    if (!argus_notify_configured()) {
+    if (!observore_notify_configured()) {
         return ESP_ERR_INVALID_STATE;
     }
-    argus_notice_t n = {.priority = 5};
-    snprintf(n.title, sizeof(n.title), "Argus test");
+    observore_notice_t n = {.priority = 5};
+    snprintf(n.title, sizeof(n.title), "Observore test");
     snprintf(n.message, sizeof(n.message),
              "Notifications are working. Sent from the console.");
     esp_err_t err = send_now(&n);

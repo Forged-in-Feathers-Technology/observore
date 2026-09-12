@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "argus_netcfg.h"
+#include "observore_netcfg.h"
 
-#ifdef ARGUS_HOST_TEST
+#ifdef OBSERVORE_HOST_TEST
 #define NETCFG_LOCK()   do {} while (0)
 #define NETCFG_UNLOCK() do {} while (0)
-#define ARGUS_CFG_SSID     ""
-#define ARGUS_CFG_PASSWORD ""
+#define OBSERVORE_CFG_SSID     ""
+#define OBSERVORE_CFG_PASSWORD ""
 static void netcfg_load(void) {}
 static void netcfg_save(void) {}
 #else
@@ -18,24 +18,25 @@ static void netcfg_save(void) {}
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
-static const char *TAG = "argus.netcfg";
+static const char *TAG = "observore.netcfg";
 static SemaphoreHandle_t s_lock;
 #define NETCFG_LOCK()   xSemaphoreTakeRecursive(s_lock, portMAX_DELAY)
 #define NETCFG_UNLOCK() xSemaphoreGiveRecursive(s_lock)
 
-#define NVS_NAMESPACE "argus"
+#include "observore_nvs.h"
+#define NVS_NAMESPACE OBSERVORE_NVS_NAMESPACE
 #define NVS_KEY_SSID  "sta_ssid"
 #define NVS_KEY_PASS  "sta_pass"
 
-#define ARGUS_CFG_SSID     CONFIG_ARGUS_WIFI_SSID
-#define ARGUS_CFG_PASSWORD CONFIG_ARGUS_WIFI_PASSWORD
+#define OBSERVORE_CFG_SSID     CONFIG_OBSERVORE_WIFI_SSID
+#define OBSERVORE_CFG_PASSWORD CONFIG_OBSERVORE_WIFI_PASSWORD
 #endif
 
-static argus_netcfg_t s_cfg;
+static observore_netcfg_t s_cfg;
 
 /* ------------------------------------------------------------------ */
 
-#ifndef ARGUS_HOST_TEST
+#ifndef OBSERVORE_HOST_TEST
 static void netcfg_load(void)
 {
     nvs_handle_t h;
@@ -79,9 +80,9 @@ static void netcfg_save(void)
 }
 #endif
 
-void argus_netcfg_init(void)
+void observore_netcfg_init(void)
 {
-#ifndef ARGUS_HOST_TEST
+#ifndef OBSERVORE_HOST_TEST
     if (!s_lock) {
         s_lock = xSemaphoreCreateRecursiveMutex();
     }
@@ -93,17 +94,17 @@ void argus_netcfg_init(void)
     /* Seed from the build-time defaults only when NVS has nothing, so a
      * credential set through the console is never silently reverted by a
      * reflash of the same firmware. */
-    if (s_cfg.ssid[0] == '\0' && ARGUS_CFG_SSID[0] != '\0') {
-        snprintf(s_cfg.ssid, sizeof(s_cfg.ssid), "%s", ARGUS_CFG_SSID);
-        snprintf(s_cfg.password, sizeof(s_cfg.password), "%s", ARGUS_CFG_PASSWORD);
-#ifndef ARGUS_HOST_TEST
+    if (s_cfg.ssid[0] == '\0' && OBSERVORE_CFG_SSID[0] != '\0') {
+        snprintf(s_cfg.ssid, sizeof(s_cfg.ssid), "%s", OBSERVORE_CFG_SSID);
+        snprintf(s_cfg.password, sizeof(s_cfg.password), "%s", OBSERVORE_CFG_PASSWORD);
+#ifndef OBSERVORE_HOST_TEST
         ESP_LOGI(TAG, "using network \"%s\" from build configuration", s_cfg.ssid);
 #endif
     }
     NETCFG_UNLOCK();
 }
 
-bool argus_netcfg_get(argus_netcfg_t *out)
+bool observore_netcfg_get(observore_netcfg_t *out)
 {
     if (!out) {
         return false;
@@ -115,7 +116,7 @@ bool argus_netcfg_get(argus_netcfg_t *out)
     return set;
 }
 
-bool argus_netcfg_is_set(void)
+bool observore_netcfg_is_set(void)
 {
     NETCFG_LOCK();
     bool set = s_cfg.ssid[0] != '\0';
@@ -123,7 +124,7 @@ bool argus_netcfg_is_set(void)
     return set;
 }
 
-bool argus_netcfg_has_password(void)
+bool observore_netcfg_has_password(void)
 {
     NETCFG_LOCK();
     bool set = s_cfg.password[0] != '\0';
@@ -131,7 +132,7 @@ bool argus_netcfg_has_password(void)
     return set;
 }
 
-bool argus_netcfg_ssid(char *out, size_t len)
+bool observore_netcfg_ssid(char *out, size_t len)
 {
     if (!out || len == 0) {
         return false;
@@ -143,7 +144,7 @@ bool argus_netcfg_ssid(char *out, size_t len)
     return set;
 }
 
-bool argus_netcfg_valid(const char *ssid, const char *password, const char **why)
+bool observore_netcfg_valid(const char *ssid, const char *password, const char **why)
 {
     const char *ignored = NULL;
     if (!why) {
@@ -153,11 +154,11 @@ bool argus_netcfg_valid(const char *ssid, const char *password, const char **why
         *why = "ssid is required";
         return false;
     }
-    if (strlen(ssid) >= ARGUS_SSID_LEN) {
+    if (strlen(ssid) >= OBSERVORE_SSID_LEN) {
         *why = "ssid is longer than 32 characters";
         return false;
     }
-    if (password && strlen(password) >= ARGUS_PASSWORD_LEN) {
+    if (password && strlen(password) >= OBSERVORE_PASSWORD_LEN) {
         *why = "password is longer than 64 characters";
         return false;
     }
@@ -171,7 +172,7 @@ bool argus_netcfg_valid(const char *ssid, const char *password, const char **why
     return true;
 }
 
-esp_err_t argus_netcfg_set(const char *ssid, const char *password)
+esp_err_t observore_netcfg_set(const char *ssid, const char *password)
 {
     /* A NULL password means "keep whatever is stored".
      *
@@ -183,11 +184,11 @@ esp_err_t argus_netcfg_set(const char *ssid, const char *password)
      * now has to be asked for explicitly, by passing an empty string. */
     NETCFG_LOCK();
     const char *effective = password ? password : s_cfg.password;
-    if (!argus_netcfg_valid(ssid, effective, NULL)) {
+    if (!observore_netcfg_valid(ssid, effective, NULL)) {
         NETCFG_UNLOCK();
         return ESP_ERR_INVALID_ARG;
     }
-    char kept[ARGUS_PASSWORD_LEN];
+    char kept[OBSERVORE_PASSWORD_LEN];
     snprintf(kept, sizeof(kept), "%s", effective);
     snprintf(s_cfg.ssid, sizeof(s_cfg.ssid), "%s", ssid);
     snprintf(s_cfg.password, sizeof(s_cfg.password), "%s", kept);
@@ -197,7 +198,7 @@ esp_err_t argus_netcfg_set(const char *ssid, const char *password)
     return ESP_OK;
 }
 
-esp_err_t argus_netcfg_clear(void)
+esp_err_t observore_netcfg_clear(void)
 {
     NETCFG_LOCK();
     memset(&s_cfg, 0, sizeof(s_cfg));

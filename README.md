@@ -1,13 +1,14 @@
-# Argus
+# Observore
 
 A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/).
 
-It tells you what is watching you. It listens for the radio signatures of body
-cameras, licence-plate readers, IP cameras, Bluetooth trackers, smart glasses
-and Remote ID drones, scores what it finds, and shows you the log on a web page
-you raise on demand.
+It tells you what is watching you. Built to sit in one place and watch that
+place: it learns what is normally there, then reports what is new. It listens
+for the radio signatures of body cameras, licence-plate readers, IP cameras,
+Bluetooth trackers, smart glasses and Remote ID drones, scores what it finds,
+pushes notifications, and serves the log on your network.
 
-Named for Argus Panoptes, who had a hundred eyes and was set to watch.
+Observer and carnivore: it eats surveillance signals.
 
 ## What it does
 
@@ -75,12 +76,12 @@ ESP32S3 over 40 s in a flat with 15 APs in range:
 
 A continuously-open BLE receiver does not slow the sniffer down, it starves it
 outright. The default (60/160) gives up about a third of BLE throughput to get
-a sniffer that works. Both values are tunable under `menuconfig` → **Argus**.
+a sniffer that works. Both values are tunable under `menuconfig` → **Observore**.
 
 ## Why there are modes
 
 The ESP32-S3 has one radio on one channel. Channel-hopping to sniff and staying
-associated to an access point are mutually exclusive — so Argus cannot both
+associated to an access point are mutually exclusive — so Observore cannot both
 watch the band and serve you a web page at the same time.
 
 - **Patrol** — unassociated, scanning and sniffing. No network.
@@ -103,10 +104,10 @@ is not responding.
 
 ### Uplink is the resting state
 
-Once a network is configured, Argus joins it at boot and returns to it on its
+Once a network is configured, Observore joins it at boot and returns to it on its
 own: a lost association reconnects, and if it stays down past
-`ARGUS_UPLINK_GRACE_S` (45 s) it patrols instead and retries every
-`ARGUS_UPLINK_RETRY_S` (5 minutes). Carry it out and it patrols; come home and
+`OBSERVORE_UPLINK_GRACE_S` (45 s) it patrols instead and retries every
+`OBSERVORE_UPLINK_RETRY_S` (5 minutes). Carry it out and it patrols; come home and
 it rejoins by itself and flushes whatever it queued while away.
 
 Choosing patrol with the button suppresses the automatic return until you
@@ -117,7 +118,7 @@ select uplink again — an explicit choice is not second-guessed.
 Uplink mode puts the console on your LAN, so you can read the log without the
 SoftAP dance. **It costs detection**: while associated, the radio is pinned to
 your AP's channel and the Wi-Fi sniffer is suspended. BLE scanning and AP scans
-continue. If the network cannot be joined, Argus falls back to patrol rather
+continue. If the network cannot be joined, Observore falls back to patrol rather
 than sitting associated to nothing.
 
 Credentials never belong in a tracked file. There are three ways to set them,
@@ -127,7 +128,7 @@ and the first is the one to prefer:
 in the **Network** panel. Stored in NVS. Nothing touches this repo at all, and
 nothing needs rebuilding to re-point a device at a different network.
 
-**2. `idf.py menuconfig`** → **Argus** → Wi-Fi uplink. This writes `sdkconfig`,
+**2. `idf.py menuconfig`** → **Observore** → Wi-Fi uplink. This writes `sdkconfig`,
 which is gitignored.
 
 **3. A gitignored `credentials.conf`**, for reproducible or CI builds:
@@ -155,7 +156,7 @@ without ever revealing it.
 
 The console's Network panel and the serial log both give the reason in words,
 and every attempt is logged rather than only the last — logging only the last
-reported `reason 36`, which is Argus's own disconnect in the timeout path and
+reported `reason 36`, which is Observore's own disconnect in the timeout path and
 says nothing about the real cause.
 
 | Reason | Meaning |
@@ -173,12 +174,12 @@ Once joined, the address is reported three ways: on the serial log as
 `uplink up at <ip>`, in the console's Network panel, and by your router's DHCP
 lease table. The Wi-Fi station MAC is printed at boot.
 
-Set `ARGUS_WIFI_AUTOJOIN=n` to keep full patrol coverage and reach the uplink
+Set `OBSERVORE_WIFI_AUTOJOIN=n` to keep full patrol coverage and reach the uplink
 only on demand via the button.
 
 ### Keeping credentials out of the repo
 
-`CONFIG_ARGUS_WIFI_SSID` and `CONFIG_ARGUS_WIFI_PASSWORD` are empty in the
+`CONFIG_OBSERVORE_WIFI_SSID` and `CONFIG_OBSERVORE_WIFI_PASSWORD` are empty in the
 tracked `sdkconfig.defaults` and must stay that way. The easy mistake is to set
 one with menuconfig, then paste it into `sdkconfig.defaults` to make it stick —
 which is how a home network password ends up in a public repository.
@@ -214,7 +215,7 @@ The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
 `/dev/ttyACM0`, not `/dev/ttyUSB0`.
 
 Configure the LED pin, button pin and console SoftAP credentials under
-`idf.py menuconfig` → **Argus**. **Change the default console password.**
+`idf.py menuconfig` → **Observore**. **Change the default console password.**
 
 ### Reading the log
 
@@ -233,7 +234,7 @@ make -C test test
 
 ### Regenerating the OUI table
 
-`main/argus_oui_table.h` is generated, not hand-maintained. Vendors get new
+`main/observore_oui_table.h` is generated, not hand-maintained. Vendors get new
 prefixes; refresh it with:
 
 ```bash
@@ -301,7 +302,7 @@ identical trackers fingerprint the same. So a fingerprint rule is never allowed
 to silence a `tracker`, `bodycam`, `alpr`, `drone`, `smart-glasses` or
 `follower` — muting your own AirTag that way would silence a stranger's too,
 which is the exact thing this device exists to notice. The rule is enforced
-inside `argus_mute_matches()` rather than left to callers, and there is a test
+inside `observore_mute_matches()` rather than left to callers, and there is a test
 pinning it.
 
 Muted sightings are suppressed before they reach the device table: they are not
@@ -330,8 +331,7 @@ comes back with an error if the device rejects it.
 
 **Set baseline** marks everything currently in range as known and resets the
 score, so the device starts watching for what changes from *here* rather than
-reporting the whole neighbourhood. Run it somewhere you trust — at home, or in
-your own car — and what it flags afterwards is genuinely new.
+reporting the whole neighbourhood. Run it where it will live, and what it flags afterwards is genuinely new.
 
 It mutes detected threats too, which is the point: your own doorbell camera is
 exactly the thing you want silenced. It asks for confirmation once, and
@@ -350,7 +350,7 @@ Up to 128 rules are stored, in NVS, surviving reboots.
 
 ## Notifications
 
-Argus pushes to a [Gotify](https://gotify.net/) server. Configure it in the
+Observore pushes to a [Gotify](https://gotify.net/) server. Configure it in the
 console's **Notifications** panel, or:
 
 ```
@@ -383,7 +383,7 @@ number.
 ## A note on internal RAM
 
 The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,
-and Wi-Fi and lwip allocate from it. Argus therefore builds its JSON responses
+and Wi-Fi and lwip allocate from it. Observore therefore builds its JSON responses
 in **PSRAM**, not in static internal buffers.
 
 This is not premature tuning. An earlier version used static internal scratch
@@ -406,7 +406,7 @@ Read these before trusting it.
 - **MAC randomisation defeats the follower heuristic.** Modern phones and
   most trackers in separated mode rotate their Bluetooth address every ~15
   minutes. A follower that rotates will never accumulate 3 sightings under one
-  address. Argus catches devices with static or slowly-rotating addresses; it
+  address. Observore catches devices with static or slowly-rotating addresses; it
   will miss a well-behaved rotating one.
 - **Absence of evidence is not evidence of absence.** Wired cameras, cellular
   ALPR units with the radio off, and anything on 5 GHz are invisible to it.
@@ -424,7 +424,7 @@ Read these before trusting it.
 
 ## Legal note
 
-Argus is a receiver. It observes broadcasts that are, by design, transmitted
+Observore is a receiver. It observes broadcasts that are, by design, transmitted
 publicly and unencrypted. It does not deauthenticate, inject, jam, associate,
 crack, or interfere with anything. Passive reception of broadcast frames is
 lawful in most jurisdictions — but "most" is not "all", and what you do with a
@@ -435,7 +435,7 @@ log is a separate question from how you gathered it. Check your local law.
 The concept — passive BLE plus Wi-Fi surveillance detection with a decaying
 threat score on a pocket-sized ESP32 — comes from
 [simeononsecurity/eye-spy](https://github.com/simeononsecurity/eye-spy)
-(Apache-2.0). Argus is an independent implementation for different hardware:
+(Apache-2.0). Observore is an independent implementation for different hardware:
 ESP-IDF rather than Arduino, a web console rather than an RGB LED, and vendor
 tables generated from the IEEE registry rather than maintained by hand. No code
 was taken from it.

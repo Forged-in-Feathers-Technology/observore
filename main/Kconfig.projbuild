@@ -1,12 +1,12 @@
-menu "Argus"
+menu "Observore"
 
-config ARGUS_LED_GPIO
+config OBSERVORE_LED_GPIO
     int "User LED GPIO"
     default 21
     help
         The XIAO ESP32S3 user LED is GPIO21 and is active low.
 
-config ARGUS_BUTTON_GPIO
+config OBSERVORE_BUTTON_GPIO
     int "Mode button GPIO"
     default 0
     help
@@ -16,7 +16,7 @@ config ARGUS_BUTTON_GPIO
 
 comment "Wi-Fi uplink -- leave blank here and set it with menuconfig or NVS"
 
-config ARGUS_WIFI_SSID
+config OBSERVORE_WIFI_SSID
     string "Home network SSID (optional)"
     default ""
     help
@@ -28,14 +28,14 @@ config ARGUS_WIFI_SSID
 
         tools/check_no_secrets.sh fails if a value ends up in a tracked file.
 
-config ARGUS_WIFI_PASSWORD
+config OBSERVORE_WIFI_PASSWORD
     string "Home network password (optional)"
     default ""
     help
         Empty means an open network.  Same warning as the SSID above: never
         commit a real value.
 
-config ARGUS_WIFI_AUTOJOIN
+config OBSERVORE_WIFI_AUTOJOIN
     bool "Join the configured network at boot"
     default y
     help
@@ -45,23 +45,23 @@ config ARGUS_WIFI_AUTOJOIN
         This costs detection: the radio has one channel, so while associated
         the Wi-Fi sniffer is suspended and only BLE scanning and AP scans
         continue.  Turn this off to stay on full patrol and reach the uplink
-        only on demand.  If the network cannot be joined, Argus falls back to
+        only on demand.  If the network cannot be joined, Observore falls back to
         patrol rather than sitting associated to nothing.
 
-config ARGUS_UPLINK_RETRY_S
+config OBSERVORE_UPLINK_RETRY_S
     int "Seconds between attempts to regain the uplink"
     default 300
     range 30 3600
     help
         When the network is configured, uplink is the resting state.  After a
-        failed join or a lost association Argus patrols instead, and retries
+        failed join or a lost association Observore patrols instead, and retries
         the uplink on this interval so it rejoins by itself when you come back
         into range -- which is what delivers any notices queued while away.
 
         Choosing patrol with the button suppresses this until you select
         uplink again: an explicit choice is not second-guessed.
 
-config ARGUS_UPLINK_GRACE_S
+config OBSERVORE_UPLINK_GRACE_S
     int "Seconds to tolerate a dropped uplink before patrolling"
     default 45
     range 5 600
@@ -70,17 +70,17 @@ config ARGUS_UPLINK_GRACE_S
         in uplink mode means the Wi-Fi sniffer is off and there is no network
         either, so patrolling is strictly better.
 
-config ARGUS_WIFI_CONNECT_TIMEOUT_S
+config OBSERVORE_WIFI_CONNECT_TIMEOUT_S
     int "Uplink connect timeout (seconds)"
     default 15
     range 5 60
 
-config ARGUS_BLE_SCAN_INTERVAL_MS
+config OBSERVORE_BLE_SCAN_INTERVAL_MS
     int "BLE scan interval (ms)"
     default 160
     range 20 1000
 
-config ARGUS_BLE_SCAN_WINDOW_MS
+config OBSERVORE_BLE_SCAN_WINDOW_MS
     int "BLE scan window (ms)"
     default 60
     range 10 1000
@@ -92,16 +92,16 @@ config ARGUS_BLE_SCAN_WINDOW_MS
         around 200.  The default trades roughly a third of BLE throughput for
         a sniffer that functions.
 
-config ARGUS_AP_SSID_PREFIX
+config OBSERVORE_AP_SSID_PREFIX
     string "Console SoftAP SSID prefix"
     default "console"
     help
         The last three bytes of the MAC are appended.  The default deliberately
         does not advertise what the device is.
 
-config ARGUS_AP_PASSWORD
+config OBSERVORE_AP_PASSWORD
     string "Console SoftAP password"
-    default "argus-console"
+    default "observore-console"
     help
         Must be at least 8 characters for WPA2; a shorter value leaves the
         SoftAP open.  Change it.

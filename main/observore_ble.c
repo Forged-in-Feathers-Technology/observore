@@ -1,8 +1,8 @@
 #include <string.h>
 
-#include "argus_ble.h"
+#include "observore_ble.h"
 #include "sdkconfig.h"
-#include "argus_track.h"
+#include "observore_track.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "host/ble_hs.h"
@@ -10,7 +10,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 
-static const char *TAG = "argus.ble";
+static const char *TAG = "observore.ble";
 
 /* BLE and Wi-Fi share one radio, and the coexistence arbiter divides it by
  * BLE's duty cycle.  The relationship is sharply non-linear -- measured on a
@@ -26,8 +26,8 @@ static const char *TAG = "argus.ble";
  * starves it outright.  The default trades a third of BLE throughput for a
  * sniffer that works at all.  Raise the window if BLE is all you care about;
  * lower it if you are hunting Remote ID beacons. */
-#define SCAN_ITVL_MS   CONFIG_ARGUS_BLE_SCAN_INTERVAL_MS
-#define SCAN_WINDOW_MS CONFIG_ARGUS_BLE_SCAN_WINDOW_MS
+#define SCAN_ITVL_MS   CONFIG_OBSERVORE_BLE_SCAN_INTERVAL_MS
+#define SCAN_WINDOW_MS CONFIG_OBSERVORE_BLE_SCAN_WINDOW_MS
 #define MS_TO_UNITS(ms) ((uint16_t)((ms) * 1000 / 625))
 
 static uint8_t s_own_addr_type;
@@ -41,9 +41,9 @@ static int on_gap_event(struct ble_gap_event *event, void *arg)
     }
 
     const struct ble_gap_disc_desc *d = &event->disc;
-    argus_observation_t obs = {
+    observore_observation_t obs = {
         .mac         = d->addr.val,
-        .src         = ARGUS_SRC_BLE,
+        .src         = OBSERVORE_SRC_BLE,
         .rssi        = (int8_t)d->rssi,
         .channel     = 0,
         .addr_random = (d->addr.type == BLE_ADDR_RANDOM ||
@@ -51,7 +51,7 @@ static int on_gap_event(struct ble_gap_event *event, void *arg)
         .adv         = d->data,
         .adv_len     = d->length_data,
     };
-    argus_track_observe(&obs, esp_timer_get_time());
+    observore_track_observe(&obs, esp_timer_get_time());
     return 0;
 }
 
@@ -107,7 +107,7 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-esp_err_t argus_ble_start(void)
+esp_err_t observore_ble_start(void)
 {
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {

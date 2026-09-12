@@ -3,18 +3,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "argus_mute.h"
-#include "argus_netcfg.h"
-#include "argus_notify.h"
-#include "argus_track.h"
-#include "argus_web.h"
-#include "argus_wifi.h"
+#include "observore_mute.h"
+#include "observore_netcfg.h"
+#include "observore_notify.h"
+#include "observore_track.h"
+#include "observore_web.h"
+#include "observore_wifi.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
-static const char *TAG = "argus.web";
+static const char *TAG = "observore.web";
 
 static httpd_handle_t s_server;
 
@@ -39,7 +39,7 @@ extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
 /* Both are heap pointers, so sizeof() on them yields 4, not the buffer size.
  * Always bound writes with JSON_BUF_LEN -- a missed conversion here silently
  * truncated /api/devices, which the browser then refused to parse. */
-static argus_event_t *s_snap;    /* ARGUS_MAX_DEVICES entries */
+static observore_event_t *s_snap;    /* OBSERVORE_MAX_DEVICES entries */
 static char          *s_body;    /* JSON_BUF_LEN bytes */
 
 static bool scratch_alloc(void)
@@ -47,14 +47,14 @@ static bool scratch_alloc(void)
     if (s_snap && s_body) {
         return true;
     }
-    s_snap = heap_caps_malloc(sizeof(argus_event_t) * ARGUS_MAX_DEVICES,
+    s_snap = heap_caps_malloc(sizeof(observore_event_t) * OBSERVORE_MAX_DEVICES,
                               MALLOC_CAP_SPIRAM);
     s_body = heap_caps_malloc(JSON_BUF_LEN, MALLOC_CAP_SPIRAM);
     if (!s_snap || !s_body) {
         /* Without PSRAM there is no safe place for this, so refuse to start
          * rather than quietly starve the network stack again. */
         ESP_LOGE(TAG, "could not allocate %d KB of PSRAM scratch",
-                 (int)((sizeof(argus_event_t) * ARGUS_MAX_DEVICES +
+                 (int)((sizeof(observore_event_t) * OBSERVORE_MAX_DEVICES +
                         JSON_BUF_LEN) / 1024));
         free(s_snap);
         free(s_body);
@@ -111,8 +111,8 @@ static esp_err_t index_handler(httpd_req_t *req)
 static esp_err_t status_handler(httpd_req_t *req)
 {
     int64_t now = esp_timer_get_time();
-    argus_status_t st;
-    argus_track_status(&st, now);
+    observore_status_t st;
+    observore_track_status(&st, now);
 
     char body[768];
     int n = snprintf(body, sizeof(body),
@@ -120,14 +120,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                      "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
                      ",\"mode\":\"%s\",\"muted\":%zu,"
                      "\"suppressed\":%" PRIu32 ",\"counts\":{",
-                     st.score, argus_level_name(st.level), st.device_count,
+                     st.score, observore_level_name(st.level), st.device_count,
                      st.total_sightings, now / 1000000,
-                     argus_mode_name(argus_wifi_mode()),
-                     argus_mute_count(), argus_mute_suppressed());
+                     observore_mode_name(observore_wifi_mode()),
+                     observore_mute_count(), observore_mute_suppressed());
 
-    for (int c = 1; c < ARGUS_CLASS_MAX && n < (int)sizeof(body); c++) {
+    for (int c = 1; c < OBSERVORE_CLASS_MAX && n < (int)sizeof(body); c++) {
         n += snprintf(body + n, sizeof(body) - n, "%s\"%s\":%" PRIu32,
-                      c > 1 ? "," : "", argus_class_name(c), st.class_counts[c]);
+                      c > 1 ? "," : "", observore_class_name(c), st.class_counts[c]);
     }
     snprintf(body + n, sizeof(body) - n, "}}");
 
@@ -136,15 +136,15 @@ static esp_err_t status_handler(httpd_req_t *req)
 
 static esp_err_t devices_handler(httpd_req_t *req)
 {
-    argus_event_t *snap = s_snap;
+    observore_event_t *snap = s_snap;
     char *body = s_body;
 
     int64_t now = esp_timer_get_time();
-    size_t count = argus_track_snapshot(snap, ARGUS_MAX_DEVICES, now);
+    size_t count = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES, now);
 
     int n = snprintf(body, JSON_BUF_LEN, "{\"devices\":[");
     for (size_t i = 0; i < count; i++) {
-        const argus_event_t *e = &snap[i];
+        const observore_event_t *e = &snap[i];
         char detail[sizeof(e->detail) * 2 + 1];
         char label[sizeof(e->label) * 2 + 1];
         json_escape(e->detail, detail, sizeof(detail));
@@ -160,9 +160,9 @@ static esp_err_t devices_handler(httpd_req_t *req)
             "\"first_seen_s\":%" PRId64 ",\"last_seen_s\":%" PRId64 "}",
             i ? "," : "",
             e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
-            argus_class_name(e->cls), label, vendor,
+            observore_class_name(e->cls), label, vendor,
             e->addr_random ? "true" : "false", detail,
-            argus_evidence_name(e->evidence), argus_source_name(e->src),
+            observore_evidence_name(e->evidence), observore_source_name(e->src),
             e->rssi, e->channel, e->hits,
             (now - e->first_seen_us) / 1000000,
             (now - e->last_seen_us) / 1000000);
@@ -224,30 +224,30 @@ static esp_err_t fail(httpd_req_t *req, const char *why)
 
 static esp_err_t mutes_handler(httpd_req_t *req)
 {
-    static argus_mute_rule_t rules[ARGUS_MUTE_MAX];
-    size_t n = argus_mute_list(rules, ARGUS_MUTE_MAX);
+    static observore_mute_rule_t rules[OBSERVORE_MUTE_MAX];
+    size_t n = observore_mute_list(rules, OBSERVORE_MUTE_MAX);
 
     char body[4096];
     int w = snprintf(body, sizeof(body), "{\"suppressed\":%" PRIu32 ",\"rules\":[",
-                     argus_mute_suppressed());
+                     observore_mute_suppressed());
     for (size_t i = 0; i < n; i++) {
-        const argus_mute_rule_t *r = &rules[i];
-        char value[ARGUS_MUTE_SSID_LEN * 2];
+        const observore_mute_rule_t *r = &rules[i];
+        char value[OBSERVORE_MUTE_SSID_LEN * 2];
 
         switch (r->kind) {
-            case ARGUS_MUTE_MAC:
+            case OBSERVORE_MUTE_MAC:
                 snprintf(value, sizeof(value), "%02X:%02X:%02X:%02X:%02X:%02X",
                          r->mac[0], r->mac[1], r->mac[2],
                          r->mac[3], r->mac[4], r->mac[5]);
                 break;
-            case ARGUS_MUTE_OUI:
+            case OBSERVORE_MUTE_OUI:
                 snprintf(value, sizeof(value), "%02X:%02X:%02X",
                          r->mac[0], r->mac[1], r->mac[2]);
                 break;
-            case ARGUS_MUTE_CLASS:
-                snprintf(value, sizeof(value), "%s", argus_class_name(r->cls));
+            case OBSERVORE_MUTE_CLASS:
+                snprintf(value, sizeof(value), "%s", observore_class_name(r->cls));
                 break;
-            case ARGUS_MUTE_FINGERPRINT:
+            case OBSERVORE_MUTE_FINGERPRINT:
                 snprintf(value, sizeof(value), "%08" PRIx32, r->fingerprint);
                 break;
             default:
@@ -256,7 +256,7 @@ static esp_err_t mutes_handler(httpd_req_t *req)
         }
         w += snprintf(body + w, sizeof(body) - w,
                       "%s{\"index\":%zu,\"kind\":\"%s\",\"value\":\"%s\"}",
-                      i ? "," : "", i, argus_mute_kind_name(r->kind), value);
+                      i ? "," : "", i, observore_mute_kind_name(r->kind), value);
     }
     snprintf(body + w, sizeof(body) - w, "]}");
     return send_json(req, body);
@@ -264,50 +264,50 @@ static esp_err_t mutes_handler(httpd_req_t *req)
 
 static esp_err_t mute_handler(httpd_req_t *req)
 {
-    argus_mute_rule_t rule;
+    observore_mute_rule_t rule;
     memset(&rule, 0, sizeof(rule));
-    char value[ARGUS_MUTE_SSID_LEN];
+    char value[OBSERVORE_MUTE_SSID_LEN];
 
     if (query_param(req, "mac", value, sizeof(value))) {
-        if (!argus_mute_parse_mac(value, rule.mac, ARGUS_MAC_LEN)) {
+        if (!observore_mute_parse_mac(value, rule.mac, OBSERVORE_MAC_LEN)) {
             return fail(req, "mac must be AA:BB:CC:DD:EE:FF");
         }
-        rule.kind = ARGUS_MUTE_MAC;
+        rule.kind = OBSERVORE_MUTE_MAC;
     } else if (query_param(req, "oui", value, sizeof(value))) {
-        if (!argus_mute_parse_mac(value, rule.mac, 3)) {
+        if (!observore_mute_parse_mac(value, rule.mac, 3)) {
             return fail(req, "oui must be AA:BB:CC");
         }
-        rule.kind = ARGUS_MUTE_OUI;
+        rule.kind = OBSERVORE_MUTE_OUI;
     } else if (query_param(req, "class", value, sizeof(value))) {
-        argus_class_t cls;
-        if (!argus_mute_parse_class(value, &cls)) {
+        observore_class_t cls;
+        if (!observore_mute_parse_class(value, &cls)) {
             return fail(req, "unknown class");
         }
-        rule.kind = ARGUS_MUTE_CLASS;
+        rule.kind = OBSERVORE_MUTE_CLASS;
         rule.cls = (uint8_t)cls;
     } else if (query_param(req, "name", value, sizeof(value)) ||
                query_param(req, "ssid", value, sizeof(value))) {
-        rule.kind = ARGUS_MUTE_NAME;
+        rule.kind = OBSERVORE_MUTE_NAME;
         snprintf(rule.ssid, sizeof(rule.ssid), "%s", value);
     } else if (query_param(req, "fingerprint", value, sizeof(value))) {
         unsigned long fp = strtoul(value, NULL, 16);
         if (fp == 0 || fp > 0xFFFFFFFFUL) {
             return fail(req, "fingerprint must be non-zero hex");
         }
-        rule.kind = ARGUS_MUTE_FINGERPRINT;
+        rule.kind = OBSERVORE_MUTE_FINGERPRINT;
         rule.fingerprint = (uint32_t)fp;
     } else {
         return fail(req, "expected one of mac, oui, class, name, fingerprint");
     }
 
-    esp_err_t err = argus_mute_add(&rule);
+    esp_err_t err = observore_mute_add(&rule);
     if (err == ESP_ERR_NO_MEM) {
         return fail(req, "mute list is full");
     }
     if (err != ESP_OK) {
         return fail(req, "invalid rule");
     }
-    ESP_LOGI(TAG, "muted %s", argus_mute_kind_name(rule.kind));
+    ESP_LOGI(TAG, "muted %s", observore_mute_kind_name(rule.kind));
     return send_json(req, "{\"ok\":true}");
 }
 
@@ -315,13 +315,13 @@ static esp_err_t unmute_handler(httpd_req_t *req)
 {
     char value[16];
     if (query_param(req, "all", value, sizeof(value))) {
-        argus_mute_clear();
+        observore_mute_clear();
         return send_json(req, "{\"ok\":true}");
     }
     if (!query_param(req, "index", value, sizeof(value))) {
         return fail(req, "expected index or all=1");
     }
-    if (argus_mute_remove((size_t)strtoul(value, NULL, 10)) != ESP_OK) {
+    if (observore_mute_remove((size_t)strtoul(value, NULL, 10)) != ESP_OK) {
         return fail(req, "no such rule");
     }
     return send_json(req, "{\"ok\":true}");
@@ -329,15 +329,15 @@ static esp_err_t unmute_handler(httpd_req_t *req)
 
 static esp_err_t netcfg_get_handler(httpd_req_t *req)
 {
-    char ssid[ARGUS_SSID_LEN] = {0};
-    bool set = argus_netcfg_ssid(ssid, sizeof(ssid));
-    char escaped[ARGUS_SSID_LEN * 2];
+    char ssid[OBSERVORE_SSID_LEN] = {0};
+    bool set = observore_netcfg_ssid(ssid, sizeof(ssid));
+    char escaped[OBSERVORE_SSID_LEN * 2];
     json_escape(ssid, escaped, sizeof(escaped));
 
     char werr[224];
-    json_escape(argus_wifi_uplink_error(), werr, sizeof(werr));
+    json_escape(observore_wifi_uplink_error(), werr, sizeof(werr));
 
-    char body[ARGUS_SSID_LEN * 2 + sizeof(werr) + 160];
+    char body[OBSERVORE_SSID_LEN * 2 + sizeof(werr) + 160];
     /* The password is deliberately absent and there is no endpoint that can
      * read it back.  It is write-only from outside the device. */
     snprintf(body, sizeof(body),
@@ -345,8 +345,8 @@ static esp_err_t netcfg_get_handler(httpd_req_t *req)
              "\"mode\":\"%s\","
              "\"ip\":\"%s\",\"error\":\"%s\"}",
              set ? "true" : "false", escaped,
-             argus_netcfg_has_password() ? "true" : "false",
-             argus_mode_name(argus_wifi_mode()), argus_wifi_uplink_ip(), werr);
+             observore_netcfg_has_password() ? "true" : "false",
+             observore_mode_name(observore_wifi_mode()), observore_wifi_uplink_ip(), werr);
     return send_json(req, body);
 }
 
@@ -354,13 +354,13 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
 {
     char value[16];
     if (query_param(req, "clear", value, sizeof(value))) {
-        argus_netcfg_clear();
+        observore_netcfg_clear();
         ESP_LOGI(TAG, "network credentials cleared");
         return send_json(req, "{\"ok\":true}");
     }
 
-    char ssid[ARGUS_SSID_LEN] = {0};
-    char password[ARGUS_PASSWORD_LEN] = {0};
+    char ssid[OBSERVORE_SSID_LEN] = {0};
+    char password[OBSERVORE_PASSWORD_LEN] = {0};
     if (!query_param(req, "ssid", ssid, sizeof(ssid))) {
         return fail(req, "ssid is required");
     }
@@ -371,11 +371,11 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
 
     if (have_password) {
         const char *why = NULL;
-        if (!argus_netcfg_valid(ssid, password, &why)) {
+        if (!observore_netcfg_valid(ssid, password, &why)) {
             return fail(req, why);
         }
     }
-    esp_err_t err = argus_netcfg_set(ssid, have_password ? password : NULL);
+    esp_err_t err = observore_netcfg_set(ssid, have_password ? password : NULL);
     /* Do not leave the password sitting on this task's stack. */
     memset(password, 0, sizeof(password));
     if (err != ESP_OK) {
@@ -391,18 +391,18 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
 
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
-    argus_event_t *snap = s_snap;
+    observore_event_t *snap = s_snap;
     char *body = s_body;
 
     int64_t now = esp_timer_get_time();
-    size_t count = argus_track_nearby(snap, ARGUS_MAX_DEVICES, now);
+    size_t count = observore_track_nearby(snap, OBSERVORE_MAX_DEVICES, now);
     if (count > NEARBY_MAX) {
         count = NEARBY_MAX;
     }
 
     int n = snprintf(body, JSON_BUF_LEN, "{\"nearby\":[");
     for (size_t i = 0; i < count; i++) {
-        const argus_event_t *e = &snap[i];
+        const observore_event_t *e = &snap[i];
         /* The name is chosen by whoever owns the radio, so it is escaped on
          * the way out exactly like every other remote-controlled string. */
         char name[sizeof(e->detail) * 2 + 1];
@@ -417,7 +417,7 @@ static esp_err_t nearby_handler(httpd_req_t *req)
             i ? "," : "",
             e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
             e->vendor ? e->vendor : "", name,
-            e->addr_random ? "true" : "false", argus_source_name(e->src),
+            e->addr_random ? "true" : "false", observore_source_name(e->src),
             e->fingerprint,
             e->rssi, e->hits, (now - e->last_seen_us) / 1000000);
         if (written < 0 || n + written >= JSON_BUF_LEN - 4) {
@@ -435,15 +435,15 @@ static esp_err_t nearby_handler(httpd_req_t *req)
  * the action is fully reversible from the same panel. */
 static esp_err_t baseline_handler(httpd_req_t *req)
 {
-    argus_event_t *snap = s_snap;
-    size_t count = argus_track_all(snap, ARGUS_MAX_DEVICES);
+    observore_event_t *snap = s_snap;
+    size_t count = observore_track_all(snap, OBSERVORE_MAX_DEVICES);
 
     size_t added = 0, existing = 0, full = 0, temporary = 0;
     size_t by_name = 0, by_fp = 0, by_mac = 0;
 
     for (size_t i = 0; i < count; i++) {
-        const argus_event_t *e = &snap[i];
-        argus_mute_rule_t rule;
+        const observore_event_t *e = &snap[i];
+        observore_mute_rule_t rule;
         memset(&rule, 0, sizeof(rule));
 
         /* Pick the most durable rule this device supports.
@@ -458,19 +458,19 @@ static esp_err_t baseline_handler(httpd_req_t *req)
          * Otherwise the MAC, which for a rotating address buys only an hour
          * or so.  Counted as temporary and reported as such. */
         if (e->detail[0] != '\0') {
-            rule.kind = ARGUS_MUTE_NAME;
+            rule.kind = OBSERVORE_MUTE_NAME;
             snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
         } else if (e->fingerprint != 0 &&
-                   !argus_mute_class_is_protected(e->cls)) {
-            rule.kind = ARGUS_MUTE_FINGERPRINT;
+                   !observore_mute_class_is_protected(e->cls)) {
+            rule.kind = OBSERVORE_MUTE_FINGERPRINT;
             rule.fingerprint = e->fingerprint;
         } else {
-            rule.kind = ARGUS_MUTE_MAC;
-            memcpy(rule.mac, e->mac, ARGUS_MAC_LEN);
+            rule.kind = OBSERVORE_MUTE_MAC;
+            memcpy(rule.mac, e->mac, OBSERVORE_MAC_LEN);
         }
 
-        size_t before = argus_mute_count();
-        esp_err_t err = argus_mute_add(&rule);
+        size_t before = observore_mute_count();
+        esp_err_t err = observore_mute_add(&rule);
         if (err == ESP_ERR_NO_MEM) {
             full++;
             continue;
@@ -478,14 +478,14 @@ static esp_err_t baseline_handler(httpd_req_t *req)
         if (err != ESP_OK) {
             continue;
         }
-        if (argus_mute_count() == before) {
+        if (observore_mute_count() == before) {
             existing++;
             continue;
         }
         added++;
         switch (rule.kind) {
-            case ARGUS_MUTE_NAME:        by_name++; break;
-            case ARGUS_MUTE_FINGERPRINT: by_fp++;   break;
+            case OBSERVORE_MUTE_NAME:        by_name++; break;
+            case OBSERVORE_MUTE_FINGERPRINT: by_fp++;   break;
             default:
                 by_mac++;
                 if (e->addr_random) {
@@ -498,7 +498,7 @@ static esp_err_t baseline_handler(httpd_req_t *req)
     /* Everything in range is now known, so the score and the log start from
      * a clean slate -- that is what makes it a baseline rather than just a
      * bulk mute. */
-    argus_track_clear();
+    observore_track_clear();
 
     char body[256];
     snprintf(body, sizeof(body),
@@ -506,7 +506,7 @@ static esp_err_t baseline_handler(httpd_req_t *req)
              "\"by_name\":%zu,\"by_fingerprint\":%zu,\"by_mac\":%zu,"
              "\"temporary\":%zu,\"no_room\":%zu,\"rules\":%zu}",
              count, added, existing, by_name, by_fp, by_mac, temporary, full,
-             argus_mute_count());
+             observore_mute_count());
     ESP_LOGI(TAG, "baseline: %zu seen, %zu muted (%zu by name, %zu by "
                   "fingerprint, %zu by MAC of which %zu temporary), %zu no room",
              count, added, by_name, by_fp, by_mac, temporary, full);
@@ -515,23 +515,23 @@ static esp_err_t baseline_handler(httpd_req_t *req)
 
 static esp_err_t notify_get_handler(httpd_req_t *req)
 {
-    char url[ARGUS_NOTIFY_URL_LEN] = {0};
-    bool set = argus_notify_url(url, sizeof(url));
-    char escaped[ARGUS_NOTIFY_URL_LEN * 2];
+    char url[OBSERVORE_NOTIFY_URL_LEN] = {0};
+    bool set = observore_notify_url(url, sizeof(url));
+    char escaped[OBSERVORE_NOTIFY_URL_LEN * 2];
     json_escape(url, escaped, sizeof(escaped));
     char err[144];
-    json_escape(argus_notify_last_error(), err, sizeof(err));
+    json_escape(observore_notify_last_error(), err, sizeof(err));
 
-    char body[ARGUS_NOTIFY_URL_LEN * 2 + sizeof(err) + 256];
+    char body[OBSERVORE_NOTIFY_URL_LEN * 2 + sizeof(err) + 256];
     /* The token is absent by design, exactly like the Wi-Fi password. */
     snprintf(body, sizeof(body),
              "{\"configured\":%s,\"url\":\"%s\",\"sent\":%" PRIu32 ","
              "\"failed\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"queued\":%zu,"
              "\"can_send\":%s,\"error\":\"%s\"}",
-             set ? "true" : "false", escaped, argus_notify_sent(),
-             argus_notify_failed(), argus_notify_dropped(),
-             argus_notify_pending(),
-             argus_wifi_mode() == ARGUS_MODE_UPLINK ? "true" : "false", err);
+             set ? "true" : "false", escaped, observore_notify_sent(),
+             observore_notify_failed(), observore_notify_dropped(),
+             observore_notify_pending(),
+             observore_wifi_mode() == OBSERVORE_MODE_UPLINK ? "true" : "false", err);
     return send_json(req, body);
 }
 
@@ -539,32 +539,32 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
 {
     char value[16];
     if (query_param(req, "clear", value, sizeof(value))) {
-        argus_notify_clear();
+        observore_notify_clear();
         return send_json(req, "{\"ok\":true}");
     }
     if (query_param(req, "test", value, sizeof(value))) {
-        if (argus_wifi_mode() != ARGUS_MODE_UPLINK) {
+        if (observore_wifi_mode() != OBSERVORE_MODE_UPLINK) {
             return fail(req, "a test needs the uplink -- the SoftAP has no "
                              "route to your server");
         }
-        esp_err_t err = argus_notify_test();
+        esp_err_t err = observore_notify_test();
         if (err == ESP_ERR_INVALID_STATE) {
             return fail(req, "no server configured");
         }
         if (err != ESP_OK) {
-            return fail(req, argus_notify_last_error());
+            return fail(req, observore_notify_last_error());
         }
         return send_json(req, "{\"ok\":true}");
     }
 
-    char url[ARGUS_NOTIFY_URL_LEN] = {0};
-    char token[ARGUS_NOTIFY_TOKEN_LEN] = {0};
+    char url[OBSERVORE_NOTIFY_URL_LEN] = {0};
+    char token[OBSERVORE_NOTIFY_TOKEN_LEN] = {0};
     if (!query_param(req, "url", url, sizeof(url))) {
         return fail(req, "url is required");
     }
     query_param(req, "token", token, sizeof(token));
 
-    esp_err_t err = argus_notify_set(url, token);
+    esp_err_t err = observore_notify_set(url, token);
     memset(token, 0, sizeof(token));
     if (err == ESP_ERR_INVALID_ARG) {
         return fail(req, "url must start with http:// or https://");
@@ -581,12 +581,12 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
 
 static esp_err_t clear_handler(httpd_req_t *req)
 {
-    argus_track_clear();
+    observore_track_clear();
     ESP_LOGI(TAG, "log cleared by console");
     return send_json(req, "{\"ok\":true}");
 }
 
-esp_err_t argus_web_start(void)
+esp_err_t observore_web_start(void)
 {
     if (s_server) {
         return ESP_OK;
@@ -641,16 +641,16 @@ esp_err_t argus_web_start(void)
 
     /* Report the address that is actually reachable in this mode; naming the
      * SoftAP while joined to a network sends you to the wrong place. */
-    if (argus_wifi_mode() == ARGUS_MODE_UPLINK) {
-        ESP_LOGI(TAG, "console at http://%s/", argus_wifi_uplink_ip());
+    if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
+        ESP_LOGI(TAG, "console at http://%s/", observore_wifi_uplink_ip());
     } else {
         ESP_LOGI(TAG, "console at http://192.168.4.1/ (SSID %s)",
-                 argus_wifi_ap_ssid());
+                 observore_wifi_ap_ssid());
     }
     return ESP_OK;
 }
 
-esp_err_t argus_web_stop(void)
+esp_err_t observore_web_stop(void)
 {
     if (!s_server) {
         return ESP_OK;

@@ -1,15 +1,16 @@
 idf_component_register(
     SRCS
         "main.c"
-        "argus_detect.c"
-        "argus_track.c"
-        "argus_mute.c"
-        "argus_netcfg.c"
-        "argus_notify.c"
-        "argus_ble.c"
-        "argus_wifi.c"
-        "argus_web.c"
-        "argus_led.c"
+        "observore_detect.c"
+        "observore_track.c"
+        "observore_mute.c"
+        "observore_netcfg.c"
+        "observore_nvs.c"
+        "observore_notify.c"
+        "observore_ble.c"
+        "observore_wifi.c"
+        "observore_web.c"
+        "observore_led.c"
     INCLUDE_DIRS "."
     REQUIRES
         bt

@@ -3,9 +3,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "argus_types.h"
+#include "observore_types.h"
 
-#ifndef ARGUS_HOST_TEST
+#ifndef OBSERVORE_HOST_TEST
 #include "esp_err.h"
 #endif
 
@@ -22,35 +22,35 @@
  * NVS wins when both are present, so a device can be re-pointed at a different
  * network without a rebuild. */
 
-#define ARGUS_SSID_LEN     33   /* 32 + NUL */
-#define ARGUS_PASSWORD_LEN 65   /* 64 + NUL */
+#define OBSERVORE_SSID_LEN     33   /* 32 + NUL */
+#define OBSERVORE_PASSWORD_LEN 65   /* 64 + NUL */
 
 typedef struct {
-    char ssid[ARGUS_SSID_LEN];
-    char password[ARGUS_PASSWORD_LEN];
-} argus_netcfg_t;
+    char ssid[OBSERVORE_SSID_LEN];
+    char password[OBSERVORE_PASSWORD_LEN];
+} observore_netcfg_t;
 
-void argus_netcfg_init(void);
+void observore_netcfg_init(void);
 
 /* Returns false when no network has been configured, by either route. */
-bool argus_netcfg_get(argus_netcfg_t *out);
+bool observore_netcfg_get(observore_netcfg_t *out);
 
 /* True when an SSID is configured.  Cheaper than get() and, unlike get(), it
  * never puts a password on the caller's stack. */
-bool argus_netcfg_is_set(void);
+bool observore_netcfg_is_set(void);
 
 /* Whether a password is stored.  Reports its presence, never its value, so
  * the console can show that one is set without being able to read it. */
-bool argus_netcfg_has_password(void);
+bool observore_netcfg_has_password(void);
 
 /* Copies only the SSID.  This is what the API is allowed to report -- the
  * password is write-only from outside the device. */
-bool argus_netcfg_ssid(char *out, size_t len);
+bool observore_netcfg_ssid(char *out, size_t len);
 
-esp_err_t argus_netcfg_set(const char *ssid, const char *password);
-esp_err_t argus_netcfg_clear(void);
+esp_err_t observore_netcfg_set(const char *ssid, const char *password);
+esp_err_t observore_netcfg_clear(void);
 
 /* Validation, exposed so the API can reject input with a useful message
  * rather than storing something that can never associate. */
-bool argus_netcfg_valid(const char *ssid, const char *password,
+bool observore_netcfg_valid(const char *ssid, const char *password,
                         const char **why);

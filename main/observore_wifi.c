@@ -1,8 +1,8 @@
 #include <string.h>
 
-#include "argus_netcfg.h"
-#include "argus_track.h"
-#include "argus_wifi.h"
+#include "observore_netcfg.h"
+#include "observore_track.h"
+#include "observore_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -15,13 +15,13 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
-static const char *TAG = "argus.wifi";
+static const char *TAG = "observore.wifi";
 
-#define ARGUS_SCAN_MS      3000
-#define ARGUS_SNIFF_MS     5000
-#define ARGUS_CHANNEL_MIN  1
-#define ARGUS_CHANNEL_MAX  13
-#define ARGUS_MAX_AP       32
+#define OBSERVORE_SCAN_MS      3000
+#define OBSERVORE_SNIFF_MS     5000
+#define OBSERVORE_CHANNEL_MIN  1
+#define OBSERVORE_CHANNEL_MAX  13
+#define OBSERVORE_MAX_AP       32
 
 /* ASTM F3411 Remote ID over Wi-Fi: a vendor-specific IE (element 0xDD) whose
  * OUI is FA:0B:BC with vendor type 0x0D. */
@@ -30,7 +30,7 @@ static const uint8_t ASTM_OUI[3]     = {0xFA, 0x0B, 0xBC};
 #define IE_VENDOR_SPECIFIC    0xDD
 #define IE_SSID               0x00
 
-static argus_mode_t       s_mode = ARGUS_MODE_PATROL;
+static observore_mode_t       s_mode = OBSERVORE_MODE_PATROL;
 static esp_netif_t       *s_ap_netif;
 static char               s_ap_ssid[32];
 static bool               s_initialised;
@@ -147,17 +147,17 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     char ssid[33] = {0};
     bool odid = parse_ies(ies, ie_len, ssid, sizeof(ssid));
 
-    argus_observation_t obs = {
+    observore_observation_t obs = {
         .mac       = hdr->addr2,
-        .addr_random = argus_mac_is_random(hdr->addr2),
-        .src       = ARGUS_SRC_WIFI_SNIFF,
+        .addr_random = observore_mac_is_random(hdr->addr2),
+        .src       = OBSERVORE_SRC_WIFI_SNIFF,
         .rssi      = (int8_t)pkt->rx_ctrl.rssi,
         .channel   = pkt->rx_ctrl.channel,
         .ssid      = ssid[0] ? ssid : NULL,
         .remote_id = odid,
     };
     s_sniffed_frames++;
-    argus_track_observe(&obs, esp_timer_get_time());
+    observore_track_observe(&obs, esp_timer_get_time());
 }
 
 /* ------------------------------------------------------------------ */
@@ -184,13 +184,13 @@ static void run_ap_scan(void)
         return;
     }
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "scan failed in %s mode: %s", argus_mode_name(s_mode),
+        ESP_LOGW(TAG, "scan failed in %s mode: %s", observore_mode_name(s_mode),
                  esp_err_to_name(err));
         return;
     }
 
-    uint16_t count = ARGUS_MAX_AP;
-    static wifi_ap_record_t records[ARGUS_MAX_AP];
+    uint16_t count = OBSERVORE_MAX_AP;
+    static wifi_ap_record_t records[OBSERVORE_MAX_AP];
     err = esp_wifi_scan_get_ap_records(&count, records);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "scan results unavailable: %s", esp_err_to_name(err));
@@ -199,15 +199,15 @@ static void run_ap_scan(void)
 
     int64_t now = esp_timer_get_time();
     for (uint16_t i = 0; i < count; i++) {
-        argus_observation_t obs = {
+        observore_observation_t obs = {
             .mac     = records[i].bssid,
-            .addr_random = argus_mac_is_random(records[i].bssid),
-            .src     = ARGUS_SRC_WIFI_SCAN,
+            .addr_random = observore_mac_is_random(records[i].bssid),
+            .src     = OBSERVORE_SRC_WIFI_SCAN,
             .rssi    = records[i].rssi,
             .channel = records[i].primary,
             .ssid    = (const char *)records[i].ssid,
         };
-        argus_track_observe(&obs, now);
+        observore_track_observe(&obs, now);
     }
     ESP_LOGI(TAG, "scan: %u APs", count);
 }
@@ -298,25 +298,25 @@ static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
     }
 }
 
-const char *argus_wifi_uplink_ip(void)
+const char *observore_wifi_uplink_ip(void)
 {
     return s_uplink_ip;
 }
 
-const char *argus_wifi_uplink_error(void)
+const char *observore_wifi_uplink_error(void)
 {
     return s_uplink_error;
 }
 
-bool argus_wifi_uplink_connected(void)
+bool observore_wifi_uplink_connected(void)
 {
-    return s_uplink_connected && s_mode == ARGUS_MODE_UPLINK;
+    return s_uplink_connected && s_mode == OBSERVORE_MODE_UPLINK;
 }
 
-esp_err_t argus_wifi_uplink_connect(void)
+esp_err_t observore_wifi_uplink_connect(void)
 {
-    argus_netcfg_t cfg;
-    if (!argus_netcfg_get(&cfg)) {
+    observore_netcfg_t cfg;
+    if (!observore_netcfg_get(&cfg)) {
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -364,10 +364,10 @@ esp_err_t argus_wifi_uplink_connect(void)
 
     EventBits_t bits = xEventGroupWaitBits(
         s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED, pdFALSE, pdFALSE,
-        pdMS_TO_TICKS(CONFIG_ARGUS_WIFI_CONNECT_TIMEOUT_S * 1000));
+        pdMS_TO_TICKS(CONFIG_OBSERVORE_WIFI_CONNECT_TIMEOUT_S * 1000));
 
     if (bits & STA_BIT_GOT_IP) {
-        s_mode = ARGUS_MODE_UPLINK;
+        s_mode = OBSERVORE_MODE_UPLINK;
         s_mode_applied = true;
         return ESP_OK;
     }
@@ -380,7 +380,7 @@ esp_err_t argus_wifi_uplink_connect(void)
     s_connect_attempts = STA_MAX_RETRY;
     esp_wifi_disconnect();
     ESP_LOGW(TAG, "uplink did not come up within %ds: %s",
-             CONFIG_ARGUS_WIFI_CONNECT_TIMEOUT_S,
+             CONFIG_OBSERVORE_WIFI_CONNECT_TIMEOUT_S,
              s_uplink_error[0] ? s_uplink_error : "no response from the network");
     return ESP_ERR_TIMEOUT;
 }
@@ -389,11 +389,11 @@ esp_err_t argus_wifi_uplink_connect(void)
 /* Mode handling                                                      */
 /* ------------------------------------------------------------------ */
 
-const char *argus_mode_name(argus_mode_t mode)
+const char *observore_mode_name(observore_mode_t mode)
 {
     switch (mode) {
-        case ARGUS_MODE_CONSOLE: return "console";
-        case ARGUS_MODE_UPLINK:  return "uplink";
+        case OBSERVORE_MODE_CONSOLE: return "console";
+        case OBSERVORE_MODE_UPLINK:  return "uplink";
         default:                 return "patrol";
     }
 }
@@ -403,32 +403,32 @@ static void derive_ap_ssid(void)
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     /* The SSID carries the last three MAC bytes so two units in the same room
-     * are distinguishable, and deliberately does not say "argus". */
-    snprintf(s_ap_ssid, sizeof(s_ap_ssid), CONFIG_ARGUS_AP_SSID_PREFIX "-%02X%02X%02X",
+     * are distinguishable, and deliberately does not say "observore". */
+    snprintf(s_ap_ssid, sizeof(s_ap_ssid), CONFIG_OBSERVORE_AP_SSID_PREFIX "-%02X%02X%02X",
              mac[3], mac[4], mac[5]);
 }
 
-uint32_t argus_wifi_sniffed_frames(void)
+uint32_t observore_wifi_sniffed_frames(void)
 {
     return s_sniffed_frames;
 }
 
-uint32_t argus_wifi_sniffer_calls(void)
+uint32_t observore_wifi_sniffer_calls(void)
 {
     return s_sniffer_calls;
 }
 
-const char *argus_wifi_ap_ssid(void)
+const char *observore_wifi_ap_ssid(void)
 {
     return s_ap_ssid;
 }
 
-const char *argus_wifi_ap_password(void)
+const char *observore_wifi_ap_password(void)
 {
-    return CONFIG_ARGUS_AP_PASSWORD;
+    return CONFIG_OBSERVORE_AP_PASSWORD;
 }
 
-esp_err_t argus_wifi_init(void)
+esp_err_t observore_wifi_init(void)
 {
     if (s_initialised) {
         return ESP_OK;
@@ -461,15 +461,15 @@ esp_err_t argus_wifi_init(void)
     derive_ap_ssid();
     s_initialised = true;
 
-    return argus_wifi_set_mode(ARGUS_MODE_PATROL);
+    return observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
 }
 
-argus_mode_t argus_wifi_mode(void)
+observore_mode_t observore_wifi_mode(void)
 {
     return s_mode;
 }
 
-esp_err_t argus_wifi_set_mode(argus_mode_t mode)
+esp_err_t observore_wifi_set_mode(observore_mode_t mode)
 {
     if (s_mode_applied && mode == s_mode) {
         return ESP_OK;
@@ -478,7 +478,7 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
     /* Always leave promiscuous mode before touching the interface config --
      * changing mode underneath an active sniffer is how you get a driver
      * assert instead of an error code. */
-    if (s_mode == ARGUS_MODE_UPLINK) {
+    if (s_mode == OBSERVORE_MODE_UPLINK) {
         /* Disconnect explicitly before stopping, or the event handler retries
          * the association we are deliberately leaving. */
         s_connect_attempts = STA_MAX_RETRY;
@@ -490,24 +490,24 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
     esp_wifi_set_promiscuous(false);
     esp_wifi_stop();
 
-    if (mode == ARGUS_MODE_UPLINK) {
-        esp_err_t err = argus_wifi_uplink_connect();
+    if (mode == OBSERVORE_MODE_UPLINK) {
+        esp_err_t err = observore_wifi_uplink_connect();
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "uplink unavailable, staying on patrol");
-            return argus_wifi_set_mode(ARGUS_MODE_PATROL);
+            return observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
         }
         return ESP_OK;
     }
 
-    if (mode == ARGUS_MODE_CONSOLE) {
+    if (mode == OBSERVORE_MODE_CONSOLE) {
         wifi_config_t ap = {0};
         snprintf((char *)ap.ap.ssid, sizeof(ap.ap.ssid), "%s", s_ap_ssid);
         ap.ap.ssid_len = strlen(s_ap_ssid);
         snprintf((char *)ap.ap.password, sizeof(ap.ap.password), "%s",
-                 CONFIG_ARGUS_AP_PASSWORD);
+                 CONFIG_OBSERVORE_AP_PASSWORD);
         ap.ap.channel = 6;
         ap.ap.max_connection = 2;
-        ap.ap.authmode = strlen(CONFIG_ARGUS_AP_PASSWORD) >= 8
+        ap.ap.authmode = strlen(CONFIG_OBSERVORE_AP_PASSWORD) >= 8
                              ? WIFI_AUTH_WPA2_PSK
                              : WIFI_AUTH_OPEN;
 
@@ -540,9 +540,9 @@ esp_err_t argus_wifi_set_mode(argus_mode_t mode)
     return ESP_OK;
 }
 
-void argus_wifi_patrol_cycle(void)
+void observore_wifi_patrol_cycle(void)
 {
-    if (s_mode != ARGUS_MODE_PATROL) {
+    if (s_mode != OBSERVORE_MODE_PATROL) {
         return;
     }
 
@@ -551,8 +551,8 @@ void argus_wifi_patrol_cycle(void)
     /* Sniff sweep.  Dwell is split evenly across the channels; a shorter dwell
      * covers the band faster but a beacon interval is typically ~102 ms, so
      * anything under about 120 ms per channel starts missing APs outright. */
-    const int channels = ARGUS_CHANNEL_MAX - ARGUS_CHANNEL_MIN + 1;
-    const int dwell_ms = ARGUS_SNIFF_MS / channels;
+    const int channels = OBSERVORE_CHANNEL_MAX - OBSERVORE_CHANNEL_MIN + 1;
+    const int dwell_ms = OBSERVORE_SNIFF_MS / channels;
 
     /* Register the filter and callback here, immediately before enabling
      * promiscuous mode, rather than once at init.  Registering them on a
@@ -568,8 +568,8 @@ void argus_wifi_patrol_cycle(void)
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(sniffer_cb));
 
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-    for (int ch = ARGUS_CHANNEL_MIN; ch <= ARGUS_CHANNEL_MAX; ch++) {
-        if (s_mode != ARGUS_MODE_PATROL) {
+    for (int ch = OBSERVORE_CHANNEL_MIN; ch <= OBSERVORE_CHANNEL_MAX; ch++) {
+        if (s_mode != OBSERVORE_MODE_PATROL) {
             break;  /* a mode switch landed mid-sweep */
         }
         esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
