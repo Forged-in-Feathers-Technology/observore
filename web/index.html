@@ -48,17 +48,36 @@ normally there, and reports what is new.</p>
   <esp-web-install-button manifest="firmware/manifest.json">
     <button slot="activate">Install Observore</button>
     <span slot="unsupported" class="unsupported">
-      This browser cannot talk to serial devices. Use a Chromium-based
-      browser on a desktop — Chrome, Edge, Opera, or Brave 1.69 and later.
-      Web Serial is not available in Firefox or Safari, and not on phones or
-      tablets at all. If you are already using Brave, check it is up to date:
-      Web Serial was disabled by default in older versions.
+      <span id="why">This browser cannot talk to serial devices.</span>
+      Web Serial needs a Chromium-based browser on a desktop — Chrome, Edge or
+      Opera. It does not exist in Firefox or Safari, and not on phones or
+      tablets at all.
     </span>
     <span slot="not-allowed" class="unsupported">
       This page must be served over HTTPS to reach a serial device.
     </span>
   </esp-web-install-button>
   <p class="ver" id="ver">&nbsp;</p>
+  <div id="loadfail" class="unsupported" hidden>
+    <p><strong>The installer failed to load.</strong> This is a fault with this
+    page, not with your browser or your board.</p>
+    <p class="note">Please
+    <a href="https://github.com/Forged-in-Feathers-Technology/observore/issues">open
+    an issue</a>. In the meantime the firmware can be flashed from a terminal —
+    the commands are further down this page.</p>
+  </div>
+  <div id="brave" class="unsupported" hidden>
+    <p><strong>Brave blocks Web Serial by default.</strong> This is a Brave
+    setting, not a fault with your board or this page — Brave ships the
+    capability and gates it.</p>
+    <p>Open this address, set <em>Serial API</em> to <strong>Enabled</strong>,
+    then relaunch Brave and reload this page:</p>
+    <pre id="braveflag">brave://flags/#brave-web-serial-api</pre>
+    <p class="note">Brave links cannot be clicked from a web page, so copy that
+    line into the address bar. If the flag is not there, your Brave is older
+    than the setting — update it, or use Chrome or Edge for the two minutes
+    this takes.</p>
+  </div>
   <p class="note">Plug the board in over USB-C first. It appears as a serial
   device on its own — no driver, no button to hold. The right firmware is
   chosen from the chip it finds, so there is nothing to pick.</p>
@@ -126,14 +145,69 @@ normally there, and reports what is new.</p>
     0x10000 observore-esp32c5.bin</pre>
 </div>
 
+<script>
+  /* A message that does not say why is a dead end, and this page has produced
+     two different lies already.
+
+     When the installer script fails to load, the custom element never
+     registers -- and an unregistered element renders *all* of its children,
+     including the "unsupported" span.  So a broken script URL is indis-
+     tinguishable, to the reader, from an unsupported browser.  That is what
+     shipped: a version that never existed, 404, and everyone told their
+     browser was at fault.
+
+     Check the two conditions separately and name whichever actually applies. */
+  (function () {
+    var TAG = 'esp-web-install-button';
+
+    function show(id) {
+      var el = document.getElementById(id);
+      if (el) { el.hidden = false; }
+    }
+
+    function installerFailed() {
+      /* Hide the component's fallback children, which are only meaningful once
+         the component exists to choose between them. */
+      var host = document.querySelector(TAG);
+      if (host) { host.hidden = true; }
+      show('loadfail');
+    }
+
+    customElements.whenDefined(TAG).then(function () {
+      /* Registered.  If Web Serial is also missing and this is Brave, the
+         component shows its unsupported slot -- add the part it cannot know. */
+      if ('serial' in navigator) { return; }
+      var brave = navigator.brave;
+      if (!brave || typeof brave.isBrave !== 'function') { return; }
+      brave.isBrave().then(function (isBrave) {
+        if (!isBrave) { return; }
+        show('brave');
+        var why = document.getElementById('why');
+        if (why) { why.textContent = 'Brave is not exposing Web Serial to this page.'; }
+      }).catch(function () {});
+    });
+
+    /* whenDefined never rejects, so a script that 404s leaves it pending for
+       ever.  Give it a deadline. */
+    setTimeout(function () {
+      if (!customElements.get(TAG)) { installerFailed(); }
+    }, 5000);
+  })();
+</script>
+
 <footer>
   <a href="https://github.com/Forged-in-Feathers-Technology/observore">Source</a> ·
   <a href="https://github.com/Forged-in-Feathers-Technology/observore/releases">Releases</a> ·
   built by <a href="https://www.forgedinfeatherstechnology.com">Forged in Feathers Technology</a>
 </footer>
 
-<script type="module"
-        src="https://unpkg.com/esp-web-tools@10.0.3/dist/web/install-button.js?module"></script>
+<!-- Served from this origin, not a CDN.  The same reasoning as the firmware
+     binaries: a third-party fetch is one more thing that can fail in a way the
+     page cannot see.  It failed exactly that way once -- the version pinned
+     here never existed, unpkg returned 404, the custom element never
+     registered, and the page told everyone their browser was unsupported.
+     The deploy now fetches this from npm and fails if it cannot. -->
+<script type="module" src="ewt/install-button.js"></script>
 <script>
   // Name the version being served, read from the same manifest the button uses.
   fetch('firmware/manifest.json')

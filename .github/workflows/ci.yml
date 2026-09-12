@@ -47,6 +47,24 @@ jobs:
       - name: Check filenames and target coverage
         run: python3 tools/check_docs_match_build.py
 
+      # The flasher page must not load its installer from someone else's
+      # server. It did once, from a version that did not exist, and the page
+      # responded by telling every visitor their browser was unsupported --
+      # wrong in every browser, and blamed on the reader. The deploy vendors
+      # the installer; this stops the page quietly going back to a CDN.
+      - name: The flasher page loads no third-party scripts
+        run: |
+          set -euo pipefail
+          if grep -nE '<script[^>]+src="https?://' web/index.html; then
+            echo "::error::web/index.html loads a script from another origin;"\
+                 " vendor it in pages.yml and reference it by relative path"
+            exit 1
+          fi
+          grep -q 'src="ewt/install-button.js"' web/index.html || {
+            echo "::error::web/index.html does not load the vendored installer"
+            exit 1; }
+          echo "ok: the page loads only same-origin scripts"
+
   # Catches what the host tests cannot: the radio, web and persistence layers,
   # which only exist when built against ESP-IDF.
   firmware:

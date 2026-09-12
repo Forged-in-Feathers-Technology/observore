@@ -11,6 +11,17 @@ name: Flasher page
 on:
   release:
     types: [published]
+  # The page is not only published with firmware.  Edits to the page itself --
+  # wording, browser guidance, flashing instructions -- used to sit unpublished
+  # until the next release happened to go out, which meant the site could
+  # contradict the repository for weeks.  The firmware served alongside it
+  # still comes from the latest release, so this republishes the page without
+  # changing what it installs.
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -46,6 +57,38 @@ jobs:
 
           mkdir -p _site/firmware
           cp web/index.html _site/index.html
+
+          # Vendor the installer instead of loading it from a CDN at runtime.
+          #
+          # The page used to pull esp-web-tools from unpkg, pinned to a version
+          # that did not exist. unpkg returned 404, the custom element never
+          # registered, and an unregistered element renders all of its
+          # children -- so every visitor was told their browser could not talk
+          # to serial devices. It was wrong in every browser and looked like a
+          # browser problem, which is the worst possible way to fail.
+          #
+          # Fetching it here means a bad version breaks the deploy instead of
+          # the site, and visitors never depend on a third party being up.
+          EWT_VERSION=10.4.0
+          curl -fsSL "https://registry.npmjs.org/esp-web-tools/-/esp-web-tools-${EWT_VERSION}.tgz" \
+            -o /tmp/ewt.tgz
+          mkdir -p _site/ewt
+          tar xzf /tmp/ewt.tgz -C /tmp
+          cp -r /tmp/package/dist/web/. _site/ewt/
+
+          # Prove we got a working build rather than an error page: the entry
+          # point must exist and must actually register the element the page
+          # relies on.
+          test -s _site/ewt/install-button.js || {
+            echo "::error::esp-web-tools ${EWT_VERSION} has no install-button.js"; exit 1; }
+          grep -q 'customElements.define("esp-web-install-button"' \
+            _site/ewt/install-button.js || {
+            echo "::error::install-button.js does not register esp-web-install-button"; exit 1; }
+          echo "vendored esp-web-tools ${EWT_VERSION} ($(ls _site/ewt | wc -l) files)"
+
+          # The page must reference what was actually vendored.
+          grep -q 'src="ewt/install-button.js"' _site/index.html || {
+            echo "::error::index.html does not load the vendored installer"; exit 1; }
 
           # Claims the custom domain. Two different things are called CNAME
           # here and only one of them is this: the DNS record at the provider
