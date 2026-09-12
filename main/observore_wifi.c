@@ -19,6 +19,28 @@
 
 static const char *TAG = "observore.wifi";
 
+/* Runtime transitions report failure; they do not abort.
+ *
+ * ESP_ERROR_CHECK reboots, and these run every time the device moves between
+ * patrol and uplink -- roughly every two and a half minutes, for as long as it
+ * is deployed. A transient driver error would therefore not degrade the
+ * device, it would restart it, and because the device table and the follower
+ * heuristic live in RAM, a restart throws away exactly the accumulating
+ * evidence the device exists to gather. Staying in the current mode and
+ * retrying on the next window is strictly better.
+ *
+ * Initialisation keeps ESP_ERROR_CHECK: if the radio will not come up at all
+ * there is nothing useful to continue doing. */
+#define TRY(expr, what)                                                     \
+    do {                                                                    \
+        esp_err_t _err = (expr);                                            \
+        if (_err != ESP_OK) {                                               \
+            ESP_LOGW(TAG, "%s failed: %s -- staying put and retrying",      \
+                     (what), esp_err_to_name(_err));                        \
+            return _err;                                                    \
+        }                                                                   \
+    } while (0)
+
 #define OBSERVORE_SNIFF_MS     5000
 #if SOC_WIFI_SUPPORT_5G
 /* A dual-band scan returns both bands at once.  Measured in an ordinary flat,
@@ -448,11 +470,11 @@ esp_err_t observore_wifi_uplink_connect(void)
     s_connect_attempts = 0;
     xEventGroupClearBits(s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED);
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
+    TRY(esp_wifi_set_mode(WIFI_MODE_STA), "station mode");
+    TRY(esp_wifi_set_config(WIFI_IF_STA, &sta), "station config");
     memset(&sta, 0, sizeof(sta));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    TRY(esp_wifi_start(), "wifi start");
+    TRY(esp_wifi_set_ps(WIFI_PS_NONE), "disabling power save");
 
     EventBits_t bits = xEventGroupWaitBits(
         s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED, pdFALSE, pdFALSE,
@@ -526,8 +548,19 @@ static void start_mdns(void)
 
     snprintf(s_hostname, sizeof(s_hostname), "%s.local",
              CONFIG_OBSERVORE_HOSTNAME);
-    ESP_ERROR_CHECK(mdns_hostname_set(CONFIG_OBSERVORE_HOSTNAME));
-    ESP_ERROR_CHECK(mdns_instance_name_set("Observore counter-surveillance"));
+    /* Warned about rather than fatal, like the mdns_init() above and the
+     * service registration below -- these two were the odd ones out. Losing
+     * the .local name costs discoverability, not detection, and the DHCP
+     * hostname still works. */
+    err = mdns_hostname_set(CONFIG_OBSERVORE_HOSTNAME);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "could not set the mDNS hostname: %s", esp_err_to_name(err));
+    }
+    err = mdns_instance_name_set("Observore counter-surveillance");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "could not set the mDNS instance name: %s",
+                 esp_err_to_name(err));
+    }
 
     mdns_txt_item_t txt[] = {
         {"path", "/"},
@@ -670,12 +703,12 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
         ap.ap.authmode = strlen(ap_pw) >= 8 ? WIFI_AUTH_WPA2_PSK
                                             : WIFI_AUTH_OPEN;
 
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-        ESP_ERROR_CHECK(esp_wifi_start());
+        TRY(esp_wifi_set_mode(WIFI_MODE_AP), "softap mode");
+        TRY(esp_wifi_set_config(WIFI_IF_AP, &ap), "softap config");
+        TRY(esp_wifi_start(), "softap start");
         /* The SoftAP needs the receiver up continuously too, for the same
          * reason patrol does. */
-        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+        TRY(esp_wifi_set_ps(WIFI_PS_NONE), "disabling power save");
         ESP_LOGI(TAG, "console mode: SSID \"%s\" at 192.168.4.1", s_ap_ssid);
     } else {
         /* Patrol is station mode but deliberately never associated, which is
@@ -683,14 +716,14 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
          * SSID is cleared so WIFI_EVENT_STA_START does not try to join the
          * uplink we just left. */
         wifi_config_t blank = {0};
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &blank));
+        TRY(esp_wifi_set_mode(WIFI_MODE_STA), "station mode");
+        TRY(esp_wifi_set_config(WIFI_IF_STA, &blank), "clearing the station config");
         s_connect_attempts = STA_MAX_RETRY;
-        ESP_ERROR_CHECK(esp_wifi_start());
+        TRY(esp_wifi_start(), "wifi start");
         /* Power save must be off to sniff.  The default WIFI_PS_MIN_MODEM
          * sleeps the receiver between beacons, which on an unassociated
          * station means it is asleep for nearly all of the sweep. */
-        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+        TRY(esp_wifi_set_ps(WIFI_PS_NONE), "disabling power save");
         ESP_LOGI(TAG, "patrol mode: scanning and sniffing");
     }
 
@@ -754,10 +787,21 @@ void observore_wifi_patrol_cycle(void (*between)(void))
      * frames are the overwhelming majority of the air, and rejecting them
      * before the callback is what keeps this cheap. */
     wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(sniffer_cb));
-
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
+    esp_err_t serr = esp_wifi_set_promiscuous_filter(&filter);
+    if (serr == ESP_OK) {
+        serr = esp_wifi_set_promiscuous_rx_cb(sniffer_cb);
+    }
+    if (serr == ESP_OK) {
+        serr = esp_wifi_set_promiscuous(true);
+    }
+    if (serr != ESP_OK) {
+        /* Give up this sweep, not the device. BLE keeps running, the AP scan
+         * above already happened, and the next cycle sets the sniffer up from
+         * scratch anyway. */
+        ESP_LOGW(TAG, "sniffer unavailable this cycle: %s", esp_err_to_name(serr));
+        esp_wifi_set_promiscuous(false);
+        return;
+    }
     for (size_t i = 0; i < n; i++) {
         if (s_mode != OBSERVORE_MODE_PATROL) {
             break;  /* a mode switch landed mid-sweep */

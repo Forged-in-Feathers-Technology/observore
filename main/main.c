@@ -57,7 +57,16 @@ static void enter_mode(observore_mode_t next)
 
     if (next == OBSERVORE_MODE_PATROL) {
         observore_web_stop();
-        observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
+        /* Patrol is the fallback, so there is nowhere further to fall back to
+         * and nothing to decide -- but it must not fail silently. The mode is
+         * left unapplied, so the next cycle retries from a stopped driver;
+         * saying so is what stops a device that has quietly gone deaf from
+         * looking like a quiet neighbourhood. */
+        esp_err_t err = observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "could not enter patrol (%s) -- retrying next cycle",
+                     esp_err_to_name(err));
+        }
         observore_led_set_console(false);
         ESP_LOGI(TAG, "back on patrol");
         return;

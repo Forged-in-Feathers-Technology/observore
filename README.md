@@ -852,6 +852,27 @@ this reason; if the console ever goes quiet again, read that line first.
 clear | score 0 | 0 devices | 227 sightings | 0/0 frames | heap 103687 free, 42568 min, 31744 largest
 ```
 
+## What happens when the radio misbehaves
+
+A driver error on a mode change does not restart the device. It is logged, the
+current mode is left in place, and the next cycle tries again:
+
+```
+W observore.wifi: wifi start failed: ESP_ERR_INVALID_STATE -- staying put and retrying
+W observore: could not enter patrol (ESP_ERR_INVALID_STATE) -- retrying next cycle
+I observore.wifi: patrol mode: scanning and sniffing      <- recovered, next cycle
+```
+
+This matters more here than the phrase "error handling" suggests. Patrol and
+uplink alternate every couple of minutes for as long as the device is deployed,
+so a transient failure on that path is not rare, and the device table, the
+sighting counts and the follower heuristic all live in RAM. Aborting would
+therefore not degrade the device, it would restart it — and throw away exactly
+the accumulating evidence it exists to gather, silently.
+
+Initialisation is still fatal. If the radio will not come up at all there is
+nothing useful to continue doing, and a boot loop is at least honest about it.
+
 ## Limitations
 
 Read these before trusting it.
