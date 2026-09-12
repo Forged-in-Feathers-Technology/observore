@@ -25,7 +25,15 @@ Three checks:
              lives at 0x2000 and the board would never boot.
 
   targets    every target with an sdkconfig.defaults.<target> is in the CI
-             matrix.  Catches adding a target and forgetting to build it.
+             matrix, and every target the release ships is built by CI.
+             Catches adding a target and forgetting to build it.
+
+"Supported" means two different things here and conflating them is a bug this
+script has already made once.  A target can be *built* by CI without being
+*shipped*: the C6 is compile-tested so portability breaks surface early, but no
+C6 release asset exists, so documenting how to flash one would be wrong rather
+than missing.  Filenames and offsets are therefore checked against the targets
+in release.yml, not the ones in ci.yml.
 """
 
 import argparse
@@ -44,12 +52,32 @@ def read(path):
 
 
 def known_targets():
-    """Targets the repository claims to support, from their defaults files."""
+    """Targets the repository can build, from their defaults files."""
     found = set()
     for path in glob.glob("sdkconfig.defaults.*"):
         suffix = path.split("sdkconfig.defaults.", 1)[1]
         if suffix and "." not in suffix:
             found.add(suffix)
+    return found
+
+
+def matrix_targets(workflow):
+    """The target matrix of a workflow, or None when it has none."""
+    m = re.search(r"target:\s*\[([^\]]+)\]", read(workflow))
+    if not m:
+        return None
+    return {t.strip() for t in m.group(1).split(",") if t.strip()}
+
+
+def released_targets():
+    """Targets whose binaries a release actually carries.
+
+    These, not the CI matrix, are what the documentation should describe: a
+    reader can only flash a file that exists on the release page.
+    """
+    found = matrix_targets(".github/workflows/release.yml")
+    if not found:
+        raise SystemExit("release.yml has no target matrix to read")
     return found
 
 
@@ -79,13 +107,13 @@ def parse_flash_args(build_dir):
 
 
 def check_filenames(targets, problems):
-    """Every documented firmware filename must belong to a supported target."""
+    """Every documented firmware filename must be one a release actually carries."""
     allowed = {"%s-%s.bin" % (stem, t) for stem in STEMS for t in targets}
     for doc in DOCS:
         for name in sorted(documented_files(read(doc))):
             if name not in allowed:
                 problems.append(
-                    "%s names %s, which no supported target produces "
+                    "%s names %s, which no released target produces "
                     "(expected <stem>-<target>.bin for one of: %s)"
                     % (doc, name, ", ".join(sorted(targets))))
 
@@ -110,23 +138,25 @@ def check_offsets(target, build_dir, problems):
             else:
                 matched += 1
     if not checked:
-        problems.append("no documented flash offsets found for %s -- the docs "
-                        "should show how to flash every supported target" % target)
+        problems.append("no documented flash offsets found for %s, which the "
+                        "release ships -- the docs should show how to flash "
+                        "every target a user can download" % target)
     elif matched == checked:
         print("  %d documented offset(s) for %s match the build" % (matched, target))
 
 
-def check_targets_are_built(targets, problems):
-    """A target with defaults but no CI entry is a target nobody is testing."""
-    ci = read(".github/workflows/ci.yml")
-    matrix = re.search(r"target:\s*\[([^\]]+)\]", ci)
-    if not matrix:
+def check_targets_are_built(targets, shipped, problems):
+    """A target nobody builds, or one shipped without being built, is a trap."""
+    built = matrix_targets(".github/workflows/ci.yml")
+    if built is None:
         problems.append(".github/workflows/ci.yml has no target matrix to check")
         return
-    built = {t.strip() for t in matrix.group(1).split(",") if t.strip()}
     for t in sorted(targets - built):
         problems.append("sdkconfig.defaults.%s exists but %s is not in the CI "
                         "matrix, so nothing builds it" % (t, t))
+    for t in sorted(shipped - built):
+        problems.append("release.yml ships %s but CI never builds it, so a "
+                        "release is the first thing that would find a break" % t)
 
 
 def main():
@@ -141,11 +171,17 @@ def main():
     if not targets:
         raise SystemExit("no sdkconfig.defaults.<target> files found")
 
+    shipped = released_targets()
+
     problems = []
-    check_filenames(targets, problems)
-    check_targets_are_built(targets, problems)
-    if args.target:
+    check_filenames(shipped, problems)
+    check_targets_are_built(targets, shipped, problems)
+    # A target CI builds but never ships has no release assets to document.
+    if args.target and args.target in shipped:
         check_offsets(args.target, args.build_dir, problems)
+    elif args.target:
+        print("  %s is build-tested only and ships no assets; "
+              "nothing to document" % args.target)
 
     if problems:
         print("\ndocumentation no longer matches the build:\n", file=sys.stderr)
@@ -155,7 +191,8 @@ def main():
               file=sys.stderr)
         return 1
 
-    print("ok: docs match the build (%s)" % ", ".join(sorted(targets)))
+    print("ok: docs match the build (built: %s | shipped: %s)"
+          % (", ".join(sorted(targets)), ", ".join(sorted(shipped))))
     return 0
 
 
