@@ -46,6 +46,18 @@ jobs:
 
           mkdir -p _site/firmware
           cp web/index.html _site/index.html
+
+          # Claims the custom domain. Two different things are called CNAME
+          # here and only one of them is this: the DNS record at the provider
+          # routes the name to GitHub, and this file tells GitHub which of its
+          # many Pages sites should answer for it. Without it GitHub receives
+          # the request and returns 404.
+          #
+          # It has to be written by this workflow. With branch-published Pages
+          # the repository setting writes the file for you; with Actions
+          # publishing, each deploy replaces the whole site, so a file that is
+          # not in the artifact disappears on the next run.
+          echo "observore.forgedinfeatherstechnology.com" > _site/CNAME
           gh release download "$TAG" --repo "${{ github.repository }}" \
              --pattern '*.bin' --dir _site/firmware
 
