@@ -579,7 +579,9 @@ make -C test test
 ```
 
 CI runs these on every push, alongside the credential scan, an ESP-IDF build
-for every supported target, and a validation of the generated OUI table — that both tables
+for every supported target, a check that this README and the flasher page still
+describe the release the build actually produces, and a validation of the
+generated OUI table — that both tables
 are sorted for binary search, carry no duplicates, stay disjoint from each
 other, and index only names that exist.
 
