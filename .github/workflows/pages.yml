@@ -60,30 +60,37 @@ jobs:
           echo "observore.forgedinfeatherstechnology.com" > _site/CNAME
           gh release download "$TAG" --repo "${{ github.repository }}" \
              --pattern '*.bin' --dir _site/firmware
+          # The per-target fragments carry each chip's real flash offsets, so
+          # the page and the release agree by construction instead of by two
+          # people remembering to edit both.
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+             --pattern 'builds-*.json' --dir _site/firmware
 
-          # Same manifest, but relative so the browser fetches from this origin.
-          cat > _site/firmware/manifest.json <<JSON
-          {
-            "name": "Observore",
-            "version": "${TAG}",
-            "new_install_prompt_erase": false,
-            "builds": [
-              {
-                "chipFamily": "ESP32-S3",
-                "parts": [
-                  { "path": "bootloader.bin",      "offset": 0 },
-                  { "path": "partition-table.bin", "offset": 32768 },
-                  { "path": "observore.bin",       "offset": 65536 }
-                ]
-              }
-            ]
-          }
-          JSON
+          # Same manifest as the release, but with no --base: the parts are
+          # fetched from this origin, which is the entire reason the binaries
+          # are copied into the site rather than linked.
+          python3 tools/make_manifest.py \
+            --version "$TAG" --out _site/firmware/manifest.json \
+            '_site/firmware/builds-*.json'
 
-          python3 -c "import json;json.load(open('_site/firmware/manifest.json'))"
-          for f in bootloader.bin partition-table.bin observore.bin; do
-            test -s "_site/firmware/$f" || { echo "::error::missing $f"; exit 1; }
-          done
+          # Every part the manifest promises must actually be on the page. A
+          # missing binary is a 404 at flashing time, in a browser, on somebody
+          # else's machine -- the worst place to discover it.
+          python3 - <<'PY'
+          import json, os, sys
+          m = json.load(open('_site/firmware/manifest.json'))
+          missing = []
+          for build in m['builds']:
+              for part in build['parts']:
+                  path = os.path.join('_site/firmware', part['path'])
+                  if not os.path.exists(path) or os.path.getsize(path) == 0:
+                      missing.append((build['chipFamily'], part['path']))
+          if missing:
+              for family, path in missing:
+                  print('::error::%s is missing %s' % (family, path))
+              sys.exit(1)
+          print('manifest covers: ' + ', '.join(b['chipFamily'] for b in m['builds']))
+          PY
           ls -l _site _site/firmware
 
       - uses: actions/upload-pages-artifact@v3
