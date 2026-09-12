@@ -251,6 +251,11 @@ static const char *wifi_reason_text(int reason)
             return "connection failed";
         case WIFI_REASON_STA_LEAVING:
             return "we disconnected";
+        case WIFI_REASON_ASSOC_LEAVE:
+        case WIFI_REASON_AUTH_LEAVE:
+            /* Seen transiently when the radio has just been reconfigured out
+             * of SoftAP mode; the next attempt normally succeeds. */
+            return "the access point dropped the association";
         default:
             return "see WIFI_REASON_* in esp_wifi_types";
     }
@@ -525,6 +530,14 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
         return ESP_OK;
     }
 
+    /* From here the radio is being reconfigured, so the current mode is no
+     * longer applied.  Recording that before touching the driver is what lets
+     * a caller fall back to the mode we are nominally already in and have it
+     * actually take effect -- previously the guard above short-circuited that
+     * call, leaving the station configured with the uplink SSID while we
+     * believed we were patrolling. */
+    s_mode_applied = false;
+
     /* Always leave promiscuous mode before touching the interface config --
      * changing mode underneath an active sniffer is how you get a driver
      * assert instead of an error code. */
@@ -541,12 +554,12 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
     esp_wifi_stop();
 
     if (mode == OBSERVORE_MODE_UPLINK) {
-        esp_err_t err = observore_wifi_uplink_connect();
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "uplink unavailable, staying on patrol");
-            return observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
-        }
-        return ESP_OK;
+        /* Apply exactly what was asked and report what happened.  Deciding
+         * what to do instead is policy, and policy lives with the caller that
+         * owns the LED, the web server and the retry backoff -- returning
+         * ESP_OK after quietly doing something else forced that caller to
+         * interrogate the driver to discover its own state. */
+        return observore_wifi_uplink_connect();
     }
 
     if (mode == OBSERVORE_MODE_CONSOLE) {
