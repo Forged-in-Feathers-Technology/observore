@@ -29,47 +29,71 @@ int64_t observore_web_last_request_us(void)
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
 
-/* Scratch space for building responses.  This MUST NOT live in internal RAM.
+/* Scratch space for building responses.
  *
- * It was originally two static snapshots plus two static JSON buffers -- 84 KB
- * of a device that has about 180 KB of DRAM, on top of the 20 KB device table.
- * Wi-Fi and lwip were left starved: internal free heap fell to 1.4 KB with a
- * largest free block of 768 bytes, at which point the SoftAP could still beacon
- * but could no longer allocate a buffer to answer an ARP request.  The console
- * loaded once after boot and then went dead, looking for all the world like a
- * network problem.
+ * It MUST NOT be static internal RAM. It was originally two static snapshots
+ * plus two static JSON buffers -- 84 KB of a part that has about 180 KB of
+ * DRAM, on top of the 20 KB device table. Wi-Fi and lwip allocate from that
+ * same pool, so under a few rounds of traffic free internal heap fell to
+ * 1.4 KB with a largest free block of 768 bytes, and the SoftAP could still
+ * beacon but could no longer allocate a buffer to answer an ARP request. The
+ * console loaded once after boot and then went dead, looking for all the world
+ * like a network fault.
  *
- * The buffers now come from PSRAM, of which there are 8 MB doing nothing, and
- * are shared between handlers: esp_http_server dispatches requests from a
- * single task, so only one handler is ever building a response. */
-#define JSON_BUF_LEN (32 * 1024)
+ * PSRAM is therefore the preferred home. But only some targets have any: the
+ * C3, C5 and C6 have none, and demanding it there meant the firmware ran with
+ * the console silently refusing to start. So a smaller budget is taken from
+ * internal memory when there is no PSRAM, and the console reports fewer
+ * devices per request rather than not existing.
+ *
+ * The buffers are shared between handlers, which is safe because
+ * esp_http_server dispatches requests from a single task. */
+#define JSON_BUF_PSRAM    (32 * 1024)
+#define JSON_BUF_INTERNAL (8 * 1024)
+/* Enough for the nearby list in full, and a useful slice of the device list. */
+#define SNAP_INTERNAL     48
 
-/* Both are heap pointers, so sizeof() on them yields 4, not the buffer size.
- * Always bound writes with JSON_BUF_LEN -- a missed conversion here silently
- * truncated /api/devices, which the browser then refused to parse. */
-static observore_event_t *s_snap;    /* OBSERVORE_MAX_DEVICES entries */
-static char          *s_body;    /* JSON_BUF_LEN bytes */
+static observore_event_t *s_snap;
+static size_t             s_snap_cap;
+static char              *s_body;
+static size_t             s_body_cap;
 
 static bool scratch_alloc(void)
 {
     if (s_snap && s_body) {
         return true;
     }
+
     s_snap = heap_caps_malloc(sizeof(observore_event_t) * OBSERVORE_MAX_DEVICES,
                               MALLOC_CAP_SPIRAM);
-    s_body = heap_caps_malloc(JSON_BUF_LEN, MALLOC_CAP_SPIRAM);
+    s_body = heap_caps_malloc(JSON_BUF_PSRAM, MALLOC_CAP_SPIRAM);
+    if (s_snap && s_body) {
+        s_snap_cap = OBSERVORE_MAX_DEVICES;
+        s_body_cap = JSON_BUF_PSRAM;
+        return true;
+    }
+
+    /* No PSRAM, or not enough of it. Fall back to a deliberately smaller
+     * budget in internal memory -- large enough to be useful, small enough
+     * not to repeat the starvation described above. */
+    free(s_snap);
+    free(s_body);
+    s_snap = malloc(sizeof(observore_event_t) * SNAP_INTERNAL);
+    s_body = malloc(JSON_BUF_INTERNAL);
     if (!s_snap || !s_body) {
-        /* Without PSRAM there is no safe place for this, so refuse to start
-         * rather than quietly starve the network stack again. */
-        ESP_LOGE(TAG, "could not allocate %d KB of PSRAM scratch",
-                 (int)((sizeof(observore_event_t) * OBSERVORE_MAX_DEVICES +
-                        JSON_BUF_LEN) / 1024));
+        ESP_LOGE(TAG, "no room for console scratch in PSRAM or internal RAM");
         free(s_snap);
         free(s_body);
         s_snap = NULL;
         s_body = NULL;
         return false;
     }
+    s_snap_cap = SNAP_INTERNAL;
+    s_body_cap = JSON_BUF_INTERNAL;
+    ESP_LOGW(TAG, "no PSRAM: console scratch is %d KB of internal RAM and "
+                  "reports at most %d devices per request",
+             (int)((sizeof(observore_event_t) * SNAP_INTERNAL +
+                    JSON_BUF_INTERNAL) / 1024), SNAP_INTERNAL);
     return true;
 }
 
@@ -79,6 +103,8 @@ static void scratch_free(void)
     free(s_body);
     s_snap = NULL;
     s_body = NULL;
+    s_snap_cap = 0;
+    s_body_cap = 0;
 }
 
 static esp_err_t send_json(httpd_req_t *req, const char *body)
@@ -129,10 +155,10 @@ static esp_err_t devices_handler(httpd_req_t *req)
 {
     observore_event_t *snap = s_snap;
     int64_t now = esp_timer_get_time();
-    size_t count = observore_track_snapshot(snap, OBSERVORE_MAX_DEVICES);
+    size_t count = observore_track_snapshot(snap, s_snap_cap);
 
     observore_jbuf_t jb;
-    observore_jb_init(&jb, s_body, JSON_BUF_LEN, 2);
+    observore_jb_init(&jb, s_body, s_body_cap, 2);
     observore_jb_printf(&jb, "{\"devices\":[");
 
     size_t written = 0;
@@ -222,7 +248,7 @@ static esp_err_t mutes_handler(httpd_req_t *req)
     size_t n = observore_mute_count();
 
     observore_jbuf_t jb;
-    observore_jb_init(&jb, s_body, JSON_BUF_LEN, 2);
+    observore_jb_init(&jb, s_body, s_body_cap, 2);
     observore_jb_printf(&jb, "{\"suppressed\":%" PRIu32 ",\"rules\":[",
                         observore_mute_suppressed());
 
@@ -400,10 +426,12 @@ static esp_err_t nearby_handler(httpd_req_t *req)
 {
     observore_event_t *snap = s_snap;
     int64_t now = esp_timer_get_time();
-    size_t count = observore_track_nearby(snap, NEARBY_MAX);
+    size_t count = observore_track_nearby(snap,
+                                          s_snap_cap < NEARBY_MAX
+                                              ? s_snap_cap : NEARBY_MAX);
 
     observore_jbuf_t jb;
-    observore_jb_init(&jb, s_body, JSON_BUF_LEN, 2);
+    observore_jb_init(&jb, s_body, s_body_cap, 2);
     observore_jb_printf(&jb, "{\"nearby\":[");
 
     size_t written = 0;
@@ -441,7 +469,7 @@ static esp_err_t nearby_handler(httpd_req_t *req)
 static esp_err_t baseline_handler(httpd_req_t *req)
 {
     observore_event_t *snap = s_snap;
-    size_t count = observore_track_all(snap, OBSERVORE_MAX_DEVICES);
+    size_t count = observore_track_all(snap, s_snap_cap);
 
     size_t added = 0, existing = 0, full = 0, temporary = 0;
     size_t by_name = 0, by_fp = 0, by_mac = 0;
