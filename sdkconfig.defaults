@@ -56,4 +56,13 @@ CONFIG_OBSERVORE_WIFI_PASSWORD=""
 # Notifications go over TLS to whatever host you run, so the Mozilla root
 # bundle is compiled in rather than pinning a single certificate.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+# The common roots rather than the full Mozilla set: 44 authorities instead of
+# about 130, for 51 KB less flash. Let's Encrypt (ISRG Root X1 and X2) is
+# included, which is what self-hosted notifier endpoints overwhelmingly use.
+# A server behind an unusual CA needs DEFAULT_FULL back, or a custom bundle --
+# and a private CA needed a custom bundle either way.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# Optimise for size, not for debugging. Worth 125 KB, which matters because the
+# OTA layout gives each slot 1984 KB and the C5 is the tightest target.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

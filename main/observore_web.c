@@ -28,8 +28,8 @@ int64_t observore_web_last_request_us(void)
     return s_last_request_us;
 }
 
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
+extern const uint8_t index_html_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_gz_end");
 
 /* Scratch space for building responses.
  *
@@ -121,8 +121,17 @@ static esp_err_t index_handler(httpd_req_t *req)
 {
     s_last_request_us = esp_timer_get_time();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    /* Served compressed unconditionally rather than sniffing Accept-Encoding,
+     * because holding an uncompressed copy as well would spend the flash this
+     * saves. Every browser has accepted gzip for two decades; a command-line
+     * client needs --compressed or equivalent, which the README says.
+     *
+     * No -1 on the length here: that belonged to the NUL the text embed added,
+     * and a BINARY embed has none. Taking a byte off a gzip stream truncates
+     * the CRC and the browser rejects the whole page. */
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     return httpd_resp_send(req, (const char *)index_html_start,
-                           index_html_end - index_html_start - 1);
+                           index_html_end - index_html_start);
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
