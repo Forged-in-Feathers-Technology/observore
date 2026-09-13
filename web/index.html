@@ -51,7 +51,7 @@ normally there, and reports what is new.</p>
     <span id="boardnote" class="dim"></span>
   </p>
   <p class="note" id="boardwhy" hidden>
-    Two boards can share a chip and still need different firmware &mdash; a XIAO
+    Two boards can share a chip and still need different firmware: a XIAO
     ESP32-C5 and a Waveshare C5 put different LEDs on the same pin, and only one
     of them has a UART bridge. The installer still checks the chip, so choosing
     a profile for the wrong <em>chip</em> is refused rather than flashed; this
@@ -61,7 +61,7 @@ normally there, and reports what is new.</p>
     <button slot="activate">Install Observore</button>
     <span slot="unsupported" class="unsupported">
       <span id="why">This browser cannot talk to serial devices.</span>
-      Web Serial needs a Chromium-based browser on a desktop — Chrome, Edge or
+      Web Serial needs a Chromium-based browser on a desktop: Chrome, Edge or
       Opera. It does not exist in Firefox or Safari, and not on phones or
       tablets at all.
     </span>
@@ -75,24 +75,24 @@ normally there, and reports what is new.</p>
     page, not with your browser or your board.</p>
     <p class="note">Please
     <a href="https://github.com/Forged-in-Feathers-Technology/observore/issues">open
-    an issue</a>. In the meantime the firmware can be flashed from a terminal —
-    the commands are further down this page.</p>
+    an issue</a>. In the meantime the firmware can be flashed from a terminal.
+    The commands are further down this page.</p>
   </div>
   <div id="brave" class="unsupported" hidden>
-    <p><strong>Brave blocks Web Serial by default:</strong> This is a Brave
-    setting, not a fault with your board or this page — Brave ships the
+    <p><strong>Brave blocks Web Serial by default:</strong> this is a Brave
+    setting, not a fault with your board or this page. Brave ships the
     capability and gates it.</p>
     <p>Open this address, set <em>Serial API</em> to <strong>Enabled</strong>,
     then relaunch Brave and reload this page:</p>
     <pre id="braveflag">brave://flags/#brave-web-serial-api</pre>
     <p class="note">Brave links cannot be clicked from a web page, so copy that
     line into the address bar. If the flag is not there, your Brave is older
-    than the setting — update it, or use Chrome or Edge for the two minutes
+    than the setting. Update it, or use Chrome or Edge for the two minutes
     this takes.</p>
   </div>
   <p class="note">Plug the board in over USB-C first. It appears as a serial
-  device on its own — no driver, no button to hold. The right firmware is
-  chosen from the chip it finds, so there is nothing to pick.</p>
+  device on its own, with no driver and no button to hold. Choose your board
+  above; the installer checks the chip as well, and refuses a mismatch.</p>
   <p class="note">C5 boards have two USB-C ports: a native one and a UART
   bridge. Either flashes, and the log appears on both.</p>
 </div>
@@ -102,7 +102,7 @@ normally there, and reports what is new.</p>
   <ul>
     <li><strong>Your settings survive an upgrade:</strong> The bootloader,
       partition table and application are written at their own offsets, so the
-      stored configuration is untouched — the mute rules, the Wi-Fi
+      stored configuration is untouched: the mute rules, the Wi-Fi
       credentials, the notifier token and the device's console password all
       stay.</li>
     <li><strong>Tick “erase device” only if you mean it:</strong> That wipes
@@ -116,7 +116,7 @@ normally there, and reports what is new.</p>
 <h2>Straight after flashing: note the console password</h2>
 <div class="panel">
   <p>Each device generates its own console password on first boot and prints it
-  on the serial log — it is the only place it appears:</p>
+  on the serial log, and it is the only place it appears:</p>
   <pre>console SoftAP: "console-XXXXXX"  password: xxxxxxxxxxxx</pre>
   <p class="note">Use <strong>Logs &amp; Console</strong> on the button above to
   read it without any other software. It is both the Wi-Fi password for the
