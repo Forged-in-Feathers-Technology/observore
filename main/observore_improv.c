@@ -67,6 +67,13 @@ static const char MAGIC[6] = {'I', 'M', 'P', 'R', 'O', 'V'};
 
 #define MAX_PAYLOAD 256
 
+/* How long to let beacons arrive before telling a client there are no networks.
+ * A sniff sweep dwells a few hundred milliseconds per channel and an access
+ * point beacons about ten times a second, so a handful of seconds is enough to
+ * hear the ones nearby without leaving the dialog looking hung. */
+#define NETWORK_WAIT_MS 8000
+#define NETWORK_POLL_MS  250
+
 static volatile bool s_provisioned;
 
 /* ------------------------------------------------------------------ */
@@ -273,12 +280,30 @@ static void handle_networks(void)
 {
     observore_scan_entry_t seen[OBSERVORE_SCAN_REPORT_MAX];
     size_t n = observore_wifi_last_scan(seen, OBSERVORE_SCAN_REPORT_MAX);
+
+    /* Wait a little rather than answering "none" to a device that has only
+     * just booted.
+     *
+     * This is the normal case, not an edge case: provisioning happens straight
+     * after flashing, the browser resets the board as part of that, and the
+     * dialog then asks for networks within seconds of boot. Reported from a
+     * XIAO C5 as an empty Wi-Fi screen, which is a dead end for somebody
+     * standing in front of the board with no other way in.
+     *
+     * The list fills from sniffed beacons as the patrol sweep runs, so waiting
+     * costs nothing but time and needs no radio call from this task -- which
+     * matters, because every radio operation in this firmware belongs to the
+     * main loop and reaching in from here is how state machines get corrupted.
+     */
     if (n == 0) {
-        /* Nothing swept yet. An unconfigured device patrols, so the list fills
-         * within a cycle; a device that went straight to its uplink at boot
-         * never scans at all. Either way the client can still be given an SSID
-         * by hand, so an empty list is a wait, not a dead end. */
-        ESP_LOGI(TAG, "no scan results yet; the client can enter an SSID directly");
+        ESP_LOGI(TAG, "no networks known yet; listening for beacons");
+        for (int waited = 0; waited < NETWORK_WAIT_MS && n == 0;
+             waited += NETWORK_POLL_MS) {
+            vTaskDelay(pdMS_TO_TICKS(NETWORK_POLL_MS));
+            n = observore_wifi_last_scan(seen, OBSERVORE_SCAN_REPORT_MAX);
+        }
+        ESP_LOGI(TAG, "%u network%s to offer after waiting",
+                 (unsigned)n, n == 1 ? "" : "s");
     }
     for (size_t i = 0; i < n; i++) {
         char rssi[8];

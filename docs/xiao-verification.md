@@ -72,6 +72,19 @@ took three separate changes to make a single small HTTPS POST succeed.
 Not a regression if it fails; it is the known limitation. Knowing *how* it
 fails is what is useful.
 
+## 5a. The device restarting just after flashing
+
+Expected, and not a fault. The browser resets the board after writing it, and
+again when it reopens the port for provisioning, so the uptime in the log
+starts over. Compare the timestamps against the `I (nnnnn)` uptime in
+milliseconds to tell a restart from a continuous run.
+
+Worth reporting is a restart during **ordinary running**, minutes after the
+browser has gone away. If that happens the useful lines are the twenty before
+it and the `rst:0x...` banner after it: `Brownout detector was triggered` means
+power, `Guru Meditation Error` means our bug, and `rst:0x1 (POWERON)` means the
+USB connection rather than the firmware.
+
 ## 5b. Scans timing out
 
 Seen once on a XIAO C5:
