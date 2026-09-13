@@ -9,8 +9,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
     labels:
       - dependencies
+    groups:
+      # upload-artifact and download-artifact have to move together.
+      #
+      # download-artifact v8 stopped unzipping unconditionally in order to
+      # support direct uploads from a newer upload-artifact, so a v8 download
+      # paired with a v4 upload is a combination nobody tests. They are both
+      # used only in release.yml, which no pull request runs, so the mismatch
+      # would first appear while cutting a release.
+      #
+      # Grouping them makes one pull request that can be reasoned about, and
+      # exercised with a workflow_dispatch of release.yml before it lands.
+      artifact-actions:
+        patterns:
+          - "actions/upload-artifact"
+          - "actions/download-artifact"
