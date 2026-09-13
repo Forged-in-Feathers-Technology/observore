@@ -147,6 +147,31 @@ which one fired so you can judge a hit rather than just trust it:
   that catches hardware with no signature at all, and it is the reason to
   build the thing.
 
+### What a device says about itself
+
+A vendor prefix is an inference: this address block belongs to that company, so
+the device is probably theirs. It fails in two common ways. Modern phones and
+most trackers randomise their address, leaving no prefix to look up at all, and
+the IEEE registry does not cover every assignment.
+
+Access points supporting Wi-Fi Protected Setup put an element in **every
+beacon** naming their manufacturer, model and device name in plain text. That
+is not an inference, it is the device stating what it is, and it works when the
+prefix is unregistered, unknown, or absent. Cameras are the class this helps
+most, which is also the class scored lowest on vendor evidence alone.
+
+So a WPS manufacturer or model is matched against the same keyword table as an
+SSID, and unlike an SSID it is allowed to override the vendor prefix. An SSID
+is free text somebody chose; a WPS element is firmware describing its own
+hardware.
+
+The fields arrive in a frame from a device under nobody's control, so they are
+length checked, bounds checked and stripped to printable characters before
+reaching a log line, a JSON response or the console. The parser is
+ESP-IDF-free and unit tested against truncated elements, attributes claiming to
+be longer than the frame that holds them, and control characters aimed at the
+console.
+
 ### Scoring
 
 Each hit adds points by class (bodycam and ALPR 5, follower 4, tracker/drone/

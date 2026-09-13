@@ -567,9 +567,46 @@ bool observore_classify(const observore_observation_t *obs, observore_event_t *o
                 matched = true;
             }
         }
-    } else if (obs->ssid && *obs->ssid) {
-        set_detail(&ev, obs->ssid);
-        const observore_keyword_t *hit =
+    } else if ((obs->ssid && *obs->ssid) || !observore_wps_empty(obs->wps)) {
+        /* What the access point says about itself, when it says anything.
+         *
+         * An OUI is an inference from an address block. A WPS element is the
+         * device stating its own manufacturer and model in plain text, which
+         * is better evidence and survives the case this project is weakest at:
+         * a camera whose vendor prefix is unregistered or simply missing from
+         * the table. So the WPS strings are matched first, and the detail line
+         * prefers them over the SSID, which is free text somebody chose. */
+        const observore_keyword_t *wps_hit = NULL;
+        if (!observore_wps_empty(obs->wps)) {
+            const char *fields[] = {obs->wps->manufacturer, obs->wps->model,
+                                    obs->wps->device_name};
+            for (size_t i = 0; i < OBSERVORE_ARRLEN(fields) && !wps_hit; i++) {
+                wps_hit = match_keyword(SSID_KEYWORDS,
+                                        OBSERVORE_ARRLEN(SSID_KEYWORDS), fields[i]);
+            }
+            char shown[OBSERVORE_WPS_FIELD_LEN * 2];
+            if (obs->wps->manufacturer[0] && obs->wps->model[0]) {
+                snprintf(shown, sizeof(shown), "%s %s",
+                         obs->wps->manufacturer, obs->wps->model);
+            } else {
+                snprintf(shown, sizeof(shown), "%s",
+                         obs->wps->manufacturer[0] ? obs->wps->manufacturer
+                                                   : (obs->wps->model[0]
+                                                      ? obs->wps->model
+                                                      : obs->wps->device_name));
+            }
+            set_detail(&ev, shown);
+        } else {
+            set_detail(&ev, obs->ssid);
+        }
+        if (wps_hit) {
+            /* Unlike an SSID, this overrides the OUI: the device named itself. */
+            ev.cls = wps_hit->cls;
+            ev.evidence = OBSERVORE_EVIDENCE_SSID;
+            set_label(&ev, wps_hit->label);
+            matched = true;
+        }
+        const observore_keyword_t *hit = wps_hit ? NULL :
             match_keyword(SSID_KEYWORDS, OBSERVORE_ARRLEN(SSID_KEYWORDS), obs->ssid);
         if (hit) {
             /* Only let an SSID keyword override the OUI when the OUI said

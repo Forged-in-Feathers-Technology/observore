@@ -17,6 +17,7 @@ idf_component_register(
         "observore_improv.c"
         "observore_clock.c"
         "observore_history.c"
+        "observore_wps.c"
     INCLUDE_DIRS "."
     REQUIRES
         bt
