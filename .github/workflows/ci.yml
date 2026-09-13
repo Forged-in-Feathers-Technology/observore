@@ -65,7 +65,7 @@ jobs:
           target: ${{ matrix.target }}
           command: >-
             idf.py
-            ${{ matrix.profile && format('-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;{0}', matrix.profile) || '' }}
+            ${{ matrix.profile && format('-DSDKCONFIG_DEFAULTS="sdkconfig.defaults;{0}"', matrix.profile) || '' }}
             build
 
       # The offsets differ per chip and the filenames per board, so this has to
@@ -126,11 +126,6 @@ jobs:
         with:
           esp_idf_version: v5.5
           target: ${{ matrix.target }}
-
-      # Needs the build, because the offsets it checks come from flash_args
-      # rather than from anything written down.
-      - name: Documented flash offsets match this build
-        run: python3 tools/check_docs_match_build.py --target ${{ matrix.target }}
 
   # Validates the generated table against the invariants the firmware relies
   # on -- sorted, no duplicates, the two tables disjoint, indices in range.

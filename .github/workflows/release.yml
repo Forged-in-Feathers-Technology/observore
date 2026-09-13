@@ -58,7 +58,7 @@ jobs:
           target: ${{ matrix.target }}
           command: >-
             idf.py
-            ${{ matrix.profile && format('-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;{0}', matrix.profile) || '' }}
+            ${{ matrix.profile && format('-DSDKCONFIG_DEFAULTS="sdkconfig.defaults;{0}"', matrix.profile) || '' }}
             build
 
       - name: Collect the flashable parts
