@@ -93,5 +93,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
+          REPO="${{ github.repository }}"
+
+          # Create the release if it is not there yet.
+          #
+          # This workflow triggers on a tag push, but `gh release upload` needs
+          # a release to upload *to* -- so pushing a tag on its own used to
+          # build everything and then fail at the last step. The obvious
+          # workaround does not work either: `gh release create --draft` does
+          # not push the tag, so the build never starts, and the release page
+          # shows an `untagged-<hash>` URL as the only clue.
+          #
+          # Created as a draft on purpose, and left that way. pages.yml
+          # triggers on `release: published` while this workflow is what
+          # *uploads* the assets, so publishing before the build finishes
+          # deploys a site pointing at binaries that do not exist yet.
+          # Draft -> build fills it -> a human publishes is the order that
+          # works, and now the first step happens by itself.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+          else
+            echo "creating draft release $TAG"
+            gh release create "$TAG" --repo "$REPO" --draft --verify-tag \
+              --title "$TAG" --generate-notes
+          fi
+
+          gh release upload "$TAG" dist/* --clobber --repo "$REPO"
+
+          if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)" = "true" ]; then
+            echo "::notice::$TAG is a draft with its assets attached. Publishing it is what deploys the flasher page."
+          fi
