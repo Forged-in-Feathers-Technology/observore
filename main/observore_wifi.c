@@ -228,6 +228,42 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 /* Active AP scan                                                     */
 /* ------------------------------------------------------------------ */
 
+/* A failed scan is not always transient.
+ *
+ * Observed on hardware: one ESP_ERR_WIFI_TIMEOUT left the driver believing a
+ * scan was still running, after which every esp_wifi_set_channel() was refused
+ * with "STA is scanning or connecting" and every subsequent scan returned zero
+ * access points -- permanently. Fifteen good scans, one timeout, then 560
+ * empty ones. The device had silently stopped seeing Wi-Fi at all and would
+ * not have recovered without a power cycle, which is the worst way for a
+ * detector to fail: it still looks alive and reports a quiet neighbourhood.
+ *
+ * Stopping the scan explicitly clears the stuck state in the common case. If
+ * that is not enough, the mode is re-applied, which stops and restarts the
+ * driver -- deliberately going through set_mode so the retry runs through the
+ * same path that already knows how to rebuild promiscuous state. */
+#define SCAN_FAILURES_BEFORE_RESET 3
+
+static size_t s_scan_failures;
+
+static void scan_failed(void)
+{
+    s_scan_failures++;
+    esp_wifi_scan_stop();
+    if (s_scan_failures < SCAN_FAILURES_BEFORE_RESET) {
+        return;
+    }
+    ESP_LOGW(TAG, "%zu scans failed in a row -- restarting the radio",
+             s_scan_failures);
+    s_scan_failures = 0;
+    observore_mode_t want = s_mode;
+    s_mode_applied = false;            /* force set_mode to actually re-apply */
+    esp_err_t err = observore_wifi_set_mode(want);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "radio restart failed: %s", esp_err_to_name(err));
+    }
+}
+
 static void run_ap_scan(void)
 {
     wifi_scan_config_t cfg = {
@@ -261,8 +297,10 @@ static void run_ap_scan(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "scan failed in %s mode: %s", observore_mode_name(s_mode),
                  esp_err_to_name(err));
+        scan_failed();
         return;
     }
+    s_scan_failures = 0;
 
     uint16_t count = OBSERVORE_MAX_AP;
     static wifi_ap_record_t records[OBSERVORE_MAX_AP];
@@ -776,6 +814,7 @@ void observore_wifi_patrol_cycle(void (*between)(void))
     }
 #endif
     const int dwell_ms = OBSERVORE_SNIFF_MS / (int)n;
+    size_t skipped = 0;
 
     /* Register the filter and callback here, immediately before enabling
      * promiscuous mode, rather than once at init.  Registering them on a
@@ -808,11 +847,19 @@ void observore_wifi_patrol_cycle(void (*between)(void))
         }
         /* A channel the regulatory domain forbids is refused here rather than
          * being absent at compile time.  Skip it instead of dwelling on a
-         * channel the radio never actually moved to. */
+         * channel the radio never actually moved to.
+         *
+         * Skipping the dwell was right for one forbidden channel and wrong for
+         * all of them. When the driver refuses every channel -- which is what a
+         * wedged scan does -- the whole sweep finished in microseconds, so the
+         * patrol cycle ran every 180 ms instead of every eight seconds and
+         * buried the log at 10 KB/s. Count the refusals and pay the time back
+         * at the end rather than spinning. */
         esp_err_t cerr = esp_wifi_set_channel(sweep[i], WIFI_SECOND_CHAN_NONE);
         if (cerr != ESP_OK) {
             ESP_LOGD(TAG, "channel %u unavailable: %s",
                      sweep[i], esp_err_to_name(cerr));
+            skipped++;
             continue;
         }
         vTaskDelay(pdMS_TO_TICKS(dwell_ms));
@@ -821,4 +868,12 @@ void observore_wifi_patrol_cycle(void (*between)(void))
         }
     }
     esp_wifi_set_promiscuous(false);
+
+    /* Every channel refused: sleep the sweep out so the cycle keeps its shape.
+     * The sniffer stays on whatever channel the radio is parked on, which is
+     * still better than a busy loop, and the caller's cadence is preserved. */
+    if (skipped == n) {
+        ESP_LOGW(TAG, "no channel could be selected this sweep");
+        vTaskDelay(pdMS_TO_TICKS(OBSERVORE_SNIFF_MS));
+    }
 }

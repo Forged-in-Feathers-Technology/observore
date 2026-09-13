@@ -1050,6 +1050,20 @@ and nothing about when or during what.
 
 ## What happens when the radio misbehaves
 
+A scan that fails is not always transient, and the failure mode is nasty. One
+`ESP_ERR_WIFI_TIMEOUT` once left the driver believing a scan was still running,
+after which every channel change was refused and every subsequent scan returned
+zero access points — **permanently**. Fifteen good scans, one timeout, then 560
+empty ones. The device had stopped seeing Wi-Fi entirely while still looking
+perfectly alive and reporting a quiet neighbourhood, which is the worst way for
+a detector to fail.
+
+Repeated scan failures now stop the stuck scan and, after three in a row,
+restart the radio through the ordinary mode-change path. Verified by injecting
+failures: three refusals, one restart, scanning back to 27 APs on the next
+cycle.
+
+
 A driver error on a mode change does not restart the device. It is logged, the
 current mode is left in place, and the next cycle tries again:
 
