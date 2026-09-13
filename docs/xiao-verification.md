@@ -13,12 +13,20 @@ can only tell an ESP32-C5 from an ESP32-S3, not a XIAO C5 from a Waveshare one.
 Assumed **active low**, meaning the pin is driven LOW to light it, from the
 rest of the XIAO family. Never verified on either board.
 
-- **Expected:** a short wink roughly every 5 seconds while idle, and solid on
-  while the console is up.
-- **If inverted:** the LED is on almost all the time and blinks *off* briefly.
+**Check this only while the device reports `clear`.** The alert pattern is a
+fast flutter, and a fast flutter looks the same inverted, so a device that is
+alerting tells you nothing about polarity. A board with no baseline set will
+usually be in `caution` or `alert` within a minute, because everything it can
+see is new to it. Read the heartbeat line in the log and wait for `clear`, or
+press **Set baseline** in the console first.
 
-That is the whole test. If it is lit constantly, polarity is wrong. It is a
-one-line fix (`CONFIG_OBSERVORE_LED_ACTIVE_LOW`), so just say which way it went.
+- **Expected, while clear:** a brief wink roughly every 5 seconds, dark in
+  between.
+- **If inverted:** lit almost constantly, with a brief blink *off* every
+  5 seconds.
+
+That is the whole test. It is a one-line fix
+(`CONFIG_OBSERVORE_LED_ACTIVE_LOW`), so just say which way round it looked.
 
 ## 2. The C5's USB port, second most likely
 
@@ -63,6 +71,33 @@ took three separate changes to make a single small HTTPS POST succeed.
 
 Not a regression if it fails; it is the known limitation. Knowing *how* it
 fails is what is useful.
+
+## 5a. The device restarting just after flashing
+
+Expected, and not a fault. The browser resets the board after writing it, and
+again when it reopens the port for provisioning, so the uptime in the log
+starts over. Compare the timestamps against the `I (nnnnn)` uptime in
+milliseconds to tell a restart from a continuous run.
+
+Worth reporting is a restart during **ordinary running**, minutes after the
+browser has gone away. If that happens the useful lines are the twenty before
+it and the `rst:0x...` banner after it: `Brownout detector was triggered` means
+power, `Guru Meditation Error` means our bug, and `rst:0x1 (POWERON)` means the
+USB connection rather than the firmware.
+
+## 5b. Scans timing out
+
+Seen once on a XIAO C5:
+
+```
+W observore.wifi: scan failed in patrol mode: ESP_ERR_WIFI_TIMEOUT
+W observore.wifi: 3 scans failed in a row -- restarting the radio
+```
+
+The second line is the recovery working as intended, not a fault. What is
+worth reporting is **how often** it happens and whether `scan: N APs` lines
+appear in between. A device whose scans never succeed still sniffs beacons
+normally, so detection carries on while the access-point list stays empty.
 
 ## 6. Does it actually detect anything?
 
