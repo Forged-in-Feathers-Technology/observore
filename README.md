@@ -22,6 +22,9 @@ run takes about ten minutes, most of it waiting. The browser flasher reads which
 chip you plugged in and installs the matching build, so there is nothing to
 choose.
 
+The console page is served gzipped, so a command-line client needs
+`curl --compressed` (a browser needs nothing).
+
 **The quickest route is the [browser
 flasher](https://observore.forgedinfeatherstechnology.com/)** — any
 Chromium-based desktop browser (Chrome, Edge, Opera, or Brave 1.69 and later),
@@ -850,10 +853,25 @@ reference C5 and C6 DevKitC-1 kits carry 8 MB and Waveshare's C5 kit 16 MB;
 those leave the remainder unused, because an image built for more flash than
 the chip has does not boot at all, while the reverse is harmless.
 
-Slot occupancy today is **C5 83%, C6 78%, S3 64%**. The C5 is the tightest and
-the fastest growing, so an overflow is plausible — but CI builds every target,
-so it fails there rather than in the field, exactly as it did when the old
-1500K partition overflowed by 27 KB.
+Slot occupancy today is **C5 74%, C6 69%, S3 56%**. The C5 is the tightest and
+the fastest growing, so CI builds every target and would fail there rather than
+in the field, exactly as it did when the old 1500K partition overflowed by
+27 KB.
+
+Those numbers were 83 / 78 / 64 before three deliberate reductions, which are
+worth knowing about because they are the levers if it ever gets tight again:
+
+| | saved | why it is safe |
+|---|---|---|
+| `-Os` instead of `-Og` | 125 KB | optimising for size rather than for debugging |
+| Common CA roots, not the full set | 51 KB | 44 authorities including Let's Encrypt, which self-hosted notifier endpoints overwhelmingly use |
+| Console served gzipped | 17 KB | 25 KB of HTML becomes 8 KB, and the page also arrives faster |
+
+Two further levers exist and were deliberately not pulled. Silencing assertion
+messages saves another 63 KB but throws away the text that says what failed,
+which is the wrong trade on a device where an unexplained restart used to be
+indistinguishable from a quiet night. Raising the flash floor to 8 MB would
+double every slot, at the cost of no longer booting on a 4 MB board.
 
 **OTA itself is deliberately not implemented.** With no image signing and an
 unencrypted console, an update path reachable over the network turns "somebody
