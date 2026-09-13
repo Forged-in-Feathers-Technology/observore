@@ -94,6 +94,56 @@ static const uint8_t ASTM_OUI[3]     = {0xFA, 0x0B, 0xBC};
 static observore_scan_entry_t s_last_scan[OBSERVORE_SCAN_REPORT_MAX];
 static size_t                 s_last_scan_count;
 
+/* Remember a network we have seen, from wherever we saw it.
+ *
+ * This used to be rebuilt from each AP scan and nothing else, which made the
+ * list Improv offers only as good as the last scan. A device whose scans were
+ * timing out therefore offered an empty list, and a person trying to provision
+ * it had nothing to choose -- reported from a XIAO C5 in exactly that state,
+ * with the log showing repeated ESP_ERR_WIFI_TIMEOUT while the sniffer was
+ * happily reading beacons the whole time.
+ *
+ * Beacons are the more dependable source anyway: a scan is a thing we ask the
+ * driver to do and it can refuse, whereas a beacon is an access point
+ * announcing itself on a channel we are already listening to. Both feed this.
+ *
+ * Named networks only. A hidden access point beacons with a blank SSID and
+ * cannot be offered as something to join. */
+static void note_network(const char *ssid, int8_t rssi, bool secure)
+{
+    if (!ssid || !ssid[0]) {
+        return;
+    }
+    for (size_t i = 0; i < s_last_scan_count; i++) {
+        if (strcmp(s_last_scan[i].ssid, ssid) == 0) {
+            if (rssi > s_last_scan[i].rssi) {
+                s_last_scan[i].rssi = rssi;      /* keep the best sighting */
+            }
+            s_last_scan[i].secure = secure;
+            return;
+        }
+    }
+    size_t slot;
+    if (s_last_scan_count < OBSERVORE_SCAN_REPORT_MAX) {
+        slot = s_last_scan_count++;
+    } else {
+        /* Full: displace the weakest, which is the one least likely to be the
+         * network the person standing next to the device wants to join. */
+        slot = 0;
+        for (size_t i = 1; i < s_last_scan_count; i++) {
+            if (s_last_scan[i].rssi < s_last_scan[slot].rssi) {
+                slot = i;
+            }
+        }
+        if (s_last_scan[slot].rssi >= rssi) {
+            return;
+        }
+    }
+    snprintf(s_last_scan[slot].ssid, sizeof(s_last_scan[slot].ssid), "%s", ssid);
+    s_last_scan[slot].rssi   = rssi;
+    s_last_scan[slot].secure = secure;
+}
+
 static observore_mode_t       s_mode = OBSERVORE_MODE_PATROL;
 static char               s_ap_ssid[32];
 static char               s_hostname[48];
@@ -146,6 +196,38 @@ static uint8_t frame_subtype(uint16_t fc)
 static uint8_t frame_type(uint16_t fc)
 {
     return (uint8_t)((fc >> 2) & 0x03);
+}
+
+/* Whether a beacon advertises encryption.
+ *
+ * A scan result reports authmode outright; a sniffed beacon does not, so it is
+ * inferred from what the frame carries: an RSN element means WPA2 or WPA3, and
+ * the older WPA1 lives in a vendor element with Microsoft's OUI and type 1.
+ * Neither present means open. This only decides whether the provisioning
+ * dialog shows a padlock, so being wrong is cosmetic rather than dangerous. */
+#define IE_RSN 0x30
+static const uint8_t WPA_OUI[3] = {0x00, 0x50, 0xF2};
+
+static bool beacon_is_secure(const uint8_t *ies, size_t len)
+{
+    size_t i = 0;
+    while (i + 2 <= len) {
+        uint8_t id = ies[i];
+        uint8_t ie_len = ies[i + 1];
+        if (ie_len > len - i - 2) {
+            break;
+        }
+        if (id == IE_RSN) {
+            return true;
+        }
+        if (id == IE_VENDOR_SPECIFIC && ie_len >= 4 &&
+            memcmp(&ies[i + 2], WPA_OUI, sizeof(WPA_OUI)) == 0 &&
+            ies[i + 5] == 0x01) {
+            return true;
+        }
+        i += 2 + ie_len;
+    }
+    return false;
 }
 
 /* Walk the tagged IEs looking for the SSID and for an ASTM Remote ID element.
@@ -220,6 +302,18 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         .ssid      = ssid[0] ? ssid : NULL,
         .remote_id = odid,
     };
+    /* Whether or not a scan ever succeeds, a beacon we just decoded is an
+     * access point that is definitely in range. Privacy of the observed party
+     * is not at stake here: this is the same SSID the scan would have
+     * returned, and it never leaves the device except into the provisioning
+     * dialog the owner is looking at.
+     *
+     * The authentication mode is not in the beacon header, so it is inferred
+     * from the presence of an RSN or WPA element rather than reported. */
+    if (ssid[0]) {
+        note_network(ssid, (int8_t)pkt->rx_ctrl.rssi, beacon_is_secure(ies, ie_len));
+    }
+
     s_sniffed_frames++;
     observore_track_observe(&obs, esp_timer_get_time());
 }
@@ -310,21 +404,10 @@ static void run_ap_scan(void)
         return;
     }
 
-    /* Keep a copy for Improv, which needs SSIDs rather than the tracker's
-     * view.  Named networks only: a hidden AP is a beacon with a blank SSID
-     * and cannot be offered as something to join. */
-    size_t kept = 0;
-    for (uint16_t i = 0; i < count && kept < OBSERVORE_SCAN_REPORT_MAX; i++) {
-        if (records[i].ssid[0] == '\0') {
-            continue;
-        }
-        snprintf(s_last_scan[kept].ssid, sizeof(s_last_scan[kept].ssid), "%s",
-                 (const char *)records[i].ssid);
-        s_last_scan[kept].rssi   = records[i].rssi;
-        s_last_scan[kept].secure = records[i].authmode != WIFI_AUTH_OPEN;
-        kept++;
+    for (uint16_t i = 0; i < count; i++) {
+        note_network((const char *)records[i].ssid, records[i].rssi,
+                     records[i].authmode != WIFI_AUTH_OPEN);
     }
-    s_last_scan_count = kept;
 
     int64_t now = esp_timer_get_time();
     for (uint16_t i = 0; i < count; i++) {
