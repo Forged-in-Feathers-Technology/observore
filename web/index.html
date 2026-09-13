@@ -290,13 +290,18 @@ esptool.py --chip esp32c6 -p /dev/ttyACM0 write_flash \
      The deploy now fetches this from npm and fails if it cannot. -->
 <script type="module" src="ewt/install-button.js"></script>
 <script>
-  // Name the version being served, read from the same manifest the button uses.
-  fetch('firmware/manifest.json')
+  // Name the version being served, read from the board index.
+  //
+  // This used to read the single combined manifest, which stopped existing
+  // when the release began shipping one per board -- so the version line
+  // quietly reported a failure while the rest of the page worked. The board
+  // index is the one file that is always present and always current.
+  fetch('firmware/boards.json')
     .then(r => r.json())
-    .then(m => { document.getElementById('ver').textContent =
-                   'firmware ' + m.version; })
+    .then(b => { document.getElementById('ver').textContent =
+                   'firmware ' + b.version; })
     .catch(() => { document.getElementById('ver').textContent =
-                     'could not read the firmware manifest'; });
+                     'could not read the firmware index'; });
 </script>
 </body>
 </html>

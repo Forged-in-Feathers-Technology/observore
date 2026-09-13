@@ -160,6 +160,27 @@ def check_offsets(board, build_dir, problems):
         print("  %d documented offset(s) for %s match the build" % (matched, board))
 
 
+def check_page_firmware_refs(boards, problems):
+    """Every firmware/<file> the page names must be one a release produces.
+
+    The filename check above looks at documented flash commands. This looks at
+    what the page fetches, which is a different surface and broke separately:
+    the version line went on requesting firmware/manifest.json after the
+    release started shipping a manifest per board, so it reported a failure
+    while everything around it worked. Nothing caught that, because a JavaScript
+    fetch is not a documented command.
+    """
+    allowed = {"boards.json"}
+    allowed |= {"manifest-%s.json" % b for b in boards}
+    page = read("web/index.html")
+    for ref in sorted(set(re.findall(r"firmware/([A-Za-z0-9_.-]+)", page))):
+        if ref not in allowed:
+            problems.append(
+                "web/index.html fetches firmware/%s, which no release "
+                "produces (expected boards.json or manifest-<board>.json for "
+                "one of: %s)" % (ref, ", ".join(sorted(boards))))
+
+
 def check_targets_are_built(targets, problems):
     """A target nobody builds is a target nobody is testing."""
     built = matrix_targets(".github/workflows/ci.yml")
@@ -198,6 +219,7 @@ def main():
 
     problems = []
     check_filenames(shipped, problems)
+    check_page_firmware_refs(shipped, problems)
     check_targets_are_built(targets, problems)
     check_boards_are_built(shipped, problems)
     if args.board and args.board in shipped:
