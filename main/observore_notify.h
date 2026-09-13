@@ -59,6 +59,8 @@ esp_err_t observore_notify_test(void);
 
 uint32_t observore_notify_sent(void);
 uint32_t observore_notify_failed(void);
+/* Seconds until the next delivery attempt; 0 when not backing off. */
+uint32_t observore_notify_retry_in_s(void);
 uint32_t observore_notify_dropped(void);
 size_t   observore_notify_pending(void);
 /* Last transport error, or an empty string. */

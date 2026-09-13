@@ -10,6 +10,8 @@
 
 #include "observore_auth.h"
 #include "observore_ble.h"
+#include <limits.h>
+
 #include "observore_clock.h"
 #include "observore_history.h"
 #include "observore_improv.h"
@@ -283,6 +285,28 @@ void app_main(void)
         observore_track_tick(now);
 
         observore_status_t st = publish();
+
+        /* Say when the internal-heap low-water mark moves, not just what it
+         * ended up at.
+         *
+         * A device left running overnight came back reporting a minimum of 176
+         * bytes free -- an order of magnitude below the 1.4 KB that once left
+         * the SoftAP unable to answer an ARP request. The watermark alone says
+         * it nearly died and nothing about when or during what, which makes it
+         * a puzzle rather than a lead. Logging the moment it drops, with the
+         * mode and the queue depth, turns the next soak into evidence. */
+        {
+            static unsigned s_reported_min = UINT_MAX;
+            unsigned low = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+            if (low + 2048 < s_reported_min) {
+                s_reported_min = low;
+                ESP_LOGW(TAG, "internal heap low-water fell to %u bytes "
+                              "(%s, %zu queued, largest block %u)",
+                         low, observore_mode_name(observore_wifi_mode()),
+                         observore_notify_pending(),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+            }
+        }
 
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */

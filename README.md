@@ -979,6 +979,47 @@ precisely for the case where that gap is longest.
 Both forms are reported: `last_seen_s` counts seconds ago, `last_seen` is
 ISO-8601 UTC. A client with no clock of its own still needs the first.
 
+## Notifications, TLS and memory
+
+A device left on a battery overnight came back having logged **10,019 failed
+notifications and zero successes** in seven hours. Two separate faults, found
+only because it ran for a night rather than a minute.
+
+**TLS could not allocate.** Every failure was
+`mbedtls_ssl_setup returned -0x7F00`, which is `MBEDTLS_ERR_SSL_ALLOC_FAILED`.
+No packet was ever sent — so nothing appeared in the network logs, and the
+obvious suspicion of a firewall was wrong. mbedTLS wanted one 16 KB contiguous
+allocation and the largest free block was 15,360 bytes. Short by a kilobyte,
+every time.
+
+Internal RAM is genuinely oversubscribed on these parts: Wi-Fi, BLE, lwip and
+the console share roughly 160 KB. Three changes together:
+
+| | |
+|---|---|
+| Inbound TLS record buffer 16 KB → 8 KB | still holds any realistic certificate chain |
+| Dynamic TLS buffers | allocated while in use, not for the life of the connection |
+| mbedTLS allocates from PSRAM | on boards that have it — 8 MB was sitting unused |
+
+Minimum free internal heap across four TLS pushes went from **336 bytes to
+10,372**. The C6 has no PSRAM and keeps the default allocator, so TLS there
+remains tight; the first two changes still apply.
+
+**The retries had no backoff.** The pump ran from the main loop and a failure
+simply returned, so the next pass tried again immediately — one attempt every
+2.6 seconds, for as long as the device was associated, forever. That is a TLS
+setup each time, radio time in the narrow associated window, and battery, all
+for an endpoint that was not going to answer.
+
+Failures now back off from 30 seconds to a 15-minute ceiling and reset on
+success. Notices stay queued throughout; this delays retries, it never
+discards. `/api/notify` reports `retry_in_s`, so a notifier that has gone quiet
+can say why.
+
+The heartbeat also logs the moment the internal-heap low-water mark drops, with
+the mode and queue depth. A watermark on its own says the device nearly died
+and nothing about when or during what.
+
 ## What happens when the radio misbehaves
 
 A driver error on a mode change does not restart the device. It is logged, the
