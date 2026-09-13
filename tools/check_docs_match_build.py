@@ -65,22 +65,34 @@ def known_targets():
 
 
 def matrix_targets(workflow):
-    """The target matrix of a workflow, or None when it has none."""
-    m = re.search(r"target:\s*\[([^\]]+)\]", read(workflow))
-    if not m:
-        return None
-    return {t.strip() for t in m.group(1).split(",") if t.strip()}
+    """Every target named in a workflow matrix, or None when it has none.
 
-
-def released_targets():
-    """Targets whose binaries a release actually carries.
-
-    These, not the CI matrix, are what the documentation should describe: a
-    reader can only flash a file that exists on the release page.
+    Handles both shapes in use: `target: [a, b]` for the portability matrix,
+    and a repeated `target: a` inside an `include:` list for the board matrix.
     """
-    found = matrix_targets(".github/workflows/release.yml")
+    text = read(workflow)
+    listed = re.search(r"target:\s*\[([^\]]+)\]", text)
+    found = set()
+    if listed:
+        found |= {t.strip() for t in listed.group(1).split(",") if t.strip()}
+    found |= {m.strip() for m in re.findall(r"^\s*-?\s*target:\s*([A-Za-z0-9_]+)\s*$",
+                                            text, flags=re.M)}
+    return found or None
+
+
+def released_boards():
+    """Boards whose binaries a release actually carries.
+
+    Boards, not chips. Two boards can share a chip and need different
+    firmware -- a XIAO ESP32-C5 and a Waveshare one differ in LED type and in
+    whether a UART bridge exists -- so the release names its artifacts after
+    the board and the documentation has to match that.
+    """
+    text = read(".github/workflows/release.yml")
+    found = {m.strip() for m in re.findall(r"^\s*-\s*board:\s*([A-Za-z0-9_.-]+)\s*$",
+                                           text, flags=re.M)}
     if not found:
-        raise SystemExit("release.yml has no target matrix to read")
+        raise SystemExit("release.yml has no board matrix to read")
     return found
 
 
@@ -109,27 +121,27 @@ def parse_flash_args(build_dir):
     return out
 
 
-def check_filenames(targets, problems):
+def check_filenames(boards, problems):
     """Every documented firmware filename must be one a release actually carries."""
-    allowed = {"%s-%s.bin" % (stem, t) for stem in STEMS for t in targets}
+    allowed = {"%s-%s.bin" % (stem, b) for stem in STEMS for b in boards}
     for doc in DOCS:
         for name in sorted(documented_files(read(doc))):
             if name not in allowed:
                 problems.append(
-                    "%s names %s, which no released target produces "
-                    "(expected <stem>-<target>.bin for one of: %s)"
-                    % (doc, name, ", ".join(sorted(targets))))
+                    "%s names %s, which no released board produces "
+                    "(expected <stem>-<board>.bin for one of: %s)"
+                    % (doc, name, ", ".join(sorted(boards))))
 
 
-def check_offsets(target, build_dir, problems):
-    """Documented offsets for this target must match what the build emits."""
+def check_offsets(board, build_dir, problems):
+    """Documented offsets for this board must match what the build emits."""
     actual = parse_flash_args(build_dir)
-    actual = {"%s-%s.bin" % (os.path.splitext(k)[0], target): v
+    actual = {"%s-%s.bin" % (os.path.splitext(k)[0], board): v
               for k, v in actual.items()}
     checked = matched = 0
     for doc in DOCS:
         for offset, name in documented_pairs(read(doc)):
-            if not name.endswith("-%s.bin" % target):
+            if not name.endswith("-%s.bin" % board):
                 continue          # another target's command; its own job checks it
             checked += 1
             if name not in actual:
@@ -143,13 +155,13 @@ def check_offsets(target, build_dir, problems):
     if not checked:
         problems.append("no documented flash offsets found for %s, which the "
                         "release ships -- the docs should show how to flash "
-                        "every target a user can download" % target)
+                        "every board a user can download" % board)
     elif matched == checked:
-        print("  %d documented offset(s) for %s match the build" % (matched, target))
+        print("  %d documented offset(s) for %s match the build" % (matched, board))
 
 
-def check_targets_are_built(targets, shipped, problems):
-    """A target nobody builds, or one shipped without being built, is a trap."""
+def check_targets_are_built(targets, problems):
+    """A target nobody builds is a target nobody is testing."""
     built = matrix_targets(".github/workflows/ci.yml")
     if built is None:
         problems.append(".github/workflows/ci.yml has no target matrix to check")
@@ -157,14 +169,22 @@ def check_targets_are_built(targets, shipped, problems):
     for t in sorted(targets - built):
         problems.append("sdkconfig.defaults.%s exists but %s is not in the CI "
                         "matrix, so nothing builds it" % (t, t))
-    for t in sorted(shipped - built):
-        problems.append("release.yml ships %s but CI never builds it, so a "
-                        "release is the first thing that would find a break" % t)
+
+
+def check_boards_are_built(shipped, problems):
+    """A board the release ships must be one CI builds."""
+    ci = read(".github/workflows/ci.yml")
+    built = {m.strip() for m in re.findall(r"^\s*-\s*board:\s*([A-Za-z0-9_.-]+)\s*$",
+                                           ci, flags=re.M)}
+    for b in sorted(shipped - built):
+        problems.append("release.yml ships the %s board but CI never builds it, "
+                        "so a release is the first thing that would find a "
+                        "break" % b)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", help="run the offset check for this target too")
+    ap.add_argument("--board", help="run the offset check for this board too")
     ap.add_argument("--build-dir", default="build")
     args = ap.parse_args()
 
@@ -174,17 +194,16 @@ def main():
     if not targets:
         raise SystemExit("no sdkconfig.defaults.<target> files found")
 
-    shipped = released_targets()
+    shipped = released_boards()
 
     problems = []
     check_filenames(shipped, problems)
-    check_targets_are_built(targets, shipped, problems)
-    # A target CI builds but never ships has no release assets to document.
-    if args.target and args.target in shipped:
-        check_offsets(args.target, args.build_dir, problems)
-    elif args.target:
-        print("  %s is build-tested only and ships no assets; "
-              "nothing to document" % args.target)
+    check_targets_are_built(targets, problems)
+    check_boards_are_built(shipped, problems)
+    if args.board and args.board in shipped:
+        check_offsets(args.board, args.build_dir, problems)
+    elif args.board:
+        print("  %s is not a released board; nothing to document" % args.board)
 
     if problems:
         print("\ndocumentation no longer matches the build:\n", file=sys.stderr)
@@ -194,7 +213,7 @@ def main():
               file=sys.stderr)
         return 1
 
-    print("ok: docs match the build (built: %s | shipped: %s)"
+    print("ok: docs match the build (chips: %s | boards shipped: %s)"
           % (", ".join(sorted(targets)), ", ".join(sorted(shipped))))
     return 0
 

@@ -45,7 +45,19 @@ ESP32S3 and the dual-band ESP32-C5. It sits in one place, learns what is
 normally there, and reports what is new.</p>
 
 <div class="panel cta">
-  <esp-web-install-button manifest="firmware/manifest.json">
+  <p class="note" id="boardpick" hidden>
+    <label for="board"><strong>Which board?</strong></label>
+    <select id="board"></select>
+    <span id="boardnote" class="dim"></span>
+  </p>
+  <p class="note" id="boardwhy" hidden>
+    Two boards can share a chip and still need different firmware &mdash; a XIAO
+    ESP32-C5 and a Waveshare C5 put different LEDs on the same pin, and only one
+    of them has a UART bridge. The installer still checks the chip, so choosing
+    a profile for the wrong <em>chip</em> is refused rather than flashed; this
+    picker is for telling apart boards that share one.
+  </p>
+  <esp-web-install-button id="installer" manifest="firmware/manifest-xiao-esp32s3.json">
     <button slot="activate">Install Observore</button>
     <span slot="unsupported" class="unsupported">
       <span id="why">This browser cannot talk to serial devices.</span>
@@ -135,19 +147,86 @@ normally there, and reports what is new.</p>
   application for each supported chip, named with the target, plus a
   <code>SHA256SUMS</code>. The bootloader offset differs per chip, so these
   are not interchangeable.</p>
-  <pre>esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
-    0x0 bootloader-esp32s3.bin \
-    0x8000 partition-table-esp32s3.bin \
-    0x10000 ota_data_initial-esp32s3.bin \
-    0x20000 observore-esp32s3.bin</pre>
-  <pre>esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
-    0x2000 bootloader-esp32c5.bin \
-    0x8000 partition-table-esp32c5.bin \
-    0x10000 ota_data_initial-esp32c5.bin \
-    0x20000 observore-esp32c5.bin</pre>
+  <pre># Seeed XIAO ESP32S3
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
+    0x0     bootloader-xiao-esp32s3.bin \
+    0x8000  partition-table-xiao-esp32s3.bin \
+    0x10000 ota_data_initial-xiao-esp32s3.bin \
+    0x20000 observore-xiao-esp32s3.bin
+
+# ESP32-C5-DevKitC-1 / Waveshare
+esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
+    0x2000  bootloader-devkit-esp32c5.bin \
+    0x8000  partition-table-devkit-esp32c5.bin \
+    0x10000 ota_data_initial-devkit-esp32c5.bin \
+    0x20000 observore-devkit-esp32c5.bin
+
+# Seeed XIAO ESP32-C5
+esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
+    0x2000  bootloader-xiao-esp32c5.bin \
+    0x8000  partition-table-xiao-esp32c5.bin \
+    0x10000 ota_data_initial-xiao-esp32c5.bin \
+    0x20000 observore-xiao-esp32c5.bin
+
+# Seeed XIAO ESP32C6
+esptool.py --chip esp32c6 -p /dev/ttyACM0 write_flash \
+    0x0     bootloader-xiao-esp32c6.bin \
+    0x8000  partition-table-xiao-esp32c6.bin \
+    0x10000 ota_data_initial-xiao-esp32c6.bin \
+    0x20000 observore-xiao-esp32c6.bin</pre>
 </div>
 
 <script>
+  /* Ask which board, because the chip cannot be asked.
+     ESP Web Tools matches on chip family, which tells an ESP32-S3 from an
+     ESP32-C5 and cannot tell two C5 boards apart. They are not
+     interchangeable: the Waveshare kit has an addressable pixel and a UART
+     bridge, the XIAO has a plain LED on the same pin and only native USB.
+     Install the wrong one and the LED stays dark while everything else looks
+     fine, which is exactly the sort of failure worth a dropdown.
+     The chip check still runs underneath: pick a C6 profile, plug in a C5, and
+     the tool refuses rather than flashing it. */
+  (function () {
+    var select = document.getElementById('board');
+    var wrap = document.getElementById('boardpick');
+    var note = document.getElementById('boardnote');
+    var installer = document.getElementById('installer');
+    if (!select || !installer) { return; }
+
+    fetch('firmware/boards.json')
+      .then(function (r) { return r.json(); })
+      .then(function (index) {
+        var boards = index.boards || [];
+        if (boards.length < 2) { return; }   /* nothing to choose between */
+        boards.forEach(function (b) {
+          var opt = document.createElement('option');
+          opt.value = b.manifest;
+          opt.textContent = b.label + ' \u00b7 ' + b.chipFamily;
+          opt.dataset.note = b.note || '';
+          select.appendChild(opt);
+        });
+        var apply = function () {
+          var opt = select.options[select.selectedIndex];
+          installer.setAttribute('manifest', 'firmware/' + opt.value);
+          note.textContent = opt.dataset.note ? '\u2014 ' + opt.dataset.note : '';
+          try { localStorage.setItem('observore-board', opt.value); } catch (e) {}
+        };
+        var remembered = null;
+        try { remembered = localStorage.getItem('observore-board'); } catch (e) {}
+        if (remembered) {
+          for (var i = 0; i < select.options.length; i++) {
+            if (select.options[i].value === remembered) { select.selectedIndex = i; }
+          }
+        }
+        select.addEventListener('change', apply);
+        apply();
+        wrap.hidden = false;
+        var why = document.getElementById('boardwhy');
+        if (why) { why.hidden = false; }
+      })
+      .catch(function () { /* leave the default manifest in place */ });
+  })();
+
   /* A message that does not say why is a dead end, and this page has produced
      two different lies already.
 

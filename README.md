@@ -440,19 +440,33 @@ With `esptool` alone — note that **the bootloader offset is not the same on
 every chip**, so these commands are not interchangeable:
 
 ```bash
-# XIAO ESP32S3 -- bootloader at 0x0
+# Seeed XIAO ESP32S3
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
-    0x0     bootloader-esp32s3.bin \
-    0x8000  partition-table-esp32s3.bin \
-    0x10000 ota_data_initial-esp32s3.bin \
-    0x20000 observore-esp32s3.bin
+    0x0     bootloader-xiao-esp32s3.bin \
+    0x8000  partition-table-xiao-esp32s3.bin \
+    0x10000 ota_data_initial-xiao-esp32s3.bin \
+    0x20000 observore-xiao-esp32s3.bin
 
-# ESP32-C5 -- bootloader at 0x2000
+# ESP32-C5-DevKitC-1 / Waveshare
 esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
-    0x2000  bootloader-esp32c5.bin \
-    0x8000  partition-table-esp32c5.bin \
-    0x10000 ota_data_initial-esp32c5.bin \
-    0x20000 observore-esp32c5.bin
+    0x2000  bootloader-devkit-esp32c5.bin \
+    0x8000  partition-table-devkit-esp32c5.bin \
+    0x10000 ota_data_initial-devkit-esp32c5.bin \
+    0x20000 observore-devkit-esp32c5.bin
+
+# Seeed XIAO ESP32-C5
+esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
+    0x2000  bootloader-xiao-esp32c5.bin \
+    0x8000  partition-table-xiao-esp32c5.bin \
+    0x10000 ota_data_initial-xiao-esp32c5.bin \
+    0x20000 observore-xiao-esp32c5.bin
+
+# Seeed XIAO ESP32C6
+esptool.py --chip esp32c6 -p /dev/ttyACM0 write_flash \
+    0x0     bootloader-xiao-esp32c6.bin \
+    0x8000  partition-table-xiao-esp32c6.bin \
+    0x10000 ota_data_initial-xiao-esp32c6.bin \
+    0x20000 observore-xiao-esp32c6.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
@@ -508,6 +522,13 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
 dark rather than obviously broken.
+
+The [browser flasher](https://observore.forgedinfeatherstechnology.com/) ships
+a build per board and asks which one you have, because it cannot tell. ESP Web
+Tools matches on chip family, which separates an S3 from a C5 and cannot
+separate two C5 boards — so the picker handles boards that share a chip, and
+the chip check remains underneath as a backstop: choosing a profile for the
+wrong *chip* is refused rather than flashed.
 
 Building without a board file gives the reference board for that chip.
 
