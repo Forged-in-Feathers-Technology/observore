@@ -652,6 +652,7 @@ static esp_err_t notify_get_handler(httpd_req_t *req)
     snprintf(body, sizeof(body),
              "{\"configured\":%s,\"url\":\"%s\",\"provider\":\"%s\","
              "\"needs_user\":%s,\"has_user\":%s,\"url_hint\":\"%s\","
+             "\"retry_in_s\":%" PRIu32 ","
              "\"sent\":%" PRIu32 ","
              "\"failed\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"queued\":%zu,"
              "\"can_send\":%s,\"error\":\"%s\"}",
@@ -661,6 +662,7 @@ static esp_err_t notify_get_handler(httpd_req_t *req)
                  ? "true" : "false",
              observore_notify_has_user() ? "true" : "false",
              observore_provider_url_hint(observore_notify_provider()),
+             observore_notify_retry_in_s(),
              observore_notify_sent(),
              observore_notify_failed(), observore_notify_dropped(),
              observore_notify_pending(),

@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -8,6 +9,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "observore_nvs.h"
@@ -38,6 +40,32 @@ static observore_notice_t s_queue[OBSERVORE_NOTIFY_QUEUE];
 static size_t   s_head, s_count;
 static uint32_t s_sent, s_failed, s_dropped;
 static char     s_last_error[64];
+
+/* Backoff after a failed delivery.
+ *
+ * Measured, not imagined: a device left overnight with an unreachable notifier
+ * logged 10,019 failed attempts and zero successes in seven hours -- one every
+ * 2.6 seconds, for as long as it was associated, forever. The pump had no
+ * backoff at all. It ran from the main loop, and a failure simply returned so
+ * the next pass could try again immediately.
+ *
+ * That is expensive in the three ways that matter on this device. Each attempt
+ * sets up a TLS connection, which is tens of kilobytes on a part that had
+ * about 35 KB free; it burns radio time in the narrow window the device is
+ * actually associated; and it drains a battery for nothing. An endpoint that
+ * is unreachable now is usually unreachable in two seconds' time -- the
+ * common causes are a firewalled segment, a wrong URL, or a server that is
+ * down, none of which resolve on that timescale.
+ *
+ * Doubling from 30 seconds to a 15-minute ceiling keeps a transient outage
+ * recovering quickly while making a permanent one cost almost nothing. The
+ * notices stay queued throughout; this delays retries, it never discards. */
+#define BACKOFF_MIN_US (30 * 1000000LL)
+#define BACKOFF_MAX_US (15 * 60 * 1000000LL)
+
+static int64_t  s_retry_after_us;      /* do not attempt before this */
+static int64_t  s_backoff_us;          /* current delay, 0 when healthy */
+static uint32_t s_consecutive_failures;
 
 #define LOCK()   xSemaphoreTakeRecursive(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGiveRecursive(s_lock)
@@ -104,6 +132,9 @@ void observore_notify_init(void)
     s_head = s_count = 0;
     s_sent = s_failed = s_dropped = 0;
     s_last_error[0] = '\0';
+    s_consecutive_failures = 0;
+    s_backoff_us = 0;
+    s_retry_after_us = 0;
     load();
     UNLOCK();
 }
@@ -230,6 +261,18 @@ size_t observore_notify_pending(void)
 
 uint32_t observore_notify_sent(void)    { return s_sent; }
 uint32_t observore_notify_failed(void)  { return s_failed; }
+
+/* Seconds until the next attempt, or 0 when not backing off.  Reported so a
+ * notifier that has gone quiet can say why it is quiet: "failing, next try in
+ * 900s" is a diagnosis, where a rising failure count on its own is a puzzle. */
+uint32_t observore_notify_retry_in_s(void)
+{
+    if (!s_retry_after_us) {
+        return 0;
+    }
+    int64_t left = s_retry_after_us - esp_timer_get_time();
+    return left > 0 ? (uint32_t)(left / 1000000) : 0;
+}
 uint32_t observore_notify_dropped(void) { return s_dropped; }
 
 const char *observore_notify_last_error(void) { return s_last_error; }
@@ -352,6 +395,9 @@ void observore_notify_pump(void)
         observore_wifi_mode() != OBSERVORE_MODE_UPLINK) {
         return;
     }
+    if (s_retry_after_us && esp_timer_get_time() < s_retry_after_us) {
+        return;                       /* still backing off */
+    }
 
     for (int i = 0; i < MAX_PER_PUMP; i++) {
         observore_notice_t notice;
@@ -365,10 +411,33 @@ void observore_notify_pump(void)
 
         if (send_now(&notice) != ESP_OK) {
             s_failed++;
-            ESP_LOGW(TAG, "push failed: %s", s_last_error);
-            /* Leave it queued: the next pump retries rather than losing it. */
+            s_consecutive_failures++;
+            s_backoff_us = s_backoff_us ? s_backoff_us * 2 : BACKOFF_MIN_US;
+            if (s_backoff_us > BACKOFF_MAX_US) {
+                s_backoff_us = BACKOFF_MAX_US;
+            }
+            s_retry_after_us = esp_timer_get_time() + s_backoff_us;
+            /* Only the first failure of a run is worth a line. The rest say
+             * the same thing, and a log that repeats itself every couple of
+             * seconds for seven hours buries everything else the device has
+             * to say -- including whatever it was trying to report. */
+            if (s_consecutive_failures == 1) {
+                ESP_LOGW(TAG, "push failed: %s -- retrying in %llds",
+                         s_last_error, (long long)(s_backoff_us / 1000000));
+            } else {
+                ESP_LOGD(TAG, "push failed again (%" PRIu32 " in a row)",
+                         s_consecutive_failures);
+            }
+            /* Leave it queued: a later pump retries rather than losing it. */
             return;
         }
+        if (s_consecutive_failures) {
+            ESP_LOGI(TAG, "notifier reachable again after %" PRIu32 " failures",
+                     s_consecutive_failures);
+        }
+        s_consecutive_failures = 0;
+        s_backoff_us = 0;
+        s_retry_after_us = 0;
         LOCK();
         if (s_count > 0) {
             s_head = (s_head + 1) % OBSERVORE_NOTIFY_QUEUE;

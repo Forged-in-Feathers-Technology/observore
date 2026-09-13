@@ -66,3 +66,38 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # Optimise for size, not for debugging. Worth 125 KB, which matters because the
 # OTA layout gives each slot 1984 KB and the C5 is the tightest target.
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# TLS needs a contiguous buffer, and this device could not spare one.
+#
+# Measured, not guessed. A device left running overnight logged 10,019 failed
+# notifications and zero successes, every one of them:
+#
+#   E esp-tls-mbedtls: mbedtls_ssl_setup returned -0x7F00
+#
+# which is MBEDTLS_ERR_SSL_ALLOC_FAILED. Not a firewall and not DNS -- no
+# packet was ever sent, which is why nothing appeared in the network logs.
+# mbedTLS wanted one 16384-byte allocation for its inbound record buffer and
+# the largest free block was 15360 bytes. Short by a kilobyte, every time, for
+# seven hours.
+#
+# 8 KB halves the contiguous demand and still holds any realistic certificate
+# chain in a single record -- a Let's Encrypt chain is around 4 KB. The
+# outbound side stays at 4 KB because the requests are a few hundred bytes of
+# JSON.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+
+# Allocate the TLS record buffers only while they are in use.
+#
+# Halving the inbound buffer moved the failure on rather than removing it:
+# ssl_setup stopped failing and the handshake began failing instead, with
+# MBEDTLS_ERR_X509_FATAL_ERROR, at a moment when the minimum free heap was 468
+# bytes. The device cannot hold a TLS session open alongside Wi-Fi, BLE and the
+# console for the whole of a connection.
+#
+# Dynamic buffers make mbedTLS allocate on demand and free between phases, so
+# the peak lasts milliseconds rather than the life of the connection. This is
+# the half of the fix that needs no PSRAM, which is what makes it worth having
+# on the C6 as well; the boards that do have PSRAM additionally route mbedTLS
+# allocations there, in their own defaults files.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y

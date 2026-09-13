@@ -12,3 +12,15 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+
+# Let mbedTLS allocate from PSRAM.
+#
+# TLS was failing outright on this board: 10,019 consecutive failures overnight,
+# first MBEDTLS_ERR_SSL_ALLOC_FAILED and then, once the buffers were halved and
+# made dynamic, MBEDTLS_ERR_X509_FATAL_ERROR with the minimum free heap at 336
+# bytes. Internal RAM is simply oversubscribed here -- Wi-Fi, BLE, lwip and the
+# console all live in roughly 160 KB -- while 8 MB of PSRAM sat unused.
+#
+# Only set for targets whose modules carry PSRAM. The C6 has none, so it keeps
+# the default allocator and its own smaller TLS ceiling.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
