@@ -71,7 +71,7 @@ normally there, and reports what is new.</p>
   </esp-web-install-button>
   <p class="ver" id="ver">&nbsp;</p>
   <div id="loadfail" class="unsupported" hidden>
-    <p><strong>The installer failed to load.</strong> This is a fault with this
+    <p><strong>The installer failed to load:</strong> This is a fault with this
     page, not with your browser or your board.</p>
     <p class="note">Please
     <a href="https://github.com/Forged-in-Feathers-Technology/observore/issues">open
@@ -79,7 +79,7 @@ normally there, and reports what is new.</p>
     the commands are further down this page.</p>
   </div>
   <div id="brave" class="unsupported" hidden>
-    <p><strong>Brave blocks Web Serial by default.</strong> This is a Brave
+    <p><strong>Brave blocks Web Serial by default:</strong> This is a Brave
     setting, not a fault with your board or this page — Brave ships the
     capability and gates it.</p>
     <p>Open this address, set <em>Serial API</em> to <strong>Enabled</strong>,
@@ -100,15 +100,15 @@ normally there, and reports what is new.</p>
 <h2>What this installs, and what it leaves alone</h2>
 <div class="panel">
   <ul>
-    <li><strong>Your settings survive an upgrade.</strong> The bootloader,
+    <li><strong>Your settings survive an upgrade:</strong> The bootloader,
       partition table and application are written at their own offsets, so the
       stored configuration is untouched — the mute rules, the Wi-Fi
       credentials, the notifier token and the device's console password all
       stay.</li>
-    <li><strong>Tick “erase device” only if you mean it.</strong> That wipes
+    <li><strong>Tick “erase device” only if you mean it:</strong> That wipes
       the stored configuration, including the console password, and a new one
       is generated on the next boot.</li>
-    <li><strong>Nothing is sent anywhere.</strong> The firmware is fetched from
+    <li><strong>Nothing is sent anywhere:</strong> The firmware is fetched from
       this page and written by your browser over USB. No account, no telemetry.</li>
   </ul>
 </div>
