@@ -32,6 +32,33 @@ jobs:
       - name: Scan tracked files
         run: tools/check_no_secrets.sh
 
+  # A board profile that nothing builds is a board profile that quietly rots.
+  # These describe boards rather than chips -- the C5 appears twice, once as a
+  # Waveshare kit with a WS2812 and a UART bridge and once as a XIAO with a
+  # plain LED and only native USB -- so the target matrix above does not cover
+  # them.
+  boards:
+    name: Board profile (${{ matrix.board }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: xiao-esp32c5
+            target: esp32c5
+          - board: xiao-esp32c6
+            target: esp32c6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: ${{ matrix.target }}
+          command: >-
+            idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}.defaults"
+            build
+
   # Documentation has no compiler, and this project keeps proving it: renaming
   # the release assets broke the manual flashing instructions in two documents
   # and nothing noticed for a release.  These are the parts of the prose that

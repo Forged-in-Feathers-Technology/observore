@@ -1,0 +1,18 @@
+# Seeed Studio XIAO ESP32-C5 -- 8 MB flash, 8 MB PSRAM, dual-band Wi-Fi 6.
+#
+# Differs from the DevKitC-style C5 in two ways that matter, neither of which
+# can be detected at runtime:
+#
+#   The LED is a plain yellow one, not a WS2812 -- on GPIO27, which is the same
+#   pin the DevKitC puts its addressable pixel on. Driving a plain LED with
+#   WS2812 timing leaves it dark, so the pin being identical makes this more
+#   dangerous rather than less.
+#
+#   The USB-C port is the chip's own USB-Serial/JTAG. There is no CH343 bridge,
+#   so the UART console the C5 target defaults to would talk to nothing.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_OBSERVORE_LED_MONO=y
+CONFIG_OBSERVORE_LED_GPIO=27
+CONFIG_OBSERVORE_LED_ACTIVE_LOW=y
+CONFIG_OBSERVORE_BUTTON_GPIO=28

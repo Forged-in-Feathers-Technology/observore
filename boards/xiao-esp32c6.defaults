@@ -1,0 +1,12 @@
+# Seeed Studio XIAO ESP32C6 -- 4 MB flash, no PSRAM, 2.4 GHz only.
+#
+# The console default for this chip is already the native USB-Serial/JTAG,
+# which is what this board uses, so only the pins differ.
+#
+# No PSRAM is the thing to know about this board: mbedTLS cannot be routed
+# off-chip here, so TLS runs entirely in internal RAM and is tighter than on
+# the C5 or S3. Notifications may not be reliable.
+CONFIG_OBSERVORE_LED_MONO=y
+CONFIG_OBSERVORE_LED_GPIO=15
+CONFIG_OBSERVORE_LED_ACTIVE_LOW=y
+CONFIG_OBSERVORE_BUTTON_GPIO=9

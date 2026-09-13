@@ -486,6 +486,31 @@ The **ESP32-C5 is the interesting one**, because it is dual-band: it is the only
 supported chip that can see 5 GHz at all. On a C5 the sniffer sweeps both bands
 (see [Channels](#channels)); on every other chip 5 GHz is simply invisible.
 
+### Boards, which are not the same as chips
+
+`sdkconfig.defaults.<target>` describes a chip. A **board** is a separate thing
+and cannot be inferred from it — the ESP32-C5 appears twice here, once as a
+Waveshare kit with a WS2812 and a CH343 UART bridge, and once as a XIAO with a
+plain LED and only native USB. Board files live in [`boards/`](boards/):
+
+```bash
+idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
+       --preview set-target esp32c5 build
+```
+
+| board | LED | button | notes |
+|---|---|---|---|
+| XIAO ESP32S3 *(default)* | GPIO21, plain | GPIO0 | the reference board |
+| ESP32-C5 DevKitC / Waveshare *(default for C5)* | GPIO27, WS2812 | GPIO28 | two USB sockets, either works |
+| `boards/xiao-esp32c5` | GPIO27, plain | GPIO28 | 8 MB PSRAM, native USB only |
+| `boards/xiao-esp32c6` | GPIO15, plain | GPIO9 | **no PSRAM**, so TLS is tight |
+
+The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
+addressable pixel but is an ordinary LED, so getting the board wrong leaves it
+dark rather than obviously broken.
+
+Building without a board file gives the reference board for that chip.
+
 Per-chip settings live in `sdkconfig.defaults.<target>`, which ESP-IDF loads on
 top of the shared `sdkconfig.defaults`. What differs in practice:
 
