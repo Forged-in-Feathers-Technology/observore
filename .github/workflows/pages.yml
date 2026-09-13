@@ -113,7 +113,7 @@ jobs:
           # fetched from this origin, which is the entire reason the binaries
           # are copied into the site rather than linked.
           python3 tools/make_manifest.py \
-            --version "$TAG" --out _site/firmware/manifest.json \
+            --version "$TAG" --out-dir _site/firmware \
             '_site/firmware/builds-*.json'
 
           # Every part the manifest promises must actually be on the page. A
@@ -121,18 +121,25 @@ jobs:
           # else's machine -- the worst place to discover it.
           python3 - <<'PY'
           import json, os, sys
-          m = json.load(open('_site/firmware/manifest.json'))
+          import glob
+          index = json.load(open('_site/firmware/boards.json'))
           missing = []
-          for build in m['builds']:
-              for part in build['parts']:
-                  path = os.path.join('_site/firmware', part['path'])
-                  if not os.path.exists(path) or os.path.getsize(path) == 0:
-                      missing.append((build['chipFamily'], part['path']))
+          for entry in index['boards']:
+              mpath = os.path.join('_site/firmware', entry['manifest'])
+              if not os.path.exists(mpath):
+                  missing.append((entry['board'], entry['manifest']))
+                  continue
+              m = json.load(open(mpath))
+              for build in m['builds']:
+                  for part in build['parts']:
+                      path = os.path.join('_site/firmware', part['path'])
+                      if not os.path.exists(path) or os.path.getsize(path) == 0:
+                          missing.append((entry['board'], part['path']))
           if missing:
-              for family, path in missing:
-                  print('::error::%s is missing %s' % (family, path))
+              for board, path in missing:
+                  print('::error::%s is missing %s' % (board, path))
               sys.exit(1)
-          print('manifest covers: ' + ', '.join(b['chipFamily'] for b in m['builds']))
+          print('boards offered: ' + ', '.join(e['board'] for e in index['boards']))
           PY
           ls -l _site _site/firmware
 

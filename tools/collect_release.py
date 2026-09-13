@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect one target's flashable parts, with the offsets the build chose.
+"""Collect one board's flashable parts, with the offsets the build chose.
 
 The offsets are read from build/flash_args rather than written down here, and
 that is the whole point of this script.  They are not the same on every chip:
@@ -43,6 +43,10 @@ def parse_flash_args(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True)
+    ap.add_argument("--board", required=True,
+                    help="board profile name; artifacts are named after it, "
+                         "because two boards can share a chip and need "
+                         "different firmware")
     ap.add_argument("--build-dir", default="build")
     ap.add_argument("--out", default="dist")
     args = ap.parse_args()
@@ -57,20 +61,24 @@ def main():
         src = os.path.join(args.build_dir, rel)
         if not os.path.isfile(src):
             raise SystemExit("flash_args names %s, which the build did not produce" % src)
-        # Per-target names: every target contributes a bootloader.bin and the
+        # Per-board names: every board contributes a bootloader.bin and the
         # release holds them all in one flat namespace.
         stem, ext = os.path.splitext(os.path.basename(rel))
-        name = "%s-%s%s" % (stem, args.target, ext)
+        name = "%s-%s%s" % (stem, args.board, ext)
         shutil.copyfile(src, os.path.join(args.out, name))
         parts.append({"path": name, "offset": offset})
 
-    build = {"chipFamily": family, "parts": parts}
-    out = os.path.join(args.out, "builds-%s.json" % args.target)
+    # The board travels with the build. ESP Web Tools matches on chipFamily
+    # alone, which cannot tell a XIAO ESP32-C5 from a Waveshare one -- they are
+    # the same chip and need different firmware -- so the page offers a manifest
+    # per board and the chip check stays as a second line of defence.
+    build = {"chipFamily": family, "board": args.board, "parts": parts}
+    out = os.path.join(args.out, "builds-%s.json" % args.board)
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(build, fh, indent=2)
         fh.write("\n")
 
-    print("%s -> %s" % (args.target, out))
+    print("%s (%s) -> %s" % (args.board, args.target, out))
     json.dump(build, sys.stdout, indent=2)
     print()
 
