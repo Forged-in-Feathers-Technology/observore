@@ -12,6 +12,7 @@
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
 #include "observore_util.h"
+#include "observore_wps.h"
 
 static int g_failures;
 static int g_checks;
@@ -1079,6 +1080,107 @@ static void test_notify_providers(void)
           "gotify does not");
 }
 
+/* ------------------------------------------------------------------ */
+/* WPS information elements                                           */
+/* ------------------------------------------------------------------ */
+
+/* Build a vendor-specific IE carrying WPS attributes. */
+static size_t wps_ie(uint8_t *buf, const uint16_t *types, const char **vals, size_t n)
+{
+    size_t body = 4;
+    buf[0] = 0xDD;
+    buf[2] = 0x00; buf[3] = 0x50; buf[4] = 0xF2; buf[5] = 0x04;
+    for (size_t i = 0; i < n; i++) {
+        size_t vl = strlen(vals[i]);
+        buf[2 + body + 0] = (uint8_t)(types[i] >> 8);
+        buf[2 + body + 1] = (uint8_t)(types[i] & 0xFF);
+        buf[2 + body + 2] = (uint8_t)(vl >> 8);
+        buf[2 + body + 3] = (uint8_t)(vl & 0xFF);
+        memcpy(&buf[2 + body + 4], vals[i], vl);
+        body += 4 + vl;
+    }
+    buf[1] = (uint8_t)body;
+    return 2 + body;
+}
+
+static void test_wps(void)
+{
+    uint8_t buf[512];
+    observore_wps_t w;
+
+    banner("WPS: an access point naming itself");
+    const uint16_t t3[] = {0x1021, 0x1023, 0x1011};
+    const char *v3[] = {"Hikvision", "DS-2CD2042WD", "Front Door"};
+    size_t n = wps_ie(buf, t3, v3, 3);
+    CHECK(observore_wps_from_ies(buf, n, &w), "a WPS element is found");
+    CHECK(strcmp(w.manufacturer, "Hikvision") == 0, "manufacturer, got \"%s\"", w.manufacturer);
+    CHECK(strcmp(w.model, "DS-2CD2042WD") == 0, "model, got \"%s\"", w.model);
+    CHECK(strcmp(w.device_name, "Front Door") == 0, "device name, got \"%s\"", w.device_name);
+
+    banner("WPS: frames that are not well behaved");
+    CHECK(!observore_wps_from_ies(NULL, 10, &w), "a null frame is not a crash");
+    CHECK(observore_wps_empty(&w), "and leaves the result empty");
+
+    /* An attribute claiming to be longer than the element containing it. */
+    n = wps_ie(buf, t3, v3, 1);
+    buf[2 + 4 + 2] = 0xFF; buf[2 + 4 + 3] = 0xFF;
+    observore_wps_from_ies(buf, n, &w);
+    CHECK(observore_wps_empty(&w), "an over-long attribute is refused, not read");
+
+    /* An element claiming to be longer than the frame containing it. */
+    n = wps_ie(buf, t3, v3, 1);
+    buf[1] = 0xFF;
+    observore_wps_from_ies(buf, n, &w);
+    CHECK(observore_wps_empty(&w), "an over-long element is refused");
+
+    /* Control characters and a quote heading for a JSON document. */
+    const uint16_t t1[] = {0x1021};
+    const char *nasty[] = {"Ac\x01me\x1b[31m\"x"};
+    n = wps_ie(buf, t1, nasty, 1);
+    observore_wps_from_ies(buf, n, &w);
+    CHECK(strcmp(w.manufacturer, "Acme[31m\"x") == 0,
+          "control bytes are dropped, got \"%s\"", w.manufacturer);
+
+    /* Longer than the field, and padded, as real hardware often is. */
+    const char *longv[] = {"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789   "};
+    n = wps_ie(buf, t1, longv, 1);
+    observore_wps_from_ies(buf, n, &w);
+    CHECK(strlen(w.manufacturer) == 32, "truncated to the field, got %zu", strlen(w.manufacturer));
+
+    const char *padded[] = {"Ubiquiti   "};
+    n = wps_ie(buf, t1, padded, 1);
+    observore_wps_from_ies(buf, n, &w);
+    CHECK(strcmp(w.manufacturer, "Ubiquiti") == 0, "trailing blanks trimmed, got \"%s\"", w.manufacturer);
+
+    banner("WPS: a device that names itself is classified");
+    {
+        /* The case the OUI cannot reach: an address block we do not know,
+         * and a beacon that says what the device is anyway. */
+        const uint16_t tk[] = {0x1021, 0x1023};
+        const char *cam[] = {"Axon Enterprise", "Fleet 3 ALPR"};
+        size_t cn = wps_ie(buf, tk, cam, 2);
+        observore_wps_t cw;
+        CHECK(observore_wps_from_ies(buf, cn, &cw), "the element parses");
+
+        uint8_t unknown_mac[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+        observore_observation_t obs = {
+            .mac = unknown_mac, .src = OBSERVORE_SRC_WIFI_SNIFF,
+            .rssi = -50, .channel = 6, .ssid = NULL, .wps = &cw,
+        };
+        observore_event_t ev;
+        CHECK(observore_classify(&obs, &ev), "an unknown MAC is still classified");
+        CHECK(ev.cls == OBSERVORE_CLASS_BODYCAM, "by what it called itself, got %s",
+              observore_class_name(ev.cls));
+        CHECK(strstr(ev.detail, "Axon") != NULL,
+              "and the detail names it, got \"%s\"", ev.detail);
+    }
+
+    banner("WPS: elements that are not WPS");
+    uint8_t other[] = {0x00, 0x04, 'h','o','m','e',      /* SSID */
+                       0xDD, 0x04, 0x00, 0x50, 0xF2, 0x01};  /* WPA, not WPS */
+    CHECK(!observore_wps_from_ies(other, sizeof(other), &w), "a WPA element is not mistaken for WPS");
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -1103,6 +1205,8 @@ int main(void)
     test_fingerprint_safety();
     test_name_rule_matches_ble();
     test_mac_parsing();
+
+    test_wps();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

@@ -4,6 +4,7 @@
 #include "mdns.h"
 #include "observore_track.h"
 #include "observore_wifi.h"
+#include "observore_wps.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -212,12 +213,21 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     char ssid[33] = {0};
     bool odid = parse_ies(ies, ie_len, ssid, sizeof(ssid));
 
+    /* What the access point says about itself, if it says anything. Beacons
+     * and probe responses from most consumer hardware carry a WPS element
+     * naming the manufacturer and model, which is better evidence than a
+     * vendor prefix and works when the prefix is unknown. Stack only: the
+     * device table would grow by 19 KB if every row kept a copy. */
+    observore_wps_t wps;
+    observore_wps_from_ies(ies, ie_len, &wps);
+
     observore_observation_t obs = {
         .mac       = hdr->addr2,
         .src       = OBSERVORE_SRC_WIFI_SNIFF,
         .rssi      = (int8_t)pkt->rx_ctrl.rssi,
         .channel   = pkt->rx_ctrl.channel,
         .ssid      = ssid[0] ? ssid : NULL,
+        .wps       = observore_wps_empty(&wps) ? NULL : &wps,
         .remote_id = odid,
     };
     s_sniffed_frames++;

@@ -4,6 +4,7 @@
 
 #include "observore_notify_fmt.h"
 #include "observore_types.h"
+#include "observore_wps.h"
 
 /* A single raw sighting handed to the classifier.  Fields that do not apply to
  * the source radio are left NULL / zero -- the classifier only reads what the
@@ -26,6 +27,12 @@ typedef struct {
 
     /* Wi-Fi: the SSID from a beacon or scan result, NUL-terminated. */
     const char     *ssid;
+
+    /* Wi-Fi: what the access point said about itself in its WPS element, or
+     * NULL. A pointer rather than a copy: this lives on the sniffer's stack
+     * for the duration of the call, and the 192-slot device table would grow
+     * by 19 KB if every row carried one. */
+    const observore_wps_t *wps;
 
     /* Wi-Fi: the frame carried an ASTM F3411 Remote ID element.  The sniffer
      * has already parsed the IEs, so it reports the fact rather than making
