@@ -55,7 +55,7 @@ and printed at every boot:
 console SoftAP: "console-XXXXXX"  password: xxxxxxxxxxxx
 ```
 
-You will need it in a moment, and serial is the only place it appears — see
+You will need it in a moment, and serial is the only place it appears. See
 [The console password](#the-console-password).
 
 **3. Open the console.** Hold the BOOT button for 1.5 s. The LED goes solid and
@@ -75,7 +75,7 @@ uplink up at 192.168.1.42
 
 From here the console is on your LAN and the SoftAP is no longer needed. Note
 that it is only on your network during its uplink window, so the address
-answers for about thirty seconds out of every two and a half minutes — that is
+answers for about thirty seconds out of every two and a half minutes. That is
 [deliberate](#patrol-and-uplink-alternate).
 
 **5. Optionally, set up notifications.** In the **Notifications** panel, put in
@@ -88,7 +88,7 @@ everything currently in range as known and resets the score, so from then on it
 reports what is *new* rather than the whole neighbourhood.
 
 **Then expect quiet.** After a good baseline Observore should say almost
-nothing. A silent device is the normal state, not a broken one — the heartbeat
+nothing. A silent device is the normal state, not a broken one. The heartbeat
 on the serial log tells you it is still watching.
 
 ## What it does
@@ -99,20 +99,20 @@ observe it back, because nothing leaves the radio:
 | | |
 |---|---|
 | BLE scan | passive — no `SCAN_REQ` is ever emitted |
-| Wi-Fi access-point scan | **passive** — no probe requests |
+| Wi-Fi access-point scan | **passive**, no probe requests |
 | Wi-Fi sniff | receive-only |
 
 The Wi-Fi scan being passive matters as much as the BLE one. An active scan
 broadcasts probe requests carrying the device's own MAC on every channel, every
-cycle — and probe requests are exactly what presence analytics and Wi-Fi
+cycle, and probe requests are exactly what presence analytics and Wi-Fi
 tracking systems collect. A detector that announced itself to the things it
 was built to notice would be self-defeating. The cost is dwell time, not
 coverage: access points beacon around ten times a second, hidden ones included.
 
 It does transmit in the other two modes, and there is no way around that:
 
-- **Console** — the SoftAP beacons and serves the page.
-- **Uplink** — it is associated to your network and pushes notifications.
+- **Console:** the SoftAP beacons and serves the page.
+- **Uplink:** it is associated to your network and pushes notifications.
 
 Both are entered deliberately, and patrol is where it spends most of its
 time.
@@ -134,7 +134,7 @@ which one fired so you can judge a hit rather than just trust it:
   Tile (`0xFEED`), Galaxy SmartTag (`0xFD5A`), Google Fast Pair (`0xFE2C`),
   ASTM F3411 Remote ID over BLE (`0xFFFA`/`0x0D`) and over Wi-Fi
   (vendor IE `FA:0B:BC`/`0x0D`).
-- **Name and SSID keywords** — for hardware that announces itself.
+- **Name and SSID keywords:** for hardware that announces itself.
 - **Vendor labelling** — 10,348 benign vendor prefixes across 43 common
   manufacturers (Apple, Samsung, Ubiquiti, Espressif, Google, …), also
   generated from the IEEE registry. These **never classify and never score**.
@@ -142,7 +142,7 @@ which one fired so you can judge a hit rather than just trust it:
   own gear at a glance. Kept in a table entirely separate from the threat
   prefixes, because mixing "this is a surveillance camera" with "this is a
   Samsung" is how a detector starts crying wolf at its owner's phone.
-- **Persistence** — the follower heuristic: an unclassified BLE address seen
+- **Persistence:** the follower heuristic: an unclassified BLE address seen
   3+ times spanning 5+ minutes is reported as following you. This is the part
   that catches hardware with no signature at all, and it is the reason to
   build the thing.
@@ -159,7 +159,7 @@ it away while sustained presence keeps it lit.
 - **6+ alert** — LED flutters (red)
 
 The rhythm is what the XIAO's single monochrome LED can say, and it is the same
-on every board. Boards with an addressable WS2812 — the C5 kits — add the
+on every board. Boards with an addressable WS2812, the C5 kits, add the
 colour on top of it. They keep the rhythm rather than sitting lit, because a
 device meant to sit unattended in a room should not also be a lit beacon
 announcing itself; colour adds a second channel of information without making
@@ -183,7 +183,7 @@ channels in a 5 s sweep leaves comfortable margin.
 and UNII-3. Sweeping all of them in one cycle would push the dwell under a
 beacon interval, so 5 GHz is covered **a slice of five channels per cycle**,
 advancing each sweep: 2.4 GHz stays fully covered every cycle and 5 GHz comes
-round in five. The practical consequence is latency, not blindness — a 5 GHz
+round in five. The practical consequence is latency, not blindness. A 5 GHz
 camera takes a few cycles longer to appear than a 2.4 GHz one.
 
 DFS channels are included. The radar obligations that come with them apply to
@@ -211,11 +211,11 @@ a sniffer that works. Both values are tunable under `menuconfig` → **Observore
 ## Why there are modes
 
 The ESP32-S3 has one radio on one channel. Channel-hopping to sniff and staying
-associated to an access point are mutually exclusive — so Observore cannot both
+associated to an access point are mutually exclusive, so Observore cannot both
 watch the band and serve you a web page at the same time.
 
 - **Patrol** — unassociated, scanning and sniffing. No network.
-- **Uplink** — joined to your own network. The console is on your LAN and
+- **Uplink:** joined to your own network. The console is on your LAN and
   notifications can be sent. Wi-Fi sniffing is suspended.
 - **Console** — SoftAP, for first-time setup or when away from your network.
 
@@ -249,7 +249,7 @@ alternates.
 | `OBSERVORE_UPLINK_RETRY_S` | 300 s | backoff after a *failed* join |
 
 The uplink window is held open while somebody is reading the console, so you
-are never cut off mid-page — but only up to `OBSERVORE_UPLINK_MAX_S`. The
+are never cut off mid-page, but only up to `OBSERVORE_UPLINK_MAX_S`. The
 console page polls every two seconds, so a tab left open would otherwise keep
 the device on the uplink indefinitely. **A user interface must not be able to
 blind the detector**, so the hold has a hard ceiling.
@@ -293,7 +293,7 @@ silently reverted by reflashing the same firmware.
 **Leaving the password field blank keeps the stored password.** The console
 clears the field after every save and never receives the password back, so
 always sending it would let a second Save replace a good password with an empty
-one — which asks for an *open* network, and a WPA2 access point refuses that
+one, which asks for an *open* network, and a WPA2 access point refuses that
 with `reason 210, no AP found with compatible security`. That reads as though
 the network were at fault. To genuinely configure an open network, tick **open
 network**.
@@ -342,18 +342,18 @@ tools/improv_client.py --port /dev/ttyACM0 provision --ssid MyAP --password secr
 
 Three things worth knowing:
 
-- **Serial only, deliberately.** Improv also defines a BLE transport, and it is
+- **Serial only, deliberately:** Improv also defines a BLE transport, and it is
   the wrong choice here: it would make a counter-surveillance detector
   advertise. This one only answers on a cable somebody has physically plugged
   in.
-- **Both USB sockets work on a C5.** The console can only *read* from one of
-  them — ESP-IDF's secondary console is output-only — so the firmware talks to
+- **Both USB sockets work on a C5:** the console can only *read* from one of
+  them — ESP-IDF's secondary console is output-only, so the firmware talks to
   each peripheral directly rather than through stdio. Whichever socket you used
   to flash is the one that provisions. Both are verified on hardware.
-- **Provisioning drops the existing link first.** Asking to join while already
+- **Provisioning drops the existing link first:** asking to join while already
   joined is a no-op that reports success, which would accept a wrong password
   without ever trying it.
-- **A failed join costs nothing.** Credentials must be stored before the
+- **A failed join costs nothing:** credentials must be stored before the
   station can try them, so a mistyped password would otherwise replace a
   working network with a broken one. The previous network is put back if the
   join fails.
@@ -368,7 +368,7 @@ list is empty and the SSID can be typed instead.
 
 Observore offers the name **`observore`** (configurable as
 `OBSERVORE_HOSTNAME`) two ways: over mDNS as `observore.local`, and as the
-hostname in its DHCP request — which is what a router registers in its own DNS
+hostname in its DHCP request, which is what a router registers in its own DNS
 and shows in its client list.
 
 The DHCP one is the more useful across subnets, because ordinary DNS routes and
@@ -376,21 +376,21 @@ multicast does not.
 
 Two caveats, both real:
 
-- **mDNS is link-local multicast and does not route between subnets.** If
+- **mDNS is link-local multicast and does not route between subnets:** if
   Observore sits on an isolated VLAN and you browse from the main LAN, the
   `.local` name will not resolve unless your router reflects mDNS across both
   networks — on UniFi that is the *Multicast DNS* setting, and it must be
   enabled on each network, not just one.
-- **A DNS domain ending in `.local` collides with mDNS.** RFC 6762 reserves
+- **A DNS domain ending in `.local` collides with mDNS:** RFC 6762 reserves
   `.local` for multicast, so most resolvers send `*.local` to mDNS and never
   ask your DNS server. If your LAN domain is something like `house.local`,
-  names under it are ambiguous for every client, not just this one — a DHCP
+  names under it are ambiguous for every client, not just this one. A DHCP
   reservation plus a static record under a non-`.local` domain sidesteps the
   whole problem.
-- **Some clients cannot resolve `.local` at all.** A Linux box with no Avahi
+- **Some clients cannot resolve `.local` at all:** a Linux box with no Avahi
   and `systemd-resolved` showing `-mDNS` has no multicast resolver, so the name
   will fail there however the network is configured.
-- **It is only on the network during its uplink window.** While patrolling it
+- **It is only on the network during its uplink window:** while patrolling it
   has no address at all, so neither the name nor the IP will answer. Wait for
   the next window, or hold the button for 1.5 s.
 
@@ -426,7 +426,7 @@ configured.
 
 ## Building
 
-For a first run, follow [Getting started](#getting-started) — this section is
+For a first run, follow [Getting started](#getting-started). This section is
 the reference for everything after that.
 
 ### Flashing a release without a toolchain
@@ -487,7 +487,7 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-`idf.py set-target esp32s3` — or `esp32c5`, or `esp32c6` — is needed once in
+`idf.py set-target esp32s3`, or `esp32c5`, or `esp32c6` — is needed once in
 a fresh checkout, and again whenever you change target.
 
 ### Other targets
@@ -523,14 +523,14 @@ The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
 dark rather than obviously broken.
 
-The XIAO profiles are **compile-tested only** — neither board has been run.
+The XIAO profiles are **compile-tested only**. Neither board has been run.
 [docs/xiao-verification.md](docs/xiao-verification.md) lists what is unverified
 and how to check it, ordered by how likely each is to be wrong.
 
 The [browser flasher](https://observore.forgedinfeatherstechnology.com/) ships
 a build per board and asks which one you have, because it cannot tell. ESP Web
 Tools matches on chip family, which separates an S3 from a C5 and cannot
-separate two C5 boards — so the picker handles boards that share a chip, and
+separate two C5 boards, so the picker handles boards that share a chip, and
 the chip check remains underneath as a backstop: choosing a profile for the
 wrong *chip* is refused rather than flashed.
 
@@ -567,7 +567,7 @@ The WS2812 and the button were checked directly rather than assumed. The pixel
 was driven through a known red-green-blue sequence and observed in that order,
 which rules out the failure actually worth worrying about: blue is the third
 byte in both RGB and GRB ordering, so a wrong colour format looks *correct* on
-blue while silently swapping red and green — an alert would show green. It does
+blue while silently swapping red and green. An alert would show green. It does
 not. The BOOT button on GPIO28 reads high at rest and low when pressed.
 
 **The dual-band result, measured in an ordinary flat:**
@@ -608,7 +608,7 @@ console SoftAP: "console-XXXXXX"  password: xxxxxxxxxxxx
 
 It is not derived from anything observable and it is not shipped in this
 repository, so no two devices share one. Deriving it from the MAC would be
-pointless — the SoftAP's BSSID is in every Wi-Fi scan and the derivation would
+pointless. The SoftAP's BSSID is in every Wi-Fi scan and the derivation would
 be right here in the source. A build-time constant would be worse still:
 everyone who flashed the firmware would share it.
 
@@ -642,7 +642,7 @@ value reaches a tracked file.
 #### Unlocking the console
 
 On your own network the console asks for that password once and exchanges it
-for a session cookie, so the password is not repeated on every request — which
+for a session cookie, so the password is not repeated on every request, which
 matters, because it is also the WPA2 key to the device's own access point. The
 session lasts two hours of use and **Lock** ends it.
 
@@ -747,7 +747,7 @@ four levels of breadth:
 
 **Why rotation matters.** Most BLE devices change their address every few
 minutes to an hour, so a `mac` rule silences a device only until it rotates.
-Measured here, all fourteen nearby BLE devices used rotating addresses — a
+Measured here, all fourteen nearby BLE devices used rotating addresses. A
 MAC-based baseline would have been worthless within the hour.
 
 A **fingerprint** hashes only the parts of an advert that survive rotation:
@@ -755,7 +755,7 @@ which AD fields are present and how long they are, the manufacturer's company
 ID, the service UUIDs, and the local name. The variable payload is excluded, so
 a Find My advert fingerprints identically before and after it rotates its key.
 It is not perfectly stable — a device that varies its advert *structure* gets a
-new fingerprint — but it holds for the large majority.
+new fingerprint, but it holds for the large majority.
 
 **A fingerprint identifies a kind of device, not an individual one.** Two
 identical trackers fingerprint the same. So a fingerprint rule is never allowed
@@ -831,7 +831,7 @@ POST /api/notify?clear=1
 
 Urgency is chosen by what was found — a body camera or licence-plate reader is
 urgent, a follower or tracker is high, a drone or smart glasses normal, a
-camera low — and translated into each service's own scale. Pushover's urgent
+camera low, and translated into each service's own scale. Pushover's urgent
 maps to *high* rather than *emergency*: emergency requires retry and expire
 parameters and keeps re-alerting until a human acknowledges, which is not a
 reasonable default for a device that can see a police car drive past.
@@ -863,7 +863,7 @@ a bare number.
 All three wire formats are pinned by host tests: URL construction including
 trailing slashes, header names, body encoding, and the priority mapping. The
 Pushover body is form-encoded, so an advertised device name containing `&`
-cannot inject a field — there is a test for exactly that.
+cannot inject a field. There is a test for exactly that.
 
 ## Cutting a release
 
@@ -873,7 +873,7 @@ git tag v0.4.0 && git push origin v0.4.0
 
 That is the whole manual part. The tag push builds every shipped target,
 collects each one's parts at the offsets its own build chose, assembles the ESP
-Web Tools manifest, and attaches the lot to a **draft** release — creating that
+Web Tools manifest, and attaches the lot to a **draft** release. Creating that
 draft itself if it does not already exist.
 
 Then read the notes, edit them if you like, and publish. Publishing is what
@@ -881,14 +881,14 @@ deploys the flasher page.
 
 The order matters and is easy to get backwards:
 
-- **`gh release create --draft` does not push the tag.** The build never
+- **`gh release create --draft` does not push the tag:** the build never
   triggers, and the only clue is an `untagged-<hash>` URL on the release page.
   Push the tag; the workflow makes the draft.
-- **Publishing before the build finishes deploys a broken page.** `pages.yml`
+- **Publishing before the build finishes deploys a broken page:** `pages.yml`
   triggers on `release: published`, while the release workflow is what uploads
-  the binaries — publish first and the site goes live pointing at assets that
+  the binaries. Publish first and the site goes live pointing at assets that
   do not exist. Draft, then build, then publish.
-- **The `github-pages` environment must allow the tag.** Deployments are
+- **The `github-pages` environment must allow the tag:** deployments are
   restricted by ref, and a release-triggered run has a tag ref rather than a
   branch one. A `tag: v*` policy is what lets it deploy at all; without it the
   deploy job fails before running a single step.
@@ -915,7 +915,7 @@ Two offsets are the actual commitment, and only two:
   the notifier token, the generated console password and the detection
   history. It is where ESP-IDF's `partitions_singleapp_large.csv` put it, which
   is what the earliest firmware used, and it has never moved.
-- **`ota_0` at `0x20000`** — the running application.
+- **`ota_0` at `0x20000`:** the running application.
 
 Everything else stays free. `ota_1` holds no state, so its size and position
 can change later; even growing `ota_0` is non-destructive, because the running
@@ -954,7 +954,7 @@ double every slot, at the cost of no longer booting on a 4 MB board.
 **OTA itself is deliberately not implemented.** With no image signing and an
 unencrypted console, an update path reachable over the network turns "somebody
 on your LAN has the console password" into "somebody owns this device
-permanently" — a real escalation on a device meant to detect surveillance. That
+permanently", a real escalation on a device meant to detect surveillance. That
 waits on HTTPS and a decision about signing. Reserving the layout keeps the
 option open at its cheapest moment without opening the hole.
 
@@ -989,7 +989,7 @@ clear | score 0 | 0 devices | 227 sightings | 0/0 frames | heap 103687 free, 425
 
 Mute rules, credentials and the console password always persisted. What the
 device had actually *seen* did not, so a power blip or a firmware update erased
-the whole picture — and an unexplained reboot was indistinguishable from a
+the whole picture, and an unexplained reboot was indistinguishable from a
 quiet night.
 
 Classified detections now survive, in the **History** panel and at
@@ -997,7 +997,7 @@ Classified detections now survive, in the **History** panel and at
 when they predate the current boot.
 
 What is deliberately **not** kept is the live device table. That is working
-state — 192 slots of mostly unidentified churn, rewritten constantly — and
+state — 192 slots of mostly unidentified churn, rewritten constantly, and
 persisting it would cost far more flash than it is worth. Only things that
 matched a signature are recorded, which is also what keeps the write rate low
 enough to be safe.
@@ -1008,7 +1008,7 @@ stating plainly:
 - A **new** classification is worth a write, and is rate limited to one every
   five minutes rather than written immediately.
 - **Another sighting** of something already recorded moves a counter and a
-  timestamp, and never triggers a write on its own — it rides along with the
+  timestamp, and never triggers a write on its own. It rides along with the
   next one.
 - Opening the console forces a write, because somebody is about to read it.
 - Writes are **held back while the clock is unset**, for up to five minutes.
@@ -1021,7 +1021,7 @@ The effect is that the write rate tracks how many genuinely new things the
 device sees, which in a baselined deployment is close to zero.
 
 On-device history is a convenience, not the record. If detections matter, give
-the device an uplink and a notifier — those leave the device as they happen.
+the device an uplink and a notifier. Those leave the device as they happen.
 
 ## Knowing what time it is
 
@@ -1032,7 +1032,7 @@ what zone it is in and guessing would be worse than not.
 
 **DHCP first, then a configured server.** This is the important part. Observore
 is meant to sit on the segment the cameras are on, and that segment is
-routinely firewalled from the internet — the same isolation that stops a push
+routinely firewalled from the internet. The same isolation that stops a push
 notification reaching its server stops `pool.ntp.org` answering. A router's own
 NTP is reachable from inside that fence. `OBSERVORE_NTP_SERVER` is the fallback
 for networks that hand out no NTP option.
@@ -1051,7 +1051,7 @@ whose output is meant to be evidence.
 
 **Notifications carry the time the thing was seen**, not the time the message
 was sent. Notices are queued while patrolling and flushed on the next uplink,
-so delivery can trail detection by twenty minutes — and the queue exists
+so delivery can trail detection by twenty minutes, and the queue exists
 precisely for the case where that gap is longest.
 
 Both forms are reported: `last_seen_s` counts seconds ago, `last_seen` is
@@ -1065,7 +1065,7 @@ only because it ran for a night rather than a minute.
 
 **TLS could not allocate.** Every failure was
 `mbedtls_ssl_setup returned -0x7F00`, which is `MBEDTLS_ERR_SSL_ALLOC_FAILED`.
-No packet was ever sent — so nothing appeared in the network logs, and the
+No packet was ever sent, so nothing appeared in the network logs, and the
 obvious suspicion of a firewall was wrong. mbedTLS wanted one 16 KB contiguous
 allocation and the largest free block was 15,360 bytes. Short by a kilobyte,
 every time.
@@ -1127,7 +1127,7 @@ This matters more here than the phrase "error handling" suggests. Patrol and
 uplink alternate every couple of minutes for as long as the device is deployed,
 so a transient failure on that path is not rare, and the device table, the
 sighting counts and the follower heuristic all live in RAM. Aborting would
-therefore not degrade the device, it would restart it — and throw away exactly
+therefore not degrade the device, it would restart it, and throw away exactly
 the accumulating evidence it exists to gather, silently.
 
 Initialisation is still fatal. If the radio will not come up at all there is
@@ -1137,41 +1137,41 @@ nothing useful to continue doing, and a boot loop is at least honest about it.
 
 Read these before trusting it.
 
-- **MAC randomisation defeats the follower heuristic.** Modern phones and
+- **MAC randomisation defeats the follower heuristic:** modern phones and
   most trackers in separated mode rotate their Bluetooth address every ~15
   minutes. A follower that rotates will never accumulate 3 sightings under one
   address. Observore catches devices with static or slowly-rotating addresses; it
   will miss a well-behaved rotating one.
-- **Absence of evidence is not evidence of absence.** Wired cameras, cellular
-  ALPR units with the radio off, and — on anything but a C5 — 5 GHz devices
+- **Absence of evidence is not evidence of absence:** wired cameras, cellular
+  ALPR units with the radio off, and — on anything but a C5. 5 GHz devices
   are invisible to it.
   A clear reading means nothing was detected, not that nothing is there.
-- **Vendor prefixes identify manufacturers, not purpose.** A Ring OUI is a
+- **Vendor prefixes identify manufacturers, not purpose:** a Ring OUI is a
   Ring device; it is a doorbell far more often than it is surveillance aimed
   at you. Camera-class hits are scored at 1 point for this reason.
-- **Some signatures are inferred, not documented.** The Meta company IDs and
+- **Some signatures are inferred, not documented:** the Meta company IDs and
   several name keywords are derived from public reporting rather than vendor
   specification, and are unverified against hardware. Treat a
   `smart-glasses` hit as a lead.
-- **Fast Pair is noisy.** Ordinary headphones advertise `0xFE2C`. It is
+- **Fast Pair is noisy:** ordinary headphones advertise `0xFE2C`. It is
   reported because Google's Find Hub trackers use it too.
-- **2.4 GHz only, unless you have a C5.** On every chip but the ESP32-C5 the
+- **2.4 GHz only, unless you have a C5:** on every chip but the ESP32-C5 the
   sniffer sweeps channels 1–13 and nothing above them. A C5 sweeps 5 GHz as
   well, but a slice per cycle rather than all of it at once, so a 5 GHz device
   takes longer to appear than a 2.4 GHz one.
-- **Vendor lookup covers MA-L only.** The IEEE also issues smaller MA-M and
+- **Vendor lookup covers MA-L only:** the IEEE also issues smaller MA-M and
   MA-S blocks, which the generator does not read, so some genuinely assigned
   prefixes resolve to nothing. A miss is reported as unknown rather than
   guessed at.
-- **Muting is a blunt instrument.** A `class` or `oui` rule will hide a real
+- **Muting is a blunt instrument:** a `class` or `oui` rule will hide a real
   threat that happens to share a category or vendor with something you
   dismissed. Prefer `mac`, `name` or `fingerprint` rules where you can.
-- **The console is authenticated but not encrypted.** It asks for the console
+- **The console is authenticated but not encrypted:** it asks for the console
   password and then carries a session cookie, which stops casual and
-  accidental access — but over plain HTTP that cookie can be read by anything
+  accidental access, but over plain HTTP that cookie can be read by anything
   sniffing the LAN, which on Wi-Fi is any device in range holding the
   passphrase. Authentication is not a substitute for encryption.
-- **Notification delivery is verified for two providers of three.** Gotify has
+- **Notification delivery is verified for two providers of three:** Gotify has
   been sent end to end from the device; ntfy accepted the exact request the
   firmware builds; Pushover accepted the request's shape but delivery has not
   been confirmed, since that needs an account.
@@ -1181,7 +1181,7 @@ Read these before trusting it.
 Observore is a receiver. It observes broadcasts that are, by design, transmitted
 publicly and unencrypted. It does not deauthenticate, inject, jam, associate,
 crack, or interfere with anything. Passive reception of broadcast frames is
-lawful in most jurisdictions — but "most" is not "all", and what you do with a
+lawful in most jurisdictions, but "most" is not "all", and what you do with a
 log is a separate question from how you gathered it. Check your local law.
 
 ## Credit
@@ -1192,7 +1192,7 @@ the same interest in what the radio spectrum around you is actually doing,
 pointed in the opposite direction.
 
 The concept — passive BLE plus Wi-Fi surveillance detection with a decaying
-threat score on a pocket-sized ESP32 — comes from
+threat score on a pocket-sized ESP32. Comes from
 [simeononsecurity/eye-spy](https://github.com/simeononsecurity/eye-spy)
 (Apache-2.0). Observore is an independent implementation for different hardware:
 ESP-IDF rather than Arduino, a web console rather than an RGB LED, and vendor

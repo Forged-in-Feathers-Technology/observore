@@ -13,7 +13,7 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 ```
 
 ESP-IDF loads `sdkconfig.defaults`, then `sdkconfig.defaults.<target>`
-automatically, then the board file — so a board only has to state what differs.
+automatically, then the board file, so a board only has to state what differs.
 
 Building without one gives the reference board for that chip: the XIAO
 ESP32S3, and the DevKitC-style layout for the C5 and C6.
