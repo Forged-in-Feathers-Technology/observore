@@ -43,7 +43,10 @@ import re
 import sys
 
 DOCS = ["README.md", "web/index.html"]
-STEMS = ("bootloader", "partition-table", "observore")
+# Every part a release carries. ota_data_initial joined the list when the
+# partition table became OTA-shaped; leaving it out would have meant the one
+# genuinely new offset in that change was the one nothing checked.
+STEMS = ("bootloader", "partition-table", "observore", "ota_data_initial")
 
 
 def read(path):
