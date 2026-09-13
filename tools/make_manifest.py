@@ -62,7 +62,13 @@ def main():
             build = json.load(fh)
         board = build.pop("board", None)
         if not board:
-            raise SystemExit("%s has no board name" % path)
+            raise SystemExit(
+                "%s has no board name.\n\n"
+                "It was produced before the release started building per board "
+                "rather than per chip, so it cannot say which of two boards "
+                "sharing a chip it is for. This happens when the Pages site is "
+                "rebuilt against a release older than that change: publish a "
+                "newer release, or run the workflow against one." % path)
         if args.base:
             for part in build["parts"]:
                 part["path"] = "%s/%s" % (args.base.rstrip("/"), part["path"])
