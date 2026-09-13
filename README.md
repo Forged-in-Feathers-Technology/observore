@@ -523,6 +523,10 @@ The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
 dark rather than obviously broken.
 
+The XIAO profiles are **compile-tested only** — neither board has been run.
+[docs/xiao-verification.md](docs/xiao-verification.md) lists what is unverified
+and how to check it, ordered by how likely each is to be wrong.
+
 The [browser flasher](https://observore.forgedinfeatherstechnology.com/) ships
 a build per board and asks which one you have, because it cannot tell. ESP Web
 Tools matches on chip family, which separates an S3 from a C5 and cannot
