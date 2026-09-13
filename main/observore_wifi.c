@@ -349,14 +349,35 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 #define SCAN_FAILURES_BEFORE_RESET 3
 
 static size_t s_scan_failures;
+static bool   s_restart_pending;
 
 static void scan_failed(void)
 {
     s_scan_failures++;
     esp_wifi_scan_stop();
-    if (s_scan_failures < SCAN_FAILURES_BEFORE_RESET) {
+    if (s_scan_failures >= SCAN_FAILURES_BEFORE_RESET) {
+        s_restart_pending = true;
+    }
+}
+
+/* Restart the radio between cycles rather than in the middle of one.
+ *
+ * The first version of this did it the moment the third scan failed, which
+ * meant stopping and restarting the driver from inside run_ap_scan(), which is
+ * inside the patrol cycle. Control then returned to a cycle that carried on
+ * registering a promiscuous callback and retuning channels on a driver that
+ * had been torn down and rebuilt underneath it.
+ *
+ * Nothing was proven to break, but re-entering a state machine through its own
+ * error path is the sort of thing that fails somewhere far away and much later.
+ * A pending flag costs one boolean and makes the restart happen at a point
+ * where nothing else is half-done. */
+static void apply_pending_restart(void)
+{
+    if (!s_restart_pending) {
         return;
     }
+    s_restart_pending = false;
     ESP_LOGW(TAG, "%zu scans failed in a row -- restarting the radio",
              s_scan_failures);
     s_scan_failures = 0;
@@ -885,6 +906,9 @@ void observore_wifi_patrol_cycle(void (*between)(void))
                  esp_err_to_name(berr));
     }
 #endif
+
+    /* Before anything else touches the radio this cycle. */
+    apply_pending_restart();
 
     run_ap_scan();
     if (between) {
