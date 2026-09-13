@@ -134,6 +134,26 @@
 </div>
 
 <div class="panel">
+  <h2>History <span id="histinfo" class="dim"></span></h2>
+  <p class="dim" style="margin:0 0 10px;font-size:11px">
+    Classified detections that outlive a restart. The live list above is
+    working state and empties on reboot; this is the record. Rows marked
+    <em>earlier</em> were seen before the last restart. Only things that
+    matched a signature are kept &mdash; the unidentified churn is not worth
+    the flash it would cost.
+    <a href="#" id="histclear">clear</a>
+  </p>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>class</th><th>label</th><th>mac</th><th>rssi</th><th>hits</th><th>first seen</th><th>last seen</th></tr>
+      </thead>
+      <tbody id="histrows"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
   <h2>Nearby, unidentified <span id="nearbyinfo" class="dim"></span></h2>
   <p class="dim" style="margin:0 0 10px;font-size:11px">
     Devices that matched no threat signature. Naming the vendor is usually
@@ -435,6 +455,36 @@ function renderNearby(list) {
   }
 }
 
+// An absolute stamp with no relative form, because these can be days old and
+// "4320m ago" helps nobody. Undated rows are shown as such rather than being
+// given a plausible-looking time: an entry recorded before the device ever
+// learned the clock cannot be dated afterwards, and saying so is the honest
+// answer on a device whose output is evidence.
+function stamp(iso) {
+  if (!iso) return '\u2014';
+  const d = new Date(iso);
+  if (isNaN(d)) return '\u2014';
+  return d.toLocaleString([], {month: 'short', day: 'numeric',
+                               hour: '2-digit', minute: '2-digit'});
+}
+
+function renderHistory(list) {
+  const rows = $('histrows');
+  rows.textContent = '';
+  for (const h of list) {
+    const tr = document.createElement('tr');
+    cell(tr, '', h.class);
+    cell(tr, '', h.label || '');
+    cell(tr, 'dim', h.mac);
+    cell(tr, '', h.rssi + ' dBm');
+    cell(tr, 'dim', String(h.hits));
+    cell(tr, 'dim', stamp(h.first_seen));
+    cell(tr, 'dim', stamp(h.last_seen) + (h.this_boot ? '' : ' \u00b7 earlier'));
+    rows.appendChild(tr);
+  }
+  $('histinfo').textContent = list.length ? list.length + ' kept' : 'nothing recorded yet';
+}
+
 async function refreshLive() {
   if (locked) return;
   errors.length = 0;
@@ -442,9 +492,17 @@ async function refreshLive() {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?' }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
+  renderHistory((await getJSON('/api/history', { history: [] })).history);
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString() +
     (errors.length ? ' — failed: ' + errors.join('; ') : '');
 }
+
+$('histclear').onclick = async (e) => {
+  e.preventDefault();
+  if (!confirm('Discard the stored detection history? This cannot be undone.')) return;
+  await fetch('/api/history', { method: 'POST' });
+  refreshLive();
+};
 
 // ---- configuration panels: only when something changes ------------------
 // These were polled with the live panels, re-fetching settings thirty times a

@@ -17,6 +17,7 @@
  * fall behind. */
 #define OBSERVORE_NVS_KEYS(X)                    \
     X(MUTES,      "mutes",      OBSERVORE_NVS_BLOB) \
+    X(HISTORY,    "history",    OBSERVORE_NVS_BLOB) \
     X(STA_SSID,   "sta_ssid",   OBSERVORE_NVS_STR)  \
     X(STA_PASS,   "sta_pass",   OBSERVORE_NVS_STR)  \
     X(AP_PASS,    "ap_pass",    OBSERVORE_NVS_STR)  \

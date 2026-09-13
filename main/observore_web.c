@@ -7,6 +7,7 @@
 #include "observore_netcfg.h"
 #include "observore_auth.h"
 #include "observore_clock.h"
+#include "observore_history.h"
 #include "observore_notify.h"
 #include "observore_util.h"
 #include "observore_track.h"
@@ -439,6 +440,65 @@ static esp_err_t netcfg_set_handler(httpd_req_t *req)
  * ever trips the follower heuristic. */
 #define NEARBY_MAX 40
 
+/* Discarding history is a POST, not a GET with a parameter.  A browser will
+ * prefetch, preload and retry a GET on its own, and none of those should be
+ * able to throw away the record. */
+static esp_err_t history_clear_handler(httpd_req_t *req)
+{
+    observore_history_clear();
+    return ok(req);
+}
+
+/* What the device saw before the last restart, and since.
+ *
+ * Deliberately separate from /api/devices: that reports the live table, which
+ * is working state and empties on reboot. This is the part with lasting value,
+ * and rows restored from flash are marked so the console does not present a
+ * detection from three days ago as though it were happening now. */
+static esp_err_t history_handler(httpd_req_t *req)
+{
+    static observore_history_entry_t rows[OBSERVORE_HISTORY_MAX];
+    size_t count = observore_history_copy(rows, OBSERVORE_ARRLEN(rows));
+
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, s_body, s_body_cap, 2);
+    observore_jb_printf(&jb, "{\"history\":[");
+
+    for (size_t i = 0; i < count; i++) {
+        const observore_history_entry_t *e = &rows[i];
+        char macbuf[OBSERVORE_MAC_STR_LEN];
+        char first[24] = {0}, last[24] = {0};
+        if (e->first_epoch) {
+            struct tm t;
+            time_t v = (time_t)e->first_epoch;
+            gmtime_r(&v, &t);
+            strftime(first, sizeof(first), "%Y-%m-%dT%H:%M:%SZ", &t);
+        }
+        if (e->last_epoch) {
+            struct tm t;
+            time_t v = (time_t)e->last_epoch;
+            gmtime_r(&v, &t);
+            strftime(last, sizeof(last), "%Y-%m-%dT%H:%M:%SZ", &t);
+        }
+
+        observore_jb_printf(&jb, "%s{\"mac\":\"%s\",\"class\":\"%s\",\"label\":\"",
+                            i ? "," : "", observore_mac_str(e->mac, macbuf),
+                            observore_class_name(e->cls));
+        observore_jb_escape(&jb, e->label);
+        observore_jb_printf(&jb,
+            "\",\"rssi\":%d,\"hits\":%" PRIu32 ",\"first_seen\":\"%s\","
+            "\"last_seen\":\"%s\",\"this_boot\":%s}",
+            e->rssi, e->hits, first, last,
+            e->last_us ? "true" : "false");
+
+        if (observore_jb_full(&jb)) {
+            break;
+        }
+    }
+    observore_jb_close(&jb, "]}");
+    return send_json(req, s_body);
+}
+
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
     observore_event_t *snap = s_snap;
@@ -739,6 +799,8 @@ esp_err_t observore_web_start(void)
         {"/api/status",    HTTP_GET,  status_handler,     false},
         {"/api/devices",   HTTP_GET,  devices_handler,    false},
         {"/api/nearby",    HTTP_GET,  nearby_handler,     false},
+        {"/api/history",   HTTP_GET,  history_handler,    false},
+        {"/api/history",   HTTP_POST, history_clear_handler, false},
         {"/api/clear",     HTTP_POST, clear_handler,      false},
         {"/api/mutes",     HTTP_GET,  mutes_handler,      false},
         {"/api/mute",      HTTP_POST, mute_handler,       false},

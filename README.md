@@ -852,6 +852,44 @@ this reason; if the console ever goes quiet again, read that line first.
 clear | score 0 | 0 devices | 227 sightings | 0/0 frames | heap 103687 free, 42568 min, 31744 largest
 ```
 
+## What survives a restart
+
+Mute rules, credentials and the console password always persisted. What the
+device had actually *seen* did not, so a power blip or a firmware update erased
+the whole picture — and an unexplained reboot was indistinguishable from a
+quiet night.
+
+Classified detections now survive, in the **History** panel and at
+`/api/history`. Rows carry the times they were seen and are marked *earlier*
+when they predate the current boot.
+
+What is deliberately **not** kept is the live device table. That is working
+state — 192 slots of mostly unidentified churn, rewritten constantly — and
+persisting it would cost far more flash than it is worth. Only things that
+matched a signature are recorded, which is also what keeps the write rate low
+enough to be safe.
+
+**Flash wear is the whole design constraint**, so the write policy is worth
+stating plainly:
+
+- A **new** classification is worth a write, and is rate limited to one every
+  five minutes rather than written immediately.
+- **Another sighting** of something already recorded moves a counter and a
+  timestamp, and never triggers a write on its own — it rides along with the
+  next one.
+- Opening the console forces a write, because somebody is about to read it.
+- Writes are **held back while the clock is unset**, for up to five minutes.
+  Dating is retroactive only while the monotonic timestamps live, and those die
+  with the boot: an entry written before the time is known, on a device that
+  then restarts, is undatable for ever. After the grace period an undated
+  record still beats no record, so it is written anyway.
+
+The effect is that the write rate tracks how many genuinely new things the
+device sees, which in a baselined deployment is close to zero.
+
+On-device history is a convenience, not the record. If detections matter, give
+the device an uplink and a notifier — those leave the device as they happen.
+
 ## Knowing what time it is
 
 A detector that cannot say *when* has given you half an answer. The device
