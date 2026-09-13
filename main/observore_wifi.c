@@ -161,6 +161,11 @@ static char               s_uplink_ip[16];
 static char               s_uplink_error[160];
 static bool               s_uplink_connected;
 static int                s_connect_attempts;
+/* Set while we are the ones ending the association, so the disconnect our
+ * own esp_wifi_disconnect() provokes is not recorded as the network failing.
+ * The driver reports that as ASSOC_LEAVE, not STA_LEAVING, so the reason code
+ * alone cannot tell a deliberate departure from a real one. */
+static bool               s_leaving_uplink;
 
 #define STA_BIT_GOT_IP  BIT0
 #define STA_BIT_FAILED  BIT1
@@ -537,7 +542,7 @@ static void sta_event_handler(void *arg, esp_event_base_t base, int32_t id,
          * reported reason 36 -- our own disconnect in the timeout path --
          * which says nothing about why the join actually failed. */
         s_uplink_connected = false;
-        if (e->reason != WIFI_REASON_STA_LEAVING) {
+        if (e->reason != WIFI_REASON_STA_LEAVING && !s_leaving_uplink) {
             snprintf(s_uplink_error, sizeof(s_uplink_error), "%s (reason %d)",
                      wifi_reason_text(e->reason), e->reason);
             ESP_LOGW(TAG, "uplink attempt %d/%d failed: %s",
@@ -620,6 +625,7 @@ esp_err_t observore_wifi_uplink_connect(void)
     s_uplink_error[0] = '\0';
     s_uplink_connected = false;
     s_connect_attempts = 0;
+    s_leaving_uplink   = false;
     xEventGroupClearBits(s_sta_events, STA_BIT_GOT_IP | STA_BIT_FAILED);
 
     TRY(esp_wifi_set_mode(WIFI_MODE_STA), "station mode");
@@ -644,6 +650,7 @@ esp_err_t observore_wifi_uplink_connect(void)
      * patrol scans failing with ESP_ERR_WIFI_STATE and a stale failure
      * arriving nine seconds later. */
     s_connect_attempts = STA_MAX_RETRY;
+    s_leaving_uplink   = true;
     esp_wifi_disconnect();
     ESP_LOGW(TAG, "uplink did not come up within %ds: %s",
              CONFIG_OBSERVORE_WIFI_CONNECT_TIMEOUT_S,
@@ -825,6 +832,7 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
         /* Disconnect explicitly before stopping, or the event handler retries
          * the association we are deliberately leaving. */
         s_connect_attempts = STA_MAX_RETRY;
+        s_leaving_uplink   = true;
         esp_wifi_disconnect();
     }
     s_uplink_ip[0] = '\0';
@@ -871,6 +879,7 @@ esp_err_t observore_wifi_set_mode(observore_mode_t mode)
         TRY(esp_wifi_set_mode(WIFI_MODE_STA), "station mode");
         TRY(esp_wifi_set_config(WIFI_IF_STA, &blank), "clearing the station config");
         s_connect_attempts = STA_MAX_RETRY;
+        s_leaving_uplink   = true;
         TRY(esp_wifi_start(), "wifi start");
         /* Power save must be off to sniff.  The default WIFI_PS_MIN_MODEM
          * sleeps the receiver between beacons, which on an unassociated
