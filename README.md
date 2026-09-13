@@ -441,13 +441,15 @@ every chip**, so these commands are not interchangeable:
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x0     bootloader-esp32s3.bin \
     0x8000  partition-table-esp32s3.bin \
-    0x10000 observore-esp32s3.bin
+    0x10000 ota_data_initial-esp32s3.bin \
+    0x20000 observore-esp32s3.bin
 
 # ESP32-C5 -- bootloader at 0x2000
 esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
     0x2000  bootloader-esp32c5.bin \
     0x8000  partition-table-esp32c5.bin \
-    0x10000 observore-esp32c5.bin
+    0x10000 ota_data_initial-esp32c5.bin \
+    0x20000 observore-esp32c5.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
@@ -812,18 +814,53 @@ cannot inject a field — there is a test for exactly that.
 
 ## Partition layout
 
-`partitions.csv` keeps `nvs` and `phy_init` at exactly the offsets ESP-IDF's
-`partitions_singleapp_large` used, and grows only the application partition,
-which is last. A device flashed with this table therefore keeps everything it
-has stored — the mute rules, the Wi-Fi credentials, the notifier token and its
-generated console password all live in `nvs` at `0x9000` and are untouched.
+```
+nvs        data nvs    0x9000     24K
+phy_init   data phy    0xf000      4K
+otadata    data ota    0x10000     8K
+ota_0      app  ota_0  0x20000  1984K
+ota_1      app  ota_1  0x210000 1984K
+```
 
-The old 1500 KB application partition was sized for the ESP32-S3, where the
-firmware is about 1.24 MB. The same source built for a RISC-V target is roughly
-a fifth larger — 1.49 MB on the C6 — which overflowed it by 27 KB and failed
-the build outright. Rather than trimming features to fit, the table now claims
-some of the flash that was sitting unused: it previously described 1.5 MB of an
-8 MB part.
+**The table is OTA-shaped even though OTA is not implemented**, and that is
+deliberate. The layout is the expensive part to change later: the browser
+flasher writes the partition table, so a device moving to a different layout
+would silently lose whatever moved. Settling the offsets while there are few
+devices costs nothing and means it never has to happen again.
+
+Two offsets are the actual commitment, and only two:
+
+- **`nvs` at `0x9000`** — every stored setting: mute rules, Wi-Fi credentials,
+  the notifier token, the generated console password and the detection
+  history. It is where ESP-IDF's `partitions_singleapp_large.csv` put it, which
+  is what the earliest firmware used, and it has never moved.
+- **`ota_0` at `0x20000`** — the running application.
+
+Everything else stays free. `ota_1` holds no state, so its size and position
+can change later; even growing `ota_0` is non-destructive, because the running
+app stays put and only the scratch slot shifts.
+
+With no `factory` partition and a blank `otadata`, the bootloader reports
+`No factory image, trying OTA 0` and boots `ota_0`. Upgrading an existing
+device to this table keeps everything: verified on a C5 that came back with its
+35 mute rules, its network and the same console password.
+
+Sized for a 4 MB board, the smallest supported (the C6-DevKitM-1). The
+reference C5 and C6 DevKitC-1 kits carry 8 MB and Waveshare's C5 kit 16 MB;
+those leave the remainder unused, because an image built for more flash than
+the chip has does not boot at all, while the reverse is harmless.
+
+Slot occupancy today is **C5 83%, C6 78%, S3 64%**. The C5 is the tightest and
+the fastest growing, so an overflow is plausible — but CI builds every target,
+so it fails there rather than in the field, exactly as it did when the old
+1500K partition overflowed by 27 KB.
+
+**OTA itself is deliberately not implemented.** With no image signing and an
+unencrypted console, an update path reachable over the network turns "somebody
+on your LAN has the console password" into "somebody owns this device
+permanently" — a real escalation on a device meant to detect surveillance. That
+waits on HTTPS and a decision about signing. Reserving the layout keeps the
+option open at its cheapest moment without opening the hole.
 
 ## A note on internal RAM
 

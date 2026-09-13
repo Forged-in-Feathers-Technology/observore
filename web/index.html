@@ -138,11 +138,13 @@ normally there, and reports what is new.</p>
   <pre>esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x0 bootloader-esp32s3.bin \
     0x8000 partition-table-esp32s3.bin \
-    0x10000 observore-esp32s3.bin</pre>
+    0x10000 ota_data_initial-esp32s3.bin \
+    0x20000 observore-esp32s3.bin</pre>
   <pre>esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
     0x2000 bootloader-esp32c5.bin \
     0x8000 partition-table-esp32c5.bin \
-    0x10000 observore-esp32c5.bin</pre>
+    0x10000 ota_data_initial-esp32c5.bin \
+    0x20000 observore-esp32c5.bin</pre>
 </div>
 
 <script>
