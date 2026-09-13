@@ -11,6 +11,7 @@
 #include "observore_auth.h"
 #include "observore_ble.h"
 #include "observore_clock.h"
+#include "observore_history.h"
 #include "observore_improv.h"
 #include "observore_led.h"
 #include "observore_mute.h"
@@ -90,6 +91,11 @@ static void enter_mode(observore_mode_t next)
         return;
     }
 
+    /* Somebody is about to read this, so make sure what they see is also what
+     * survives the next power cut. Forced rather than rate limited: opening
+     * the console is a deliberate act, not a timer. */
+    observore_history_flush(true);
+
     observore_web_start();
     observore_led_set_console(true);
     if (next == OBSERVORE_MODE_UPLINK) {
@@ -138,6 +144,7 @@ static observore_status_t publish(void)
     size_t n = observore_track_drain_new(found, OBSERVORE_ARRLEN(found));
     for (size_t i = 0; i < n; i++) {
         const observore_event_t *e = &found[i];
+        observore_history_note(e);
         observore_notify_event(e);
         char macbuf[OBSERVORE_MAC_STR_LEN];
         ESP_LOGW(TAG, "%-16s %s %4d dBm  via %-10s %-13s  %s%s%s",
@@ -235,6 +242,7 @@ void app_main(void)
      * for, and the times it hands back are retroactive anyway. */
     observore_clock_init();
     observore_mute_init();
+    observore_history_init();
     observore_netcfg_init();
     observore_auth_init();
     observore_notify_init();
@@ -279,6 +287,12 @@ void app_main(void)
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */
         observore_notify_pump();
+
+        /* Rate limited inside, and a no-op unless something structural
+         * changed -- a new classification, not another sighting of a device
+         * already recorded. Called every pass so the limiter, rather than this
+         * loop, decides when a write is due. */
+        observore_history_flush(false);
 
         if (now - last_heartbeat_us >= HEARTBEAT_US) {
             last_heartbeat_us = now;
