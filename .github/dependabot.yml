@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Seven third-party actions run in this repository's workflows, and between
+  # them they can flash firmware, read release assets and publish the site.
+  # Pinning them to a major tag means a compromised or simply broken release
+  # arrives silently; this makes each bump a pull request that has to pass the
+  # same eleven checks as any other change.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
