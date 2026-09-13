@@ -815,6 +815,34 @@ trailing slashes, header names, body encoding, and the priority mapping. The
 Pushover body is form-encoded, so an advertised device name containing `&`
 cannot inject a field — there is a test for exactly that.
 
+## Cutting a release
+
+```bash
+git tag v0.4.0 && git push origin v0.4.0
+```
+
+That is the whole manual part. The tag push builds every shipped target,
+collects each one's parts at the offsets its own build chose, assembles the ESP
+Web Tools manifest, and attaches the lot to a **draft** release — creating that
+draft itself if it does not already exist.
+
+Then read the notes, edit them if you like, and publish. Publishing is what
+deploys the flasher page.
+
+The order matters and is easy to get backwards:
+
+- **`gh release create --draft` does not push the tag.** The build never
+  triggers, and the only clue is an `untagged-<hash>` URL on the release page.
+  Push the tag; the workflow makes the draft.
+- **Publishing before the build finishes deploys a broken page.** `pages.yml`
+  triggers on `release: published`, while the release workflow is what uploads
+  the binaries — publish first and the site goes live pointing at assets that
+  do not exist. Draft, then build, then publish.
+- **The `github-pages` environment must allow the tag.** Deployments are
+  restricted by ref, and a release-triggered run has a tag ref rather than a
+  branch one. A `tag: v*` policy is what lets it deploy at all; without it the
+  deploy job fails before running a single step.
+
 ## Partition layout
 
 ```
