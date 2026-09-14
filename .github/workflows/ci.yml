@@ -73,6 +73,24 @@ jobs:
       - name: Documented flash offsets match this board
         run: python3 tools/check_docs_match_build.py --board ${{ matrix.board }}
 
+      # Checked against the sdkconfig the build actually produced, rather than
+      # by re-deriving the layering here: the point is what ESP-IDF resolved
+      # after the per-target defaults and the board profile, which is the thing
+      # that ends up in the image.
+      #
+      # A device updating itself picks its own image by this name, and two of
+      # these boards are the same chip. Getting it wrong installs the other
+      # board's firmware, which is the failure the board picker exists to
+      # prevent for people and this prevents for the device.
+      - name: The image knows which board it is
+        run: |
+          want='CONFIG_OBSERVORE_BOARD="${{ matrix.board }}"'
+          if ! grep -qxF "$want" sdkconfig; then
+            echo "expected $want in the generated sdkconfig, found:"
+            grep OBSERVORE_BOARD sdkconfig || echo "  nothing"
+            exit 1
+          fi
+
   # Documentation has no compiler, and this project keeps proving it: renaming
   # the release assets broke the manual flashing instructions in two documents
   # and nothing noticed for a release.  These are the parts of the prose that

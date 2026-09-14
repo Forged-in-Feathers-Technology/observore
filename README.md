@@ -1077,8 +1077,9 @@ the device an uplink and a notifier. Those leave the device as they happen.
 
 ## Knowing which firmware it is running
 
-The console header shows the running version, taken from the application
-descriptor that ESP-IDF stamps at build time. A build cut from a tag reports
+The console header shows the running version and the board it was built for,
+taken from the application descriptor that ESP-IDF stamps at build time and
+from the board identifier compiled into the image. A build cut from a tag reports
 that tag, `v0.5.0`; a build made after one reports what `git describe` says,
 `v0.5.0-3-gce8e56e`, which is a different thing and says so.
 
@@ -1099,6 +1100,14 @@ in either direction — the failure mode of a wrong yes is a device downgrading
 itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
+
+The board matters as much as the version. Two of the four boards here are
+ESP32-C5s and their images are not interchangeable, which is why the installer
+offers a picker rather than deciding from the chip. A device updating itself has
+the same problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
+`devkit-esp32c5`, `xiao-esp32c5` or `xiao-esp32c6`. CI asserts that each board's
+build resolves to its own name, checked against the `sdkconfig` the build
+actually produced rather than by re-deriving the layering.
 
 Nothing is downloaded by the check. Installing is a separate and deliberate
 act.

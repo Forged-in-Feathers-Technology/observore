@@ -140,6 +140,24 @@ config OBSERVORE_PATROL_WINDOW_S
         entirely.  So it alternates: patrol for this long, then join the
         network briefly to push what it found.
 
+config OBSERVORE_BOARD
+    string "Board identifier"
+    default ""
+    help
+        Which board this image was built for, using the same names the release
+        and the web flasher use: xiao-esp32s3, devkit-esp32c5, xiao-esp32c5,
+        xiao-esp32c6.
+
+        This is not the chip. Two of those boards are ESP32-C5s and they are not
+        interchangeable -- they differ in LED type and pin, button pin, and
+        whether the USB socket is the chip's own peripheral or a UART bridge.
+        A browser flashing over USB cannot tell them apart either, which is why
+        the installer offers a board picker rather than deciding for you.
+
+        A device updating itself has the same problem and no one to ask, so it
+        carries the answer. Left empty, the device will not install an update:
+        not knowing which image is yours is a reason to stop, not to guess.
+
 config OBSERVORE_UPDATE_URL
     string "Update manifest URL"
     default "https://observore.forgedinfeatherstechnology.com/firmware/boards.json"

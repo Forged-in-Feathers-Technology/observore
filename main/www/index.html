@@ -416,7 +416,11 @@ function renderStatus(s) {
   // Which firmware this is, said plainly. Anyone reporting a problem needs it,
   // and it is the one question a console should always be able to answer about
   // itself.
-  $('version').textContent = s.version || '';
+  // The board, not just the chip: two of the boards this runs on are the same
+  // chip and take different images, and "which board is this" is the question
+  // someone has to answer before they can flash it by hand.
+  $('version').textContent = (s.version || '') +
+    (s.board ? ' \u00b7 ' + s.board : '');
   $('version').className = 'sub' + (s.update ? ' update' : '');
   $('version').title = s.update
     ? s.latest + ' is available'
@@ -502,7 +506,7 @@ async function refreshLive() {
   errors.length = 0;
   renderStatus(await getJSON('/api/status', {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
-    version: '', latest: '', update: false }));
+    version: '', board: '', latest: '', update: false }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory((await getJSON('/api/history', { history: [] })).history);

@@ -6,3 +6,6 @@
 # compiled. 4 MB is the smallest size found on boards for this chip and leaves
 # roughly 900 KB spare; raise it if yours has more.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Which board this image is for. The chip does not say: see OBSERVORE_BOARD.
+CONFIG_OBSERVORE_BOARD="xiao-esp32c6"
