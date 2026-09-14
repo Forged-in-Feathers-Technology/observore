@@ -41,8 +41,24 @@ static int on_gap_event(struct ble_gap_event *event, void *arg)
     }
 
     const struct ble_gap_disc_desc *d = &event->disc;
+
+    /* NimBLE stores an address least significant byte first, which is the order
+     * it travels in on air. Everything else here reads a MAC the way it is
+     * written down, most significant byte first, so it has to be turned round
+     * exactly once and this is the only place that sees the raw form.
+     *
+     * Getting this wrong is quiet rather than loud: the address still looks
+     * like an address, still compares equal to itself, and still mutes
+     * correctly. What it stops is the OUI lookup, because the vendor prefix
+     * ends up in the last three bytes, so every BLE device reads as having an
+     * unknown vendor rather than as being wrong. */
+    uint8_t mac[OBSERVORE_MAC_LEN];
+    for (size_t i = 0; i < OBSERVORE_MAC_LEN; i++) {
+        mac[i] = d->addr.val[OBSERVORE_MAC_LEN - 1 - i];
+    }
+
     observore_observation_t obs = {
-        .mac         = d->addr.val,
+        .mac         = mac,
         .src         = OBSERVORE_SRC_BLE,
         .rssi        = (int8_t)d->rssi,
         .channel     = 0,
