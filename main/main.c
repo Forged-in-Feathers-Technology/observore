@@ -21,6 +21,7 @@
 #include "observore_nvs.h"
 #include "observore_util.h"
 #include "observore_notify.h"
+#include "observore_update.h"
 #include "observore_track.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
@@ -248,6 +249,7 @@ void app_main(void)
     observore_netcfg_init();
     observore_auth_init();
     observore_notify_init();
+    observore_update_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.
@@ -311,6 +313,9 @@ void app_main(void)
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */
         observore_notify_pump();
+        /* After the pump, not before: a findings digest should never wait
+         * behind a version check for the heap or the window. */
+        observore_update_check();
 
         /* Rate limited inside, and a no-op unless something structural
          * changed -- a new classification, not another sighting of a device

@@ -47,6 +47,11 @@ void observore_notify_event(const observore_event_t *ev);
  * alert that clears is not news, and reporting it doubles the traffic. */
 void observore_notify_level(observore_level_t from, observore_level_t to, uint16_t score);
 
+/* Note that a newer release exists, to be mentioned by the next digest.
+ * Announced once per version: a device that says the same thing every uplink
+ * window is one people stop reading. */
+void observore_notify_update_available(const char *version);
+
 /* Send whatever is queued, if the uplink is up.  Cheap no-op otherwise. */
 void observore_notify_pump(void);
 
