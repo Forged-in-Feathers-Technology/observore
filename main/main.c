@@ -54,6 +54,10 @@ static void enter_mode(observore_mode_t next);
 
 static int64_t s_mode_since_us;
 static int64_t s_next_uplink_try_us;
+/* Set once this boot has actually patrolled, which is half of what a new image
+ * has to do before its rollback is cancelled. */
+static bool    s_patrolled_since_boot;
+static bool    s_image_confirmed;
 static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
 
 static void enter_mode(observore_mode_t next)
@@ -310,12 +314,37 @@ void app_main(void)
             }
         }
 
+        /* Confirm a freshly installed image once it has completed a patrol
+         * cycle: it booted, brought up the radio, scanned, swept the channels
+         * and came back. An image that panics or hangs never gets here, and the
+         * RTC watchdog the bootloader armed resets it into the old one.
+         *
+         * Deliberately not waiting for the uplink, for two reasons. The first
+         * is timing: the watchdog window is bounded at 120 seconds and the
+         * first uplink is a patrol window away, so requiring it would roll back
+         * every update including the good ones -- which is exactly what
+         * happened the first time this was tested on hardware.
+         *
+         * The second is that reaching the network is a fact about the network,
+         * not about the image. An access point that is down for five minutes
+         * would revert a perfectly good update and leave the device on the old
+         * one, having learned nothing about either. */
+        if (!s_image_confirmed && s_patrolled_since_boot) {
+            observore_update_confirm();
+            s_image_confirmed = true;
+            ESP_LOGI(TAG, "image confirmed after %llds", (long long)(now / 1000000));
+        }
+
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */
         observore_notify_pump();
         /* After the pump, not before: a findings digest should never wait
          * behind a version check for the heap or the window. */
         observore_update_check();
+        /* Blocks for the whole download when one was asked for, which is
+         * deliberate: holding this loop is what stops the uplink window being
+         * torn down underneath it. */
+        observore_update_service();
 
         /* Rate limited inside, and a no-op unless something structural
          * changed -- a new classification, not another sighting of a device
@@ -394,6 +423,7 @@ void app_main(void)
             /* Blocks for the scan plus the sniff sweep.  BLE keeps running
              * underneath on the NimBLE host task throughout. */
             observore_wifi_patrol_cycle(publish_void);
+            s_patrolled_since_boot = true;
         } else {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }

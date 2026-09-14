@@ -101,3 +101,15 @@ CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 # on the C6 as well; the boards that do have PSRAM additionally route mbedTLS
 # allocations there, in their own defaults files.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# A new image gets one chance to prove itself.  Without this an update that
+# boots but cannot join the network is unrecoverable without a cable, which
+# would defeat the point of updating over the air in the first place.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# The window a new image has to prove itself before the RTC watchdog resets it
+# into the old one.  The default 9 seconds is shorter than one patrol cycle, so
+# every update would roll back, good ones included -- measured, not guessed.
+# 120000 is the maximum the bootloader accepts, and a patrol cycle completes in
+# about 35 seconds, which leaves room for a slow scan without leaving a genuinely
+# hung image running for long.
+CONFIG_BOOTLOADER_WDT_TIME_MS=120000
