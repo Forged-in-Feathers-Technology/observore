@@ -21,13 +21,19 @@ static const char *TAG = "observore.notify";
 /* Sending is done from the main loop, so a slow or unreachable server would
  * otherwise stall detection for the full TCP timeout. */
 #define HTTP_TIMEOUT_MS 5000
-/* How many queued notices to flush per pump.  More than a couple in one pass
- * would hold the loop for seconds on a slow link. */
-#define MAX_PER_PUMP 2
 
+/* One queued finding.
+ *
+ * Deliberately small. Everything queued in an uplink window is combined into a
+ * single digest, so a notice carries one list line rather than a whole message,
+ * and the queue costs about 2 KB instead of the 6.6 KB it did when each entry
+ * held its own title and a 224-character body. On a part where the internal
+ * heap has been measured at 184 bytes free, static savings are heap. */
 typedef struct {
-    char                title[OBSERVORE_NOTIFY_TITLE_LEN];
-    char                message[OBSERVORE_NOTIFY_MSG_LEN];
+    char                line[OBSERVORE_DIGEST_LINE_LEN];
+    char                cls[16];
+    uint8_t             rank;
+    int8_t              rssi;
     observore_urgency_t urgency;
 } observore_notice_t;
 
@@ -38,6 +44,11 @@ static char     s_user[OBSERVORE_NOTIFY_USER_LEN];
 static observore_provider_t s_provider = OBSERVORE_PROVIDER_GOTIFY;
 static observore_notice_t s_queue[OBSERVORE_NOTIFY_QUEUE];
 static size_t   s_head, s_count;
+/* Set when the threat level rises, consumed by the next digest. A level change
+ * is context for the findings rather than a finding of its own, so it leads the
+ * title instead of occupying a line. */
+static char     s_headline[16];
+static uint16_t s_headline_score;
 static uint32_t s_sent, s_failed, s_dropped;
 static char     s_last_error[64];
 
@@ -229,7 +240,8 @@ esp_err_t observore_notify_clear(void)
 /* Queue                                                              */
 /* ------------------------------------------------------------------ */
 
-static void enqueue(const char *title, const char *message, observore_urgency_t urgency)
+static void enqueue(const char *cls, uint8_t rank, int8_t rssi,
+                    const char *line, observore_urgency_t urgency)
 {
     LOCK();
     if (!s_url[0]) {
@@ -244,8 +256,10 @@ static void enqueue(const char *title, const char *message, observore_urgency_t 
         s_dropped++;
     }
     observore_notice_t *n = &s_queue[(s_head + s_count) % OBSERVORE_NOTIFY_QUEUE];
-    snprintf(n->title, sizeof(n->title), "%s", title);
-    snprintf(n->message, sizeof(n->message), "%s", message);
+    snprintf(n->line, sizeof(n->line), "%s", line);
+    snprintf(n->cls, sizeof(n->cls), "%s", cls ? cls : "");
+    n->rank    = rank;
+    n->rssi    = rssi;
     n->urgency = urgency;
     s_count++;
     UNLOCK();
@@ -286,32 +300,29 @@ void observore_notify_event(const observore_event_t *ev)
     if (!ev) {
         return;
     }
-    char title[OBSERVORE_NOTIFY_TITLE_LEN];
-    char msg[OBSERVORE_NOTIFY_MSG_LEN];
-
-    snprintf(title, sizeof(title), "%s detected", observore_class_name(ev->cls));
     char macbuf[OBSERVORE_MAC_STR_LEN];
-    /* When it was seen, not when it was sent.
+    char line[OBSERVORE_DIGEST_LINE_LEN];
+
+    /* One line, because it is going into a list beside other findings.
      *
-     * Notices are queued while patrolling and flushed on the next uplink
-     * window, so delivery can trail detection by twenty minutes -- and the
-     * queue exists precisely for the case where that gap is longest. A push
-     * that arrives at 03:20 saying a body camera was detected, with no
-     * indication of when, is misleading in exactly the situation it matters
-     * most. Omitted rather than guessed when the clock has never been set. */
-    char seen[24];
-    bool dated = observore_clock_iso(ev->last_seen_us, seen, sizeof(seen));
-
-    snprintf(msg, sizeof(msg), "%s%s%s\n%s %s\n%d dBm, via %s, %s%s%s",
-             ev->label,
-             ev->detail[0] ? " / " : "", ev->detail,
+     * What survives the compression is what distinguishes one finding from
+     * another: the class, the address, how close it is, and who made it. The
+     * timestamp does not -- a digest is sent within one uplink window of the
+     * detections in it, so "when" is answered by the notification's own arrival
+     * time to a far better resolution than a truncated field would manage. The
+     * device table keeps the full record either way. */
+    const char *who = ev->detail[0] ? ev->detail
+                    : (ev->vendor ? ev->vendor
+                                  : (ev->addr_random ? "random" : ""));
+    snprintf(line, sizeof(line), "%s %s %d dBm%s%s",
+             observore_class_name(ev->cls),
              observore_mac_str(ev->mac, macbuf),
-             ev->vendor ? ev->vendor : (ev->addr_random ? "(random)" : ""),
-             ev->rssi, observore_source_name(ev->src),
-             observore_evidence_name(ev->evidence),
-             dated ? "\nseen " : "", dated ? seen : "");
+             ev->rssi,
+             who && who[0] ? " " : "", who ? who : "");
 
-    enqueue(title, msg, observore_class_desc(ev->cls)->notify_urgency);
+    const observore_class_desc_t *d = observore_class_desc(ev->cls);
+    enqueue(observore_class_name(ev->cls), d->points, ev->rssi, line,
+            d->notify_urgency);
 }
 
 void observore_notify_level(observore_level_t from, observore_level_t to, uint16_t score)
@@ -319,26 +330,26 @@ void observore_notify_level(observore_level_t from, observore_level_t to, uint16
     if (to <= from) {
         return;   /* only escalation is news */
     }
-    char title[OBSERVORE_NOTIFY_TITLE_LEN];
-    char msg[OBSERVORE_NOTIFY_MSG_LEN];
-    snprintf(title, sizeof(title), "Observore: %s", observore_level_name(to));
-    snprintf(msg, sizeof(msg), "Threat level %s -> %s, score %u.",
-             observore_level_name(from), observore_level_name(to), score);
-    enqueue(title, msg, to == OBSERVORE_LEVEL_ALERT ? OBSERVORE_URGENCY_URGENT
-                                                    : OBSERVORE_URGENCY_NORMAL);
+    LOCK();
+    if (s_url[0]) {
+        snprintf(s_headline, sizeof(s_headline), "%s", observore_level_name(to));
+        s_headline_score = score;
+    }
+    UNLOCK();
 }
 
 /* ------------------------------------------------------------------ */
 /* Sending                                                            */
 /* ------------------------------------------------------------------ */
 
-static esp_err_t send_now(const observore_notice_t *n)
+static esp_err_t send_now(const char *title, const char *message,
+                          observore_urgency_t urgency)
 {
     observore_notify_request_t req;
 
     LOCK();
     bool ok = observore_notify_build(s_provider, s_url, s_token, s_user,
-                                     n->title, n->message, n->urgency, &req);
+                                     title, message, urgency, &req);
     UNLOCK();
     if (!ok) {
         snprintf(s_last_error, sizeof(s_last_error),
@@ -399,53 +410,111 @@ void observore_notify_pump(void)
         return;                       /* still backing off */
     }
 
-    for (int i = 0; i < MAX_PER_PUMP; i++) {
-        observore_notice_t notice;
-        LOCK();
-        if (s_count == 0) {
-            UNLOCK();
-            return;
-        }
-        notice = s_queue[s_head];
-        UNLOCK();
+    /* Everything queued goes in one message.
+     *
+     * The queue used to be drained a couple of notices at a time, each through
+     * its own TLS handshake and certificate bundle verification. Six findings
+     * meant six handshakes inside one thirty-second window, and the internal
+     * heap was measured at 184 bytes free doing exactly that -- eight bytes
+     * above the figure that once cost 10,019 consecutive delivery failures.
+     *
+     * One handshake carrying a ranked list costs what one handshake costs, and
+     * it is also the better report: six separate pushes for one walk past a row
+     * of parked cars is noise. */
+    /* Static, not automatic. These come to about 2.8 KB, and the main task
+     * stack is 6 KB with the TLS request struct already on it further down --
+     * the first version of this put them on the stack and the device panicked
+     * with a stack protection fault the moment an uplink window opened with
+     * four findings queued. Safe as statics because the pump runs only from the
+     * main loop, which is also the only caller of observore_notify_event(). */
+    static observore_digest_entry_t entries[OBSERVORE_NOTIFY_QUEUE];
+    static char lines[OBSERVORE_NOTIFY_QUEUE][OBSERVORE_DIGEST_LINE_LEN];
+    static char classes[OBSERVORE_NOTIFY_QUEUE][16];
+    static char headline[sizeof(s_headline)];
+    uint16_t headline_score;
+    observore_urgency_t urgency = OBSERVORE_URGENCY_LOW;
+    size_t count = 0;
 
-        if (send_now(&notice) != ESP_OK) {
-            s_failed++;
-            s_consecutive_failures++;
-            s_backoff_us = s_backoff_us ? s_backoff_us * 2 : BACKOFF_MIN_US;
-            if (s_backoff_us > BACKOFF_MAX_US) {
-                s_backoff_us = BACKOFF_MAX_US;
-            }
-            s_retry_after_us = esp_timer_get_time() + s_backoff_us;
-            /* Only the first failure of a run is worth a line. The rest say
-             * the same thing, and a log that repeats itself every couple of
-             * seconds for seven hours buries everything else the device has
-             * to say -- including whatever it was trying to report. */
-            if (s_consecutive_failures == 1) {
-                ESP_LOGW(TAG, "push failed: %s -- retrying in %llds",
-                         s_last_error, (long long)(s_backoff_us / 1000000));
-            } else {
-                ESP_LOGD(TAG, "push failed again (%" PRIu32 " in a row)",
-                         s_consecutive_failures);
-            }
-            /* Leave it queued: a later pump retries rather than losing it. */
-            return;
+    LOCK();
+    snprintf(headline, sizeof(headline), "%s", s_headline);
+    headline_score = s_headline_score;
+    for (size_t i = 0; i < s_count; i++) {
+        const observore_notice_t *n = &s_queue[(s_head + i) % OBSERVORE_NOTIFY_QUEUE];
+        snprintf(lines[count], OBSERVORE_DIGEST_LINE_LEN, "%s", n->line);
+        snprintf(classes[count], sizeof(classes[count]), "%s", n->cls);
+        entries[count].rank = n->rank;
+        entries[count].rssi = n->rssi;
+        entries[count].cls  = classes[count];
+        entries[count].line = lines[count];
+        if (n->urgency > urgency) {
+            urgency = n->urgency;
         }
-        if (s_consecutive_failures) {
-            ESP_LOGI(TAG, "notifier reachable again after %" PRIu32 " failures",
+        count++;
+    }
+    size_t queued = s_count;
+    UNLOCK();
+
+    if (count == 0 && headline[0] == '\0') {
+        return;
+    }
+
+    static char title[OBSERVORE_DIGEST_TITLE_LEN];
+    static char body[OBSERVORE_DIGEST_BODY_LEN];
+
+    if (count == 0) {
+        /* A level rose without any single finding crossing the reporting bar,
+         * which happens when a device already known gains enough sightings to
+         * move the score. Still worth saying, and it is the whole message. */
+        snprintf(title, sizeof(title), "Observore: %s", headline);
+        snprintf(body, sizeof(body), "Threat level is now %s, score %u.",
+                 headline, headline_score);
+        urgency = strcmp(headline, "alert") == 0 ? OBSERVORE_URGENCY_URGENT
+                                                 : OBSERVORE_URGENCY_NORMAL;
+    } else {
+        observore_digest_build(entries, count,
+                               headline[0] ? headline : NULL,
+                               title, sizeof(title), body, sizeof(body));
+    }
+
+    if (send_now(title, body, urgency) != ESP_OK) {
+        s_failed++;
+        s_consecutive_failures++;
+        s_backoff_us = s_backoff_us ? s_backoff_us * 2 : BACKOFF_MIN_US;
+        if (s_backoff_us > BACKOFF_MAX_US) {
+            s_backoff_us = BACKOFF_MAX_US;
+        }
+        s_retry_after_us = esp_timer_get_time() + s_backoff_us;
+        /* Only the first failure of a run is worth a line. The rest say the
+         * same thing, and a log that repeats itself every couple of seconds for
+         * seven hours buries everything else the device has to say. */
+        if (s_consecutive_failures == 1) {
+            ESP_LOGW(TAG, "push failed: %s -- retrying in %llds",
+                     s_last_error, (long long)(s_backoff_us / 1000000));
+        } else {
+            ESP_LOGD(TAG, "push failed again (%" PRIu32 " in a row)",
                      s_consecutive_failures);
         }
-        s_consecutive_failures = 0;
-        s_backoff_us = 0;
-        s_retry_after_us = 0;
-        LOCK();
-        if (s_count > 0) {
-            s_head = (s_head + 1) % OBSERVORE_NOTIFY_QUEUE;
-            s_count--;
-        }
-        UNLOCK();
-        s_sent++;
+        return;   /* everything stays queued for the next pump */
     }
+
+    if (s_consecutive_failures) {
+        ESP_LOGI(TAG, "notifier reachable again after %" PRIu32 " failures",
+                 s_consecutive_failures);
+    }
+    s_consecutive_failures = 0;
+    s_backoff_us = 0;
+    s_retry_after_us = 0;
+
+    LOCK();
+    /* Drop only what was actually in the digest. Anything detected while the
+     * message was in flight is left for the next one rather than discarded. */
+    size_t sent = queued < s_count ? queued : s_count;
+    s_head = (s_head + sent) % OBSERVORE_NOTIFY_QUEUE;
+    s_count -= sent;
+    s_headline[0] = '\0';
+    s_headline_score = 0;
+    UNLOCK();
+    s_sent++;
 }
 
 esp_err_t observore_notify_test(void)
@@ -453,11 +522,9 @@ esp_err_t observore_notify_test(void)
     if (!observore_notify_configured()) {
         return ESP_ERR_INVALID_STATE;
     }
-    observore_notice_t n = {.urgency = OBSERVORE_URGENCY_NORMAL};
-    snprintf(n.title, sizeof(n.title), "Observore test");
-    snprintf(n.message, sizeof(n.message),
-             "Notifications are working. Sent from the console.");
-    esp_err_t err = send_now(&n);
+    esp_err_t err = send_now("Observore test",
+                             "Notifications are working. Sent from the console.",
+                             OBSERVORE_URGENCY_NORMAL);
     if (err == ESP_OK) {
         s_sent++;
     } else {

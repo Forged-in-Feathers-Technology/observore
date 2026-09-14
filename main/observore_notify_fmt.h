@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Building a notification request, separated from sending one.
  *
@@ -47,6 +48,39 @@ bool observore_notify_build(observore_provider_t provider,
                             const char *title, const char *message,
                             observore_urgency_t urgency,
                             observore_notify_request_t *out);
+
+/* One finding, as it will appear in a digest.
+ *
+ * Six lines is not arbitrary. The whole request has to fit in `body` above, and
+ * Pushover is the tightest of the three: it form-encodes, which turns every
+ * colon in a MAC into %3A and every newline into %0A, so a 60-character line
+ * costs closer to 100 on the wire. Six lines plus a title and the token and
+ * user fields lands inside 768 with room to spare; eight does not. */
+#define OBSERVORE_DIGEST_MAX_LINES 6
+#define OBSERVORE_DIGEST_LINE_LEN  64
+#define OBSERVORE_DIGEST_TITLE_LEN 80
+#define OBSERVORE_DIGEST_BODY_LEN  448
+
+typedef struct {
+    uint8_t     rank;   /* class points; higher is listed first */
+    int8_t      rssi;   /* tiebreak within a rank, closest first */
+    const char *cls;    /* class name, for the census in the title */
+    const char *line;   /* the line itself */
+} observore_digest_entry_t;
+
+/* Combine findings into one title and body, ordered by rank.
+ *
+ * Sorts `entries` in place. Returns how many made it into the body; anything
+ * beyond that is accounted for by a trailing "+N more" rather than dropped
+ * silently, because a digest that quietly loses its tail is worse than one that
+ * admits to it. The title always counts everything.
+ *
+ * `headline` is optional and leads the title when present, so a level change
+ * reads as "alert: 6 findings (1 drone, 5 followers)". */
+size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
+                              const char *headline,
+                              char *title, size_t title_len,
+                              char *body, size_t body_len);
 
 const char *observore_provider_name(observore_provider_t provider);
 bool observore_provider_from_name(const char *name, observore_provider_t *out);
