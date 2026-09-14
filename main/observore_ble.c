@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
+#include "esp_bt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 
@@ -138,19 +139,43 @@ esp_err_t observore_ble_start(void)
     return ESP_OK;
 }
 
-esp_err_t observore_ble_pause(void)
+esp_err_t observore_ble_stop(void)
 {
+    /* Idle the controller before taking it apart. EALREADY means there was no
+     * scan running, which is the state wanted. */
     int rc = ble_gap_disc_cancel();
-    /* BLE_HS_EALREADY means no scan was running, which is the state we wanted. */
     if (rc != 0 && rc != BLE_HS_EALREADY) {
-        ESP_LOGW(TAG, "could not stop the BLE scan: %d", rc);
+        ESP_LOGW(TAG, "could not stop the scan before shutdown: %d", rc);
+    }
+
+    rc = nimble_port_stop();
+    if (rc != 0) {
+        ESP_LOGE(TAG, "nimble_port_stop failed: %d", rc);
         return ESP_FAIL;
     }
-    return ESP_OK;
-}
 
-esp_err_t observore_ble_resume(void)
-{
-    start_scan();
+    /* Release the controller directly rather than through nimble_port_deinit().
+     *
+     * That call reaches ble_hs_deinit(), which references ble_sm_deinit(), which
+     * is not compiled in an observer-only build -- NIMBLE_BLE_SM is gated on a
+     * connecting role and this device never connects to anything. The result is
+     * a link error rather than a runtime one, so it cannot be worked around at
+     * run time. Taking the controller down by hand frees the memory that
+     * actually matters: the host's own structures are small beside the
+     * controller's DMA-capable buffers.
+     *
+     * This is one way. Nothing restarts BLE afterwards -- a finished update
+     * reboots, and a failed one reboots too, which is why there is no resume. */
+    esp_err_t err = esp_bt_controller_disable();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "controller disable: %s", esp_err_to_name(err));
+    }
+    err = esp_bt_controller_deinit();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "controller deinit: %s", esp_err_to_name(err));
+    }
+    esp_bt_mem_release(ESP_BT_MODE_BLE);
+
+    ESP_LOGI(TAG, "BLE stopped for this boot");
     return ESP_OK;
 }

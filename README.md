@@ -13,7 +13,7 @@ for the radio signatures of body cameras, licence-plate readers, IP cameras,
 Bluetooth trackers, smart glasses and Remote ID drones, scores what it finds,
 pushes notifications, and serves the log on your network.
 
-Observer and carnivore: it eats surveillance signals.
+Observer and omnivore: it eats surveillance signals.
 
 ## Getting started
 
@@ -1110,7 +1110,55 @@ build resolves to its own name, checked against the `sdkconfig` the build
 actually produced rather than by re-deriving the layering.
 
 Nothing is downloaded by the check. Installing is a separate and deliberate
-act.
+act: the console grows an **Install update** button when there is something to
+install, and it asks for confirmation, because the device stops detecting for
+the few minutes the download takes and then restarts.
+
+### What installing actually does
+
+The image comes from the release asset host rather than from beside the
+manifest. That is not arbitrary. The flasher site sits behind a CDN that
+compresses this file and then answers range requests against the compressed
+copy while serving the decompressed one: a request for the first 4096 bytes
+comes back with 10,602, and the reported total is 906,227 against a real size
+of 1,447,536. An image assembled from those offsets is not the image.
+
+The Bluetooth stack is shut down for the duration, which frees about **24 KB**
+of internal memory. That is not a nicety. The hardware AES driver needs
+DMA-capable internal memory that `MBEDTLS_EXTERNAL_MEM_ALLOC` cannot move to
+PSRAM, and with the controller resident the TLS handshake fails with
+`esp-aes: Failed to allocate memory` before a single byte is downloaded.
+Nothing is lost by stopping it: the sniffer is already suspended on the uplink,
+so a device downloading firmware is not detecting anything either way.
+
+Stopping it is one way, for that boot. A finished update reboots, and a failed
+one reboots too, so there is no resume path to get wrong on the one code path
+that only runs when something has already gone wrong.
+
+The image is checked before it is trusted. Its descriptor is read from the
+first chunk, before anything reaches flash, and rejected unless it is the same
+project and a newer version. It is written to whichever OTA slot is not
+running, so the image that is working is never the one being overwritten.
+
+### Rollback
+
+A new image gets one chance. The bootloader arms a watchdog before handing
+over, and the image has to confirm itself or the next reset puts the old one
+back. Confirmation means completing a patrol cycle: booted, radio up, scanned,
+swept, returned. An image that panics or hangs never gets there.
+
+It deliberately does **not** wait for the network. Reaching the uplink is a
+fact about the network rather than about the image, and an access point that is
+down for five minutes would otherwise revert a perfectly good update. The
+timing also rules it out: the watchdog window is capped at 120 seconds and the
+first uplink is a patrol window away. Confirmation is measured at about 66
+seconds after boot, which leaves roughly 54 seconds of margin.
+
+This was all verified on hardware by stamping a build as an older version and
+letting a real device find, download and install the published release. It
+booted the new image from the second OTA slot, and because that release predates
+the confirmation code it never confirmed, so the watchdog reset it and the
+bootloader restored the previous image. Rollback is not theoretical here.
 
 ## Knowing what time it is
 

@@ -6,6 +6,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -269,6 +270,27 @@ static bool image_is_acceptable(esp_https_ota_handle_t h)
     return true;
 }
 
+/* Give up on a download and get the detector back.
+ *
+ * BLE was torn down to free the memory the TLS session needed, and bringing the
+ * controller back up in place is more moving parts on the one path that only
+ * runs when something has already gone wrong. A restart is the simple, total
+ * recovery: the device comes back detecting on both radios, the old image is
+ * still the one that boots, and the reason is in the log above this line.
+ *
+ * The cost is that the console loses the failure state it was showing. The log
+ * keeps it, and a device that quietly stopped watching Bluetooth would be a
+ * worse thing to leave behind than a reboot. */
+static void abandon_update(void)
+{
+    s_state    = OBSERVORE_UPDATE_FAILED;
+    s_progress = -1;
+    ESP_LOGE(TAG, "update abandoned (%s); restarting to bring BLE back",
+             s_error[0] ? s_error : "no reason recorded");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+}
+
 void observore_update_service(void)
 {
     if (s_state != OBSERVORE_UPDATE_REQUESTED) {
@@ -282,9 +304,18 @@ void observore_update_service(void)
     s_state = OBSERVORE_UPDATE_RUNNING;
     ESP_LOGW(TAG, "downloading %s", s_image_url);
 
-    /* The sniffer is already suspended on the uplink; the BLE scan is not, and
-     * it is the only other thing using the radio. */
-    observore_ble_pause();
+    /* Free what the BLE stack is holding before asking for a TLS session.
+     *
+     * The sniffer is already suspended on the uplink, so nothing is being
+     * detected during a download either way. What matters is the memory: the
+     * controller's buffers are DMA-capable internal RAM, the hardware AES driver
+     * needs the same kind, and MBEDTLS_EXTERNAL_MEM_ALLOC cannot move that to
+     * PSRAM. With the stack resident the handshake fails on "esp-aes: Failed to
+     * allocate memory" before a byte is downloaded. */
+    unsigned before = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    observore_ble_stop();
+    ESP_LOGI(TAG, "stopped BLE for the download: internal heap %u -> %u bytes",
+             before, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     esp_http_client_config_t http = {
         .url               = s_image_url,
@@ -324,16 +355,14 @@ void observore_update_service(void)
     if (err != ESP_OK || !h) {
         snprintf(s_error, sizeof(s_error), "%s", esp_err_to_name(err));
         ESP_LOGE(TAG, "update failed to start: %s", s_error);
-        s_state = OBSERVORE_UPDATE_FAILED;
-        observore_ble_resume();
+        abandon_update();
         return;
     }
 
     if (!image_is_acceptable(h)) {
         ESP_LOGE(TAG, "refusing the image: %s", s_error);
         esp_https_ota_abort(h);
-        s_state = OBSERVORE_UPDATE_FAILED;
-        observore_ble_resume();
+        abandon_update();
         return;
     }
 
@@ -353,9 +382,7 @@ void observore_update_service(void)
         snprintf(s_error, sizeof(s_error), "%s", esp_err_to_name(err));
         ESP_LOGE(TAG, "download failed: %s", s_error);
         esp_https_ota_abort(h);
-        s_state = OBSERVORE_UPDATE_FAILED;
-        s_progress = -1;
-        observore_ble_resume();
+        abandon_update();
         return;
     }
 
@@ -367,9 +394,7 @@ void observore_update_service(void)
     if (err != ESP_OK) {
         snprintf(s_error, sizeof(s_error), "%s", esp_err_to_name(err));
         ESP_LOGE(TAG, "image rejected: %s", s_error);
-        s_state = OBSERVORE_UPDATE_FAILED;
-        s_progress = -1;
-        observore_ble_resume();
+        abandon_update();
         return;
     }
 

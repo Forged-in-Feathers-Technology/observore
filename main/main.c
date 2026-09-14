@@ -314,17 +314,25 @@ void app_main(void)
             }
         }
 
-        /* Confirm a freshly installed image only once it has done the job.
+        /* Confirm a freshly installed image once it has completed a patrol
+         * cycle: it booted, brought up the radio, scanned, swept the channels
+         * and came back. An image that panics or hangs never gets here, and the
+         * RTC watchdog the bootloader armed resets it into the old one.
          *
-         * The bootloader is holding a rollback until this is called, so the bar
-         * has to be something a broken update would fail: it has patrolled, and
-         * it has reached the network. An image that boots into a crash loop, or
-         * boots but cannot join Wi-Fi, never gets here and the next reset puts
-         * the old one back. */
-        if (!s_image_confirmed && s_patrolled_since_boot &&
-            observore_wifi_uplink_connected()) {
+         * Deliberately not waiting for the uplink, for two reasons. The first
+         * is timing: the watchdog window is bounded at 120 seconds and the
+         * first uplink is a patrol window away, so requiring it would roll back
+         * every update including the good ones -- which is exactly what
+         * happened the first time this was tested on hardware.
+         *
+         * The second is that reaching the network is a fact about the network,
+         * not about the image. An access point that is down for five minutes
+         * would revert a perfectly good update and leave the device on the old
+         * one, having learned nothing about either. */
+        if (!s_image_confirmed && s_patrolled_since_boot) {
             observore_update_confirm();
             s_image_confirmed = true;
+            ESP_LOGI(TAG, "image confirmed after %llds", (long long)(now / 1000000));
         }
 
         /* Queued notices go out here, so a detection made while patrolling is
