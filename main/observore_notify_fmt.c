@@ -246,3 +246,108 @@ bool observore_notify_build(observore_provider_t provider,
             return false;
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Digests                                                            */
+/* ------------------------------------------------------------------ */
+
+/* Insertion sort, which is the right choice here rather than a concession.
+ * The queue holds at most a couple of dozen entries, the comparison is cheap,
+ * and insertion sort is stable -- so two findings of the same class and the
+ * same signal strength stay in the order they were detected, which is the only
+ * ordering left that carries any meaning. */
+static void sort_by_rank(observore_digest_entry_t *e, size_t count)
+{
+    for (size_t i = 1; i < count; i++) {
+        observore_digest_entry_t key = e[i];
+        size_t j = i;
+        while (j > 0 &&
+               (e[j - 1].rank < key.rank ||
+                (e[j - 1].rank == key.rank && e[j - 1].rssi < key.rssi))) {
+            e[j] = e[j - 1];
+            j--;
+        }
+        e[j] = key;
+    }
+}
+
+/* "1 drone, 5 followers" -- counted over everything, not just what fitted.
+ *
+ * Plurals are formed by adding an s, which is correct for every class name the
+ * device has and wrong the moment one of them ends in s. Worth revisiting then
+ * rather than now. */
+static size_t census(const observore_digest_entry_t *e, size_t count,
+                     char *out, size_t out_len)
+{
+    size_t n = 0;
+    out[0] = '\0';
+    for (size_t i = 0; i < count; i++) {
+        if (!e[i].cls) {
+            continue;
+        }
+        bool seen = false;
+        for (size_t j = 0; j < i && !seen; j++) {
+            seen = e[j].cls && strcmp(e[j].cls, e[i].cls) == 0;
+        }
+        if (seen) {
+            continue;
+        }
+        size_t tally = 0;
+        for (size_t j = 0; j < count; j++) {
+            if (e[j].cls && strcmp(e[j].cls, e[i].cls) == 0) {
+                tally++;
+            }
+        }
+        n += (size_t)snprintf(out + n, n < out_len ? out_len - n : 0,
+                              "%s%zu %s%s", n ? ", " : "", tally, e[i].cls,
+                              tally == 1 ? "" : "s");
+        if (n >= out_len) {
+            return out_len - 1;
+        }
+    }
+    return n;
+}
+
+size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
+                              const char *headline,
+                              char *title, size_t title_len,
+                              char *body, size_t body_len)
+{
+    if (!entries || !title || !body || title_len == 0 || body_len == 0) {
+        return 0;
+    }
+    title[0] = '\0';
+    body[0] = '\0';
+    if (count == 0) {
+        return 0;
+    }
+
+    sort_by_rank(entries, count);
+
+    char breakdown[OBSERVORE_DIGEST_TITLE_LEN];
+    census(entries, count, breakdown, sizeof(breakdown));
+    snprintf(title, title_len, "%s%s%zu finding%s (%s)",
+             headline ? headline : "", headline ? ": " : "",
+             count, count == 1 ? "" : "s", breakdown);
+
+    size_t written = 0, used = 0;
+    for (size_t i = 0; i < count && written < OBSERVORE_DIGEST_MAX_LINES; i++) {
+        if (!entries[i].line || !entries[i].line[0]) {
+            continue;
+        }
+        /* Reserve room for the "+N more" tail before committing to a line, so
+         * the count of what was left out cannot itself be the thing truncated. */
+        size_t need = strlen(entries[i].line) + 1;
+        if (used + need + 16 >= body_len) {
+            break;
+        }
+        used += (size_t)snprintf(body + used, body_len - used, "%s%s",
+                                 used ? "\n" : "", entries[i].line);
+        written++;
+    }
+    if (written < count) {
+        snprintf(body + used, body_len - used, "%s+%zu more",
+                 used ? "\n" : "", count - written);
+    }
+    return written;
+}

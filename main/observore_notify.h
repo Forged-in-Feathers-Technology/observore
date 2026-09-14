@@ -24,13 +24,10 @@
 #define OBSERVORE_NOTIFY_URL_LEN   128
 #define OBSERVORE_NOTIFY_TOKEN_LEN 64
 #define OBSERVORE_NOTIFY_USER_LEN  64
+/* Findings accumulate here while patrolling and leave as a single ranked digest
+ * on the next uplink window, so an entry holds one list line rather than a
+ * message of its own. See OBSERVORE_DIGEST_LINE_LEN. */
 #define OBSERVORE_NOTIFY_QUEUE     24
-#define OBSERVORE_NOTIFY_TITLE_LEN 48
-/* Raised from 160 to fit "\nseen <ISO-8601>" on the end.  A worst-case event
- * line already reached about 150 characters, so the timestamp would have been
- * silently truncated away -- losing precisely the field it was added for.
- * Costs 24 * 64 = 1.5 KB of static queue. */
-#define OBSERVORE_NOTIFY_MSG_LEN   224
 
 void observore_notify_init(void);
 

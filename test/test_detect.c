@@ -1181,6 +1181,80 @@ static void test_wps(void)
     CHECK(!observore_wps_from_ies(other, sizeof(other), &w), "a WPA element is not mistaken for WPS");
 }
 
+static void test_digest(void)
+{
+    char title[OBSERVORE_DIGEST_TITLE_LEN];
+    char body[OBSERVORE_DIGEST_BODY_LEN];
+
+    /* Ranked by class points, and within a class by signal, closest first.
+     * Deliberately handed to the builder in the wrong order. */
+    observore_digest_entry_t e[] = {
+        {1, -40, "camera",  "camera  AA:00:00:00:00:01  -40 dBm"},
+        {4, -80, "follower","follower BB:00:00:00:00:02  -80 dBm"},
+        {5, -70, "bodycam", "bodycam CC:00:00:00:00:03  -70 dBm"},
+        {4, -50, "follower","follower DD:00:00:00:00:04  -50 dBm"},
+    };
+    size_t n = observore_digest_build(e, 4, "alert",
+                                      title, sizeof(title), body, sizeof(body));
+    CHECK(n == 4, "all four findings should fit, got %zu", n);
+    CHECK(e[0].rank == 5, "bodycam outranks everything else");
+    CHECK(e[1].rank == 4 && e[1].rssi == -50,
+          "the closer follower leads the more distant one, got %d", e[1].rssi);
+    CHECK(e[2].rank == 4 && e[2].rssi == -80, "the distant follower follows");
+    CHECK(e[3].rank == 1, "camera is last, as its points say");
+
+    CHECK(strstr(title, "alert: ") == title, "headline leads the title: %s", title);
+    CHECK(strstr(title, "4 findings") != NULL, "title counts findings: %s", title);
+    CHECK(strstr(title, "1 bodycam") != NULL, "census names singular: %s", title);
+    CHECK(strstr(title, "2 followers") != NULL, "census pluralises: %s", title);
+    CHECK(strstr(body, "bodycam CC") < strstr(body, "camera  AA"),
+          "body follows the ranking");
+
+    /* More findings than a digest can carry. The tail must be accounted for,
+     * not dropped quietly. */
+    observore_digest_entry_t many[10];
+    static char lines[10][OBSERVORE_DIGEST_LINE_LEN];
+    for (size_t i = 0; i < 10; i++) {
+        snprintf(lines[i], sizeof(lines[i]),
+                 "follower EE:00:00:00:00:%02zu  -60 dBm", i);
+        many[i].rank = 4;
+        many[i].rssi = -60;
+        many[i].cls  = "follower";
+        many[i].line = lines[i];
+    }
+    n = observore_digest_build(many, 10, NULL,
+                               title, sizeof(title), body, sizeof(body));
+    CHECK(n == OBSERVORE_DIGEST_MAX_LINES,
+          "body caps at %d lines, got %zu", OBSERVORE_DIGEST_MAX_LINES, n);
+    CHECK(strstr(body, "+4 more") != NULL, "the remainder is stated: %s", body);
+    CHECK(strstr(title, "10 findings") != NULL,
+          "the title counts everything, not just what fitted: %s", title);
+    CHECK(strlen(body) < sizeof(body), "body stays inside its buffer");
+
+    /* An empty digest is not a message. */
+    CHECK(observore_digest_build(e, 0, NULL, title, sizeof(title),
+                                 body, sizeof(body)) == 0,
+          "nothing to report produces nothing");
+
+    /* The whole point of the cap: the largest digest still has to fit the
+     * tightest provider's request body after escaping. */
+    observore_notify_request_t req;
+    n = observore_digest_build(many, 10, "alert",
+                               title, sizeof(title), body, sizeof(body));
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_PUSHOVER,
+                                 "https://api.pushover.net/1/messages.json",
+                                 "abcdefghijklmnopqrstuvwxyz1234",
+                                 "uvwxyz1234abcdefghijklmnopqrst",
+                                 title, body, OBSERVORE_URGENCY_URGENT, &req),
+          "a full digest must still build a Pushover request");
+    CHECK(strstr(req.body, "%0A") != NULL,
+          "newlines survive form encoding");
+    CHECK(req.body[sizeof(req.body) - 1] == '\0', "request body is terminated");
+    CHECK(strstr(req.body, "priority=") != NULL,
+          "the priority field is not truncated away by a long digest: %zu bytes",
+          strlen(req.body));
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -1207,6 +1281,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_digest();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

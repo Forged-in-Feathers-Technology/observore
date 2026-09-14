@@ -880,6 +880,26 @@ queue holds 24 and drops the oldest when full: a detector that stops noticing
 new things because its outbox is full would be worse than one that loses the
 oldest notice. A failed send stays queued and is retried.
 
+**Everything queued arrives as one message**, with the findings listed in order
+of how much they warrant attention: body cameras and ALPR first, then followers,
+trackers, smart glasses and drones, then fleet telematics and cameras. Within a
+class the closest is listed first. The title carries the level and a census, as
+in `alert: 6 findings (1 drone, 5 followers)`, and the whole message takes the
+highest urgency present, so one body camera still arrives as urgent even when it
+is listed behind quieter entries. Six lines fit; beyond that the message ends
+with `+N more` rather than quietly losing the tail.
+
+That ordering reflects how alarming a class is given how common it is, rather
+than how surveillance-like it sounds, which is why cameras come last — a Ring
+prefix is a doorbell far more often than it is aimed at you.
+
+One message rather than one per finding is also what keeps the radio affordable.
+Each send is a TLS handshake with certificate verification, and six of those
+back to back in one thirty-second window drove the free internal heap to **184
+bytes** on a C5 — eight bytes above the level that once cost 10,019 consecutive
+delivery failures. Sending a single ranked list instead leaves that low-water
+mark at about 16 KB.
+
 The console shows sent, queued, failed and dropped counts, plus the last
 transport error — `401`/`403` is reported as a bad token or key rather than as
 a bare number.
