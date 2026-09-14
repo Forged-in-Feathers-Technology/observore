@@ -920,7 +920,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.5.0 && git push origin v0.5.0
+git tag v0.6.0 && git push origin v0.6.0
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
@@ -1313,6 +1313,21 @@ Read these before trusting it.
   accidental access, but over plain HTTP that cookie can be read by anything
   sniffing the LAN, which on Wi-Fi is any device in range holding the
   passphrase. Authentication is not a substitute for encryption.
+- **A device that is updating is not a device that is watching:** installing
+  firmware stops the Bluetooth stack and holds the uplink for the few minutes
+  the download takes, and the sniffer is already suspended there. That is
+  several minutes of not detecting anything, which is why an update is never
+  installed on the device's own initiative. It checks, it says so, and it waits
+  to be asked.
+- **A first update cannot arrive over the air:** an updater has to be running
+  before it can fetch anything, so a device on a release older than v0.6.0 has
+  to be flashed once over USB. After that it can update itself.
+- **The successful half of rollback is untested on hardware:** an image that
+  fails to confirm is demonstrably replaced by the previous one, verified by
+  installing a release that predates the confirmation code and watching the
+  watchdog put the old image back. An image that confirms and stays has only
+  been measured for timing -- 66 seconds against a 120 second window -- not
+  observed surviving a real update.
 - **Notification delivery is verified for two providers of three:** Gotify has
   been sent end to end from the device; ntfy accepted the exact request the
   firmware builds; Pushover accepted the request's shape but delivery has not
