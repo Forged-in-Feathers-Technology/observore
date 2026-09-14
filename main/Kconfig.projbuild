@@ -170,6 +170,25 @@ config OBSERVORE_UPDATE_URL
         Point it somewhere else to track your own builds. It is read over
         HTTPS and verified against the certificate bundle, like the notifiers.
 
+config OBSERVORE_UPDATE_ASSET_BASE
+    string "Release asset base URL"
+    default "https://github.com/Forged-in-Feathers-Technology/observore/releases/download"
+    help
+        Where the image itself is fetched from. The version comes from
+        OBSERVORE_UPDATE_URL; this is joined with it and the board name as
+        "<base>/<version>/observore-<board>.bin".
+
+        Deliberately not the same host as the manifest. The flasher site sits
+        behind a CDN that compresses this file and then answers range requests
+        against the compressed copy while serving the decompressed one: asking
+        for bytes 0-4095 returns 10,602 bytes and the reported total is the
+        compressed size. An image assembled from those ranges is wrong.
+
+        The release asset host answers ranges correctly, and ranges are what
+        make the download affordable -- MBEDTLS_SSL_IN_CONTENT_LEN is 8192 here,
+        half the largest TLS record, so an unbounded stream fails on the first
+        full-size record with MBEDTLS_ERR_SSL_BAD_INPUT_DATA.
+
 config OBSERVORE_UPDATE_CHECK_HOURS
     int "Hours between update checks"
     default 24

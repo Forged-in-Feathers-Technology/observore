@@ -158,6 +158,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"time_valid\":%s,\"now\":\"%s\""
         ",\"version\":\"%s\",\"board\":\"%s\""
         ",\"latest\":\"%s\",\"update\":%s"
+        ",\"update_state\":\"%s\",\"update_pct\":%d"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -167,7 +168,9 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_update_running_version(),
         CONFIG_OBSERVORE_BOARD,
         observore_update_latest_version(),
-        observore_update_available() ? "true" : "false");
+        observore_update_available() ? "true" : "false",
+        observore_update_state_name(observore_update_state()),
+        observore_update_progress());
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
@@ -737,6 +740,19 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     return ok(req);
 }
 
+static esp_err_t update_handler(httpd_req_t *req)
+{
+    esp_err_t err = observore_update_install();
+    if (err != ESP_OK) {
+        /* The reason is the useful part -- "nothing newer", "this build does
+         * not name its board" and "already running" are different problems. */
+        return fail(req, observore_update_error()[0]
+                         ? observore_update_error()
+                         : esp_err_to_name(err));
+    }
+    return ok(req);
+}
+
 static esp_err_t unauthorized(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "401 Unauthorized");
@@ -824,6 +840,7 @@ esp_err_t observore_web_start(void)
         {"/api/mute",      HTTP_POST, mute_handler,       false},
         {"/api/unmute",    HTTP_POST, unmute_handler,     false},
         {"/api/baseline",  HTTP_POST, baseline_handler,   false},
+        {"/api/update",    HTTP_POST, update_handler,     false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},

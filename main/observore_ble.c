@@ -137,3 +137,20 @@ esp_err_t observore_ble_start(void)
     nimble_port_freertos_init(host_task);
     return ESP_OK;
 }
+
+esp_err_t observore_ble_pause(void)
+{
+    int rc = ble_gap_disc_cancel();
+    /* BLE_HS_EALREADY means no scan was running, which is the state we wanted. */
+    if (rc != 0 && rc != BLE_HS_EALREADY) {
+        ESP_LOGW(TAG, "could not stop the BLE scan: %d", rc);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+esp_err_t observore_ble_resume(void)
+{
+    start_scan();
+    return ESP_OK;
+}

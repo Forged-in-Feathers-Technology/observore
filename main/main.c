@@ -54,6 +54,10 @@ static void enter_mode(observore_mode_t next);
 
 static int64_t s_mode_since_us;
 static int64_t s_next_uplink_try_us;
+/* Set once this boot has actually patrolled, which is half of what a new image
+ * has to do before its rollback is cancelled. */
+static bool    s_patrolled_since_boot;
+static bool    s_image_confirmed;
 static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
 
 static void enter_mode(observore_mode_t next)
@@ -310,12 +314,29 @@ void app_main(void)
             }
         }
 
+        /* Confirm a freshly installed image only once it has done the job.
+         *
+         * The bootloader is holding a rollback until this is called, so the bar
+         * has to be something a broken update would fail: it has patrolled, and
+         * it has reached the network. An image that boots into a crash loop, or
+         * boots but cannot join Wi-Fi, never gets here and the next reset puts
+         * the old one back. */
+        if (!s_image_confirmed && s_patrolled_since_boot &&
+            observore_wifi_uplink_connected()) {
+            observore_update_confirm();
+            s_image_confirmed = true;
+        }
+
         /* Queued notices go out here, so a detection made while patrolling is
          * delivered the next time the uplink is up rather than lost. */
         observore_notify_pump();
         /* After the pump, not before: a findings digest should never wait
          * behind a version check for the heap or the window. */
         observore_update_check();
+        /* Blocks for the whole download when one was asked for, which is
+         * deliberate: holding this loop is what stops the uplink window being
+         * torn down underneath it. */
+        observore_update_service();
 
         /* Rate limited inside, and a no-op unless something structural
          * changed -- a new classification, not another sighting of a device
@@ -394,6 +415,7 @@ void app_main(void)
             /* Blocks for the scan plus the sniff sweep.  BLE keeps running
              * underneath on the NimBLE host task throughout. */
             observore_wifi_patrol_cycle(publish_void);
+            s_patrolled_since_boot = true;
         } else {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }

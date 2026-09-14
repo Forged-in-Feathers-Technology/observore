@@ -101,3 +101,8 @@ CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 # on the C6 as well; the boards that do have PSRAM additionally route mbedTLS
 # allocations there, in their own defaults files.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# A new image gets one chance to prove itself.  Without this an update that
+# boots but cannot join the network is unrecoverable without a cable, which
+# would defeat the point of updating over the air in the first place.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

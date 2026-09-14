@@ -238,6 +238,10 @@
     <input id="value" placeholder="AA:BB:CC:DD:EE:FF">
     <button id="add">Ignore</button>
   </div>
+  <div class="add" id="updatebox" hidden>
+    <button id="install">Install update</button>
+    <span class="note" id="updatenote"></span>
+  </div>
   <div class="add">
     <button id="baseline">Set baseline</button>
     <span class="note" id="baselinenote">
@@ -421,10 +425,38 @@ function renderStatus(s) {
   // someone has to answer before they can flash it by hand.
   $('version').textContent = (s.version || '') +
     (s.board ? ' \u00b7 ' + s.board : '');
+  renderUpdate(s);
   $('version').className = 'sub' + (s.update ? ' update' : '');
   $('version').title = s.update
     ? s.latest + ' is available'
     : (s.latest ? 'latest published is ' + s.latest : '');
+}
+
+// Only shown when there is something to do or something happening. A button
+// that is present but refuses to work is worse than one that is not there.
+function renderUpdate(s) {
+  const busy = s.update_state === 'requested' || s.update_state === 'running' ||
+               s.update_state === 'rebooting';
+  $('updatebox').hidden = !(s.update || busy || s.update_state === 'failed');
+  $('install').disabled = busy || !s.update;
+
+  if (s.update_state === 'running') {
+    $('updatenote').textContent = s.update_pct >= 0
+      ? 'Downloading ' + s.latest + ' \u2014 ' + s.update_pct + '%'
+      : 'Downloading ' + s.latest;
+  } else if (s.update_state === 'requested') {
+    $('updatenote').textContent =
+      'Waiting for the next uplink window. Detection is paused while it downloads.';
+  } else if (s.update_state === 'rebooting') {
+    $('updatenote').textContent = 'Installed. Restarting into ' + s.latest + '.';
+  } else if (s.update_state === 'failed') {
+    $('updatenote').textContent = 'Update failed. The device is still running ' +
+      s.version + '.';
+  } else if (s.update) {
+    $('updatenote').textContent = s.latest + ' is available. Downloading takes a ' +
+      'few minutes, during which the device is not detecting anything, and it ' +
+      'restarts afterwards.';
+  }
 }
 
 function renderDevices(list) {
@@ -506,7 +538,8 @@ async function refreshLive() {
   errors.length = 0;
   renderStatus(await getJSON('/api/status', {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
-    version: '', board: '', latest: '', update: false }));
+    version: '', board: '', latest: '', update: false,
+    update_state: 'idle', update_pct: -1 }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory((await getJSON('/api/history', { history: [] })).history);
@@ -623,6 +656,32 @@ $('clear').addEventListener('click', () => post('/api/clear'));
 $('logout').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   showLogin(true);
+});
+
+$('install').addEventListener('click', async () => {
+  const b = $('install');
+  // Confirmed once, like the baseline button, for the same reason: it stops
+  // the detector for several minutes and then reboots it.
+  if (b.dataset.armed !== '1') {
+    b.dataset.armed = '1';
+    b.textContent = 'Confirm install';
+    b.classList.add('warn');
+    setTimeout(() => {
+      b.dataset.armed = '';
+      b.textContent = 'Install update';
+      b.classList.remove('warn');
+    }, 5000);
+    return;
+  }
+  b.dataset.armed = '';
+  b.textContent = 'Install update';
+  b.classList.remove('warn');
+  b.disabled = true;
+  const out = await fetch('/api/update', { method: 'POST' }).then(r => r.json());
+  if (!out.ok) {
+    $('updatenote').textContent = out.error || 'could not start the update';
+    b.disabled = false;
+  }
 });
 
 $('baseline').addEventListener('click', async () => {

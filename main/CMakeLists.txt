@@ -33,6 +33,7 @@ idf_component_register(
         esp_http_client
         esp_wifi
         app_update
+        esp_https_ota
         nvs_flash
 )
 
