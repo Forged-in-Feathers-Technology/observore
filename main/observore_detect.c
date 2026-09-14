@@ -91,6 +91,26 @@ static const observore_keyword_t SSID_KEYWORDS[] = {
     {"amcrest",   OBSERVORE_CLASS_CAMERA, "Amcrest"},
     {"wyzecam",   OBSERVORE_CLASS_CAMERA, "Wyze"},
     {"ring-",     OBSERVORE_CLASS_CAMERA, "Ring"},
+    /* Seen on hardware: a UniFi camera in factory setup mode broadcasts
+     * "Setup UVC G3 Micro (6AEB)", which matched nothing here and was reported
+     * only by the follower heuristic.  UVC is UniFi Video Camera. */
+    {"uvc",       OBSERVORE_CLASS_CAMERA, "UniFi camera"},
+    {"foscam",    OBSERVORE_CLASS_CAMERA, "Foscam"},
+    {"lorex",     OBSERVORE_CLASS_CAMERA, "Lorex"},
+    {"swann",     OBSERVORE_CLASS_CAMERA, "Swann"},
+
+    /* Drones announce themselves on their control access point.  Remote ID
+     * catches them over BLE, but only while they are transmitting it; the
+     * control link is up from the moment the aircraft is powered on.
+     *
+     * Also seen on hardware: "HolyStoneGIM-b79437D", alongside a Remote ID
+     * beacon the BLE path did catch. */
+    {"holystone", OBSERVORE_CLASS_DRONE,  "HolyStone"},
+    {"dji-",      OBSERVORE_CLASS_DRONE,  "DJI"},
+    {"mavic",     OBSERVORE_CLASS_DRONE,  "DJI Mavic"},
+    {"tello-",    OBSERVORE_CLASS_DRONE,  "DJI Tello"},
+    {"autel",     OBSERVORE_CLASS_DRONE,  "Autel"},
+    {"skydio",    OBSERVORE_CLASS_DRONE,  "Skydio"},
 };
 
 /* ------------------------------------------------------------------ */

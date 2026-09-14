@@ -1181,6 +1181,58 @@ static void test_wps(void)
     CHECK(!observore_wps_from_ies(other, sizeof(other), &w), "a WPA element is not mistaken for WPS");
 }
 
+/* The two names that were actually in the air when this device failed to
+ * classify them, plus the substring hazard that kept a third keyword out. */
+static void test_name_keywords(void)
+{
+    banner("ssid keywords: names seen on hardware");
+
+    char label[24];
+
+    CHECK(observore_ssid_is_suspicious("Setup UVC G3 Micro (6AEB)",
+                                       label, sizeof(label)),
+          "a UniFi camera in setup mode should match");
+    CHECK(strcmp(label, "UniFi camera") == 0,
+          "labelled by what it is, got '%s'", label);
+
+    CHECK(observore_ssid_is_suspicious("HolyStoneGIM-b79437D",
+                                       label, sizeof(label)),
+          "a HolyStone control link should match");
+    CHECK(strcmp(label, "HolyStone") == 0, "got '%s'", label);
+
+    /* The class matters as much as the match: a camera reported as a drone
+     * would rank in the wrong place in a digest. */
+    const uint8_t bssid[6] = {0xB6, 0xFB, 0xE4, 0x7E, 0x6A, 0xEB};
+    observore_observation_t obs = {
+        .mac = bssid, .src = OBSERVORE_SRC_WIFI_SNIFF, .rssi = -37,
+        .ssid = "Setup UVC G3 Micro (6AEB)",
+    };
+    observore_event_t ev;
+    CHECK(observore_classify(&obs, &ev), "the camera should classify");
+    CHECK(ev.cls == OBSERVORE_CLASS_CAMERA,
+          "UVC is a camera, got class %d", (int)ev.cls);
+
+    obs.ssid = "HolyStoneGIM-b79437D";
+    CHECK(observore_classify(&obs, &ev), "the drone should classify");
+    CHECK(ev.cls == OBSERVORE_CLASS_DRONE,
+          "HolyStone is a drone, got class %d", (int)ev.cls);
+
+    /* Matching is case insensitive, which is why the table is lower case. */
+    CHECK(observore_ssid_is_suspicious("setup uvc g3 micro", label, sizeof(label)),
+          "lower case matches too");
+    CHECK(observore_ssid_is_suspicious("DJI-Mini3Pro-1a2b", label, sizeof(label)),
+          "an anchored DJI prefix matches");
+
+    /* "arlo" was left out on purpose: it is a substring of ordinary words, and
+     * a keyword that fires on somebody's name is worse than a missing brand. */
+    CHECK(!observore_ssid_is_suspicious("Carlos iPhone", label, sizeof(label)),
+          "a personal SSID must not be read as a camera");
+    CHECK(!observore_ssid_is_suspicious("Camden House", label, sizeof(label)),
+          "nor must a place name");
+    CHECK(!observore_ssid_is_suspicious("BT-HomeHub-8823", label, sizeof(label)),
+          "nor an ordinary router");
+}
+
 static void test_digest(void)
 {
     char title[OBSERVORE_DIGEST_TITLE_LEN];
@@ -1281,6 +1333,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_name_keywords();
     test_digest();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
