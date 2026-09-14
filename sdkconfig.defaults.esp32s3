@@ -24,3 +24,6 @@ CONFIG_SPIRAM_SPEED_80M=y
 # Only set for targets whose modules carry PSRAM. The C6 has none, so it keeps
 # the default allocator and its own smaller TLS ceiling.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# Which board this image is for. The chip does not say: see OBSERVORE_BOARD.
+CONFIG_OBSERVORE_BOARD="xiao-esp32s3"

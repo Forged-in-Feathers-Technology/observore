@@ -156,7 +156,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
         ",\"mode\":\"%s\",\"muted\":%zu,\"suppressed\":%" PRIu32
         ",\"time_valid\":%s,\"now\":\"%s\""
-        ",\"version\":\"%s\",\"latest\":\"%s\",\"update\":%s"
+        ",\"version\":\"%s\",\"board\":\"%s\""
+        ",\"latest\":\"%s\",\"update\":%s"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -164,6 +165,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_mute_count(), observore_mute_suppressed(),
         observore_clock_valid() ? "true" : "false", now_iso,
         observore_update_running_version(),
+        CONFIG_OBSERVORE_BOARD,
         observore_update_latest_version(),
         observore_update_available() ? "true" : "false");
 

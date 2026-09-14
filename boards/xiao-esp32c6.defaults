@@ -10,3 +10,6 @@ CONFIG_OBSERVORE_LED_MONO=y
 CONFIG_OBSERVORE_LED_GPIO=15
 CONFIG_OBSERVORE_LED_ACTIVE_LOW=y
 CONFIG_OBSERVORE_BUTTON_GPIO=9
+
+# Overrides the per-target default, which names the other board on this chip.
+CONFIG_OBSERVORE_BOARD="xiao-esp32c6"

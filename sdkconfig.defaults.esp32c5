@@ -54,3 +54,6 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # Only set for targets whose modules carry PSRAM. The C6 has none, so it keeps
 # the default allocator and its own smaller TLS ceiling.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# Which board this image is for. The chip does not say: see OBSERVORE_BOARD.
+CONFIG_OBSERVORE_BOARD="devkit-esp32c5"
