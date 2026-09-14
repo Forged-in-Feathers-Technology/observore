@@ -165,6 +165,13 @@ SSID, and unlike an SSID it is allowed to override the vendor prefix. An SSID
 is free text somebody chose; a WPS element is firmware describing its own
 hardware.
 
+How much this helps depends on what is around you, and it can be nothing at
+all. Counting the vendor elements in 150 beacons from about 30 access points in
+one flat found 450 of them and not a single WPS element among them. Ubiquiti
+access points do not advertise it, and neither did anything else in range.
+Where the element is absent the vendor prefix is all there is, so treat a
+manufacturer string as a bonus rather than something to rely on.
+
 The fields arrive in a frame from a device under nobody's control, so they are
 length checked, bounds checked and stripped to printable characters before
 reaching a log line, a JSON response or the console. The parser is
@@ -893,7 +900,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.4.0 && git push origin v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
@@ -1184,6 +1191,11 @@ Read these before trusting it.
   sniffer sweeps channels 1–13 and nothing above them. A C5 sweeps 5 GHz as
   well, but a slice per cycle rather than all of it at once, so a 5 GHz device
   takes longer to appear than a 2.4 GHz one.
+- **WPS is frequently not broadcast at all:** the manufacturer and model
+  reading is only as good as the access points near you, and many modern ones
+  never send the element. A survey of 150 beacons in one flat found none. The
+  parser is unit tested against malformed and hostile input, but its attribute
+  decoding has not yet met a real WPS element on air, only synthetic ones.
 - **Vendor lookup covers MA-L only:** the IEEE also issues smaller MA-M and
   MA-S blocks, which the generator does not read, so some genuinely assigned
   prefixes resolve to nothing. A miss is reported as unknown rather than
