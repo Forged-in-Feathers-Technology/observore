@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "observore_detect.h"
+#include "observore_version.h"
 #include "observore_mute.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
@@ -1183,6 +1184,70 @@ static void test_wps(void)
 
 /* The two names that were actually in the air when this device failed to
  * classify them, plus the substring hazard that kept a third keyword out. */
+static void test_version(void)
+{
+    banner("firmware versions");
+
+    observore_version_t v;
+    CHECK(observore_version_parse("v0.5.0", &v), "a plain tag should parse");
+    CHECK(v.major == 0 && v.minor == 5 && v.patch == 0, "0.5.0 read wrong");
+    CHECK(!v.dev, "a tag is not a dev build");
+
+    /* What ESP-IDF actually stamps into a build made after the tag. */
+    CHECK(observore_version_parse("v0.5.0-3-gce8e56e", &v), "git describe form");
+    CHECK(v.major == 0 && v.minor == 5 && v.patch == 0, "numbers survive the suffix");
+    CHECK(v.dev, "a suffix marks a build after the tag");
+
+    CHECK(observore_version_parse("0.5.0", &v), "the v is optional");
+    CHECK(!observore_version_parse("", &v), "empty is not a version");
+    CHECK(!observore_version_parse("garbage", &v), "nor is a word");
+    CHECK(!observore_version_parse("v1.2", &v), "nor is a two-part number");
+    CHECK(!observore_version_parse(NULL, &v), "nor is nothing at all");
+
+    /* The direction that matters: an update is only offered when it goes up. */
+    CHECK(observore_version_is_newer("v0.6.0", "v0.5.0"), "minor bump is newer");
+    CHECK(observore_version_is_newer("v0.5.1", "v0.5.0"), "patch bump is newer");
+    CHECK(observore_version_is_newer("v1.0.0", "v0.9.9"), "major bump is newer");
+    CHECK(!observore_version_is_newer("v0.5.0", "v0.5.0"), "same is not newer");
+    CHECK(!observore_version_is_newer("v0.4.0", "v0.5.0"),
+          "an older release must never be offered as an update");
+    CHECK(!observore_version_is_newer("v0.9.9", "v1.0.0"),
+          "9 does not outrank 10 in a component-wise compare");
+
+    /* A device running a build cut after the tag is ahead of that tag, so the
+     * published release must not be offered back to it as an upgrade. */
+    CHECK(!observore_version_is_newer("v0.5.0", "v0.5.0-3-gce8e56e"),
+          "a dev build is ahead of the tag it came from");
+    CHECK(observore_version_is_newer("v0.6.0", "v0.5.0-3-gce8e56e"),
+          "but a real new release still is newer");
+
+    /* Anything unreadable means no update, never a guess. */
+    CHECK(!observore_version_is_newer("not-a-version", "v0.5.0"), "unreadable remote");
+    CHECK(!observore_version_is_newer("v9.9.9", "not-a-version"), "unreadable local");
+
+    /* Reading the version out of the boards.json this project publishes. */
+    const char *doc =
+        "{\"version\":\"v0.5.0\",\"boards\":["
+        "{\"id\":\"xiao-esp32s3\",\"manifest\":\"manifest-xiao-esp32s3.json\"}]}";
+    char buf[32];
+    CHECK(observore_json_string_field(doc, "version", buf, sizeof(buf)),
+          "version field should be found");
+    CHECK(strcmp(buf, "v0.5.0") == 0, "got '%s'", buf);
+    CHECK(observore_json_string_field(doc, "manifest", buf, sizeof(buf)),
+          "a nested key is still findable by name");
+    CHECK(!observore_json_string_field(doc, "absent", buf, sizeof(buf)),
+          "a missing key is a miss, not a crash");
+    CHECK(!observore_json_string_field("{\"version\":123}", "version",
+                                       buf, sizeof(buf)),
+          "a number is not a version string");
+    CHECK(!observore_json_string_field("{\"version\":\"unterminated",
+                                       "version", buf, sizeof(buf)),
+          "an unterminated string must not run off the document");
+    char tiny[4];
+    CHECK(!observore_json_string_field(doc, "version", tiny, sizeof(tiny)),
+          "a value that does not fit is a miss, not a truncation");
+}
+
 static void test_name_keywords(void)
 {
     banner("ssid keywords: names seen on hardware");
@@ -1333,6 +1398,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_version();
     test_name_keywords();
     test_digest();
 

@@ -140,6 +140,31 @@ config OBSERVORE_PATROL_WINDOW_S
         entirely.  So it alternates: patrol for this long, then join the
         network briefly to push what it found.
 
+config OBSERVORE_UPDATE_URL
+    string "Update manifest URL"
+    default "https://observore.forgedinfeatherstechnology.com/firmware/boards.json"
+    help
+        The document the device reads to learn what the current release is.
+        This is the same file the web flasher uses, so a release that is
+        installable is by definition one the device can see, and there is no
+        second piece of infrastructure to keep in step.
+
+        Point it somewhere else to track your own builds. It is read over
+        HTTPS and verified against the certificate bundle, like the notifiers.
+
+config OBSERVORE_UPDATE_CHECK_HOURS
+    int "Hours between update checks"
+    default 24
+    range 1 168
+    help
+        Checking costs a TLS handshake in an uplink window, which is the most
+        memory-constrained moment this device has. Once a day is plenty for
+        a project that releases every few weeks, and it keeps that cost away
+        from the windows where notifications need the heap.
+
+        Set to 0 hours is not offered: use the console if you want to check
+        immediately.
+
 config OBSERVORE_UPLINK_WINDOW_S
     int "Seconds spent on the uplink before returning to patrol"
     default 30

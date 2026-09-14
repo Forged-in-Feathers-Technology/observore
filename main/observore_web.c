@@ -11,6 +11,7 @@
 #include "observore_notify.h"
 #include "observore_util.h"
 #include "observore_track.h"
+#include "observore_update.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
 #include "esp_heap_caps.h"
@@ -155,12 +156,16 @@ static esp_err_t status_handler(httpd_req_t *req)
         "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
         ",\"mode\":\"%s\",\"muted\":%zu,\"suppressed\":%" PRIu32
         ",\"time_valid\":%s,\"now\":\"%s\""
+        ",\"version\":\"%s\",\"latest\":\"%s\",\"update\":%s"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
         observore_mode_name(observore_wifi_mode()),
         observore_mute_count(), observore_mute_suppressed(),
-        observore_clock_valid() ? "true" : "false", now_iso);
+        observore_clock_valid() ? "true" : "false", now_iso,
+        observore_update_running_version(),
+        observore_update_latest_version(),
+        observore_update_available() ? "true" : "false");
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",

@@ -19,6 +19,9 @@
   header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
   h1 { font-size: 18px; margin: 0; letter-spacing: 0.12em; text-transform: uppercase; }
   .sub { color: var(--dim); font-size: 12px; }
+  /* An available update is worth noticing without being an alert: the device
+     is working fine, there is simply a newer build. */
+  .sub.update { color: #c96a00; font-weight: 600; }
   .banner {
     border: 1px solid var(--line); border-left-width: 4px;
     background: var(--panel); border-radius: 6px;
@@ -108,6 +111,7 @@
 <header>
   <h1>Observore</h1>
   <span class="sub" id="uptime"></span>
+  <span class="sub" id="version"></span>
 </header>
 
 <div class="banner clear" id="banner">
@@ -409,6 +413,14 @@ function renderStatus(s) {
   // quietly show only "4m ago" and leaving the reader to wonder why.
   $('uptime').textContent = 'up ' + ago(s.uptime_s) +
     (s.time_valid ? '' : ' \u00b7 clock not set');
+  // Which firmware this is, said plainly. Anyone reporting a problem needs it,
+  // and it is the one question a console should always be able to answer about
+  // itself.
+  $('version').textContent = s.version || '';
+  $('version').className = 'sub' + (s.update ? ' update' : '');
+  $('version').title = s.update
+    ? s.latest + ' is available'
+    : (s.latest ? 'latest published is ' + s.latest : '');
 }
 
 function renderDevices(list) {
@@ -489,7 +501,8 @@ async function refreshLive() {
   if (locked) return;
   errors.length = 0;
   renderStatus(await getJSON('/api/status', {
-    level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?' }));
+    level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
+    version: '', latest: '', update: false }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory((await getJSON('/api/history', { history: [] })).history);

@@ -49,6 +49,8 @@ static size_t   s_head, s_count;
  * title instead of occupying a line. */
 static char     s_headline[16];
 static uint16_t s_headline_score;
+/* A version worth mentioning, cleared once it has been. */
+static char     s_update_version[24];
 static uint32_t s_sent, s_failed, s_dropped;
 static char     s_last_error[64];
 
@@ -400,6 +402,18 @@ static esp_err_t send_now(const char *title, const char *message,
     return ESP_OK;
 }
 
+void observore_notify_update_available(const char *version)
+{
+    if (!version || !*version) {
+        return;
+    }
+    LOCK();
+    if (s_url[0]) {
+        snprintf(s_update_version, sizeof(s_update_version), "%s", version);
+    }
+    UNLOCK();
+}
+
 void observore_notify_pump(void)
 {
     if (!observore_notify_configured() ||
@@ -431,12 +445,14 @@ void observore_notify_pump(void)
     static char lines[OBSERVORE_NOTIFY_QUEUE][OBSERVORE_DIGEST_LINE_LEN];
     static char classes[OBSERVORE_NOTIFY_QUEUE][16];
     static char headline[sizeof(s_headline)];
+    static char update_version[sizeof(s_update_version)];
     uint16_t headline_score;
     observore_urgency_t urgency = OBSERVORE_URGENCY_LOW;
     size_t count = 0;
 
     LOCK();
     snprintf(headline, sizeof(headline), "%s", s_headline);
+    snprintf(update_version, sizeof(update_version), "%s", s_update_version);
     headline_score = s_headline_score;
     for (size_t i = 0; i < s_count; i++) {
         const observore_notice_t *n = &s_queue[(s_head + i) % OBSERVORE_NOTIFY_QUEUE];
@@ -454,14 +470,22 @@ void observore_notify_pump(void)
     size_t queued = s_count;
     UNLOCK();
 
-    if (count == 0 && headline[0] == '\0') {
+    if (count == 0 && headline[0] == '\0' && update_version[0] == '\0') {
         return;
     }
 
     static char title[OBSERVORE_DIGEST_TITLE_LEN];
     static char body[OBSERVORE_DIGEST_BODY_LEN];
 
-    if (count == 0) {
+    if (count == 0 && headline[0] == '\0') {
+        /* Nothing detected, but a release appeared. Worth one message: a device
+         * that only mentions updates alongside findings would stay quiet
+         * forever in exactly the place it is working best. */
+        snprintf(title, sizeof(title), "Observore: %s available", update_version);
+        snprintf(body, sizeof(body),
+                 "A newer firmware is published. Install it from the console.");
+        urgency = OBSERVORE_URGENCY_LOW;
+    } else if (count == 0) {
         /* A level rose without any single finding crossing the reporting bar,
          * which happens when a device already known gains enough sightings to
          * move the score. Still worth saying, and it is the whole message. */
@@ -474,6 +498,19 @@ void observore_notify_pump(void)
         observore_digest_build(entries, count,
                                headline[0] ? headline : NULL,
                                title, sizeof(title), body, sizeof(body));
+    }
+
+    /* Appended rather than ranked among the findings: an available update is
+     * not a thing that was detected, and it must never displace one that was.
+     * Dropped silently if the body is already full, because the console carries
+     * the same information and a truncated finding would not. */
+    if (update_version[0]) {
+        size_t used = strlen(body);
+        int need = snprintf(NULL, 0, "\n%s available", update_version);
+        if (used + (size_t)need + 1 < sizeof(body)) {
+            snprintf(body + used, sizeof(body) - used, "\n%s available",
+                     update_version);
+        }
     }
 
     if (send_now(title, body, urgency) != ESP_OK) {
@@ -513,6 +550,11 @@ void observore_notify_pump(void)
     s_count -= sent;
     s_headline[0] = '\0';
     s_headline_score = 0;
+    /* Only if it was the version this message actually carried: a check that
+     * found a newer one while this was in flight must still be announced. */
+    if (strcmp(s_update_version, update_version) == 0) {
+        s_update_version[0] = '\0';
+    }
     UNLOCK();
     s_sent++;
 }

@@ -1075,6 +1075,34 @@ device sees, which in a baselined deployment is close to zero.
 On-device history is a convenience, not the record. If detections matter, give
 the device an uplink and a notifier. Those leave the device as they happen.
 
+## Knowing which firmware it is running
+
+The console header shows the running version, taken from the application
+descriptor that ESP-IDF stamps at build time. A build cut from a tag reports
+that tag, `v0.5.0`; a build made after one reports what `git describe` says,
+`v0.5.0-3-gce8e56e`, which is a different thing and says so.
+
+It also checks, once a day by default, whether a newer release has been
+published. The document it reads is `firmware/boards.json` — the same file the
+web flasher uses, so anything installable is by definition visible to the
+device, and there is no second piece of infrastructure to keep in step. The
+check runs inside an uplink window the device was going to open anyway, and it
+runs *after* the notification queue has been sent, so a findings digest never
+waits behind a version check for memory or for airtime.
+
+A newer version is mentioned once, on the end of the next digest, and shown in
+the console until it is installed. Once per version, not once per window: a
+device that repeats itself is one people stop reading.
+
+The comparison refuses to guess. A version it cannot parse means no update,
+in either direction — the failure mode of a wrong yes is a device downgrading
+itself, so an unreadable answer is treated as no answer. A build made after a
+tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
+offered `v0.5.0` as an upgrade.
+
+Nothing is downloaded by the check. Installing is a separate and deliberate
+act.
+
 ## Knowing what time it is
 
 A detector that cannot say *when* has given you half an answer. The device
