@@ -943,6 +943,61 @@ own network costs no handshake at all, which on this device is the entire
 expense of sending a notification. A Gotify or ntfy on the LAN over `http://`
 gets the same saving.
 
+#### Home Assistant
+
+Home Assistant accepts webhooks with no authentication beyond the id itself,
+which makes it the simplest thing to point Observore at and also means the id
+is a secret: make it long and random. Create an automation with a webhook
+trigger, either in the UI or as YAML:
+
+```yaml
+alias: Observore findings
+triggers:
+  - trigger: webhook
+    webhook_id: observore-7f3a9c2e51b8d4
+    allowed_methods:
+      - POST
+    local_only: true
+actions:
+  - action: notify.mobile_app_your_phone
+    data:
+      title: "{{ trigger.json.title }}"
+      message: "{{ trigger.json.message }}"
+      data:
+        priority: "{{ 'high' if trigger.json.urgency in ['high', 'urgent'] else 'normal' }}"
+```
+
+`local_only` refuses the webhook from outside your network, which is where the
+device is anyway. Then in Observore's console choose **Webhook** and enter:
+
+```
+http://192.168.1.10:8123/api/webhook/observore-7f3a9c2e51b8d4
+```
+
+Use the address, not `homeassistant.local`: mDNS is link-local and often does
+not cross from an IoT VLAN. Leave the token blank; Home Assistant ignores it.
+Press **Send test** while the device is on the uplink and the automation
+should fire once with the title `Observore test`.
+
+The four fields are all available as `trigger.json.<name>`. `urgency` is
+`low`, `normal`, `high` or `urgent`, so a condition on it can route a
+`bodycam` digest to a different notifier than a quiet `follower` one, or
+switch on a light, or anything else an automation can do — which is the
+point of sending to Home Assistant rather than to a phone directly.
+
+Expect a POST at most once every few minutes and only when there is something
+to say. The device is off the network while patrolling, and findings are
+combined into one message per uplink window.
+
+#### Anything else that takes a POST
+
+The same body works for **n8n** and **Node-RED** webhook nodes as-is, and for
+**Apprise** through its API, which can then fan out to whatever it supports.
+**Discord** and **Slack** want a specific field name — `content` and `text`
+respectively — so put a small relay in between, or use one of the above to
+forward. Observore does not send the message under three names at once
+because the request would not fit.
+
 ### Telegram
 
 Token is the bot token, the second credential is the chat id. The token forms
