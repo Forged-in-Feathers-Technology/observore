@@ -12,6 +12,7 @@ idf_component_register(
         "observore_notify_fmt.c"
         "observore_version.c"
         "observore_update.c"
+        "observore_heapwatch.c"
         "observore_ble.c"
         "observore_wifi.c"
         "observore_web.c"

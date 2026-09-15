@@ -112,6 +112,7 @@
   <h1>Observore</h1>
   <span class="sub" id="uptime"></span>
   <span class="sub" id="version"></span>
+  <span class="sub" id="heap" title="internal RAM: free now, and the lowest it has been since boot"></span>
 </header>
 
 <div class="banner clear" id="banner">
@@ -426,6 +427,7 @@ function renderStatus(s) {
   $('version').textContent = (s.version || '') +
     (s.board ? ' \u00b7 ' + s.board : '');
   renderUpdate(s);
+  renderHeap(s.heap);
   $('version').className = 'sub' + (s.update ? ' update' : '');
   $('version').title = s.update
     ? s.latest + ' is available'
@@ -457,6 +459,20 @@ function renderUpdate(s) {
       'few minutes, during which the device is not detecting anything, and it ' +
       'restarts afterwards.';
   }
+}
+
+// The low-water mark alone is a puzzle; the moment it happened is a lead. Say
+// both, and say when nothing has dropped yet rather than showing zeros.
+function renderHeap(h) {
+  if (!h) { $('heap').textContent = ''; return; }
+  let t = 'RAM ' + Math.round(h.free / 1024) + ' KB free, low ' +
+          Math.round(h.min / 1024) + ' KB';
+  if (h.min_at_s >= 0) {
+    t += ' at ' + ago(h.min_at_s) + ' (' + h.min_mode +
+         (h.min_queued ? ', ' + h.min_queued + ' queued' : '') + ')';
+  }
+  $('heap').textContent = t;
+  $('heap').className = 'sub' + (h.min < 4096 ? ' update' : '');
 }
 
 function renderDevices(list) {
@@ -539,7 +555,7 @@ async function refreshLive() {
   renderStatus(await getJSON('/api/status', {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
     version: '', board: '', latest: '', update: false,
-    update_state: 'idle', update_pct: -1 }));
+    update_state: 'idle', update_pct: -1, heap: null }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory((await getJSON('/api/history', { history: [] })).history);
