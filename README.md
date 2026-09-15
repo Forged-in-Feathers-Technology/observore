@@ -1344,7 +1344,7 @@ log is a separate question from how you gathered it. Check your local law.
 ## Credit
 
 Built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com),
-alongside [WarDeck](https://github.com/Forged-in-Feathers-Technology/wardeck) —
+alongside [WarDeck](https://www.forgedinfeatherstechnology.com/wardeck) —
 the same interest in what the radio spectrum around you is actually doing,
 pointed in the opposite direction.
 
