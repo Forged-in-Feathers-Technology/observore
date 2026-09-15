@@ -1071,7 +1071,7 @@ static void test_notify_providers(void)
     observore_provider_t pv;
     CHECK(observore_provider_from_name("ntfy", &pv) &&
           pv == OBSERVORE_PROVIDER_NTFY, "name lookup");
-    CHECK(!observore_provider_from_name("telegram", &pv), "unknown provider");
+    CHECK(!observore_provider_from_name("carrier-pigeon", &pv), "unknown provider");
     for (int i = 0; i < OBSERVORE_PROVIDER_MAX; i++) {
         CHECK(observore_provider_from_name(observore_provider_name(i), &pv) &&
               (int)pv == i, "round trip for %s", observore_provider_name(i));
@@ -1185,6 +1185,89 @@ static void test_wps(void)
 
 /* The two names that were actually in the air when this device failed to
  * classify them, plus the substring hazard that kept a third keyword out. */
+static void test_webhook_and_telegram(void)
+{
+    banner("webhook and telegram");
+    observore_notify_request_t r;
+
+    /* Webhook: posted to the URL exactly as given, JSON body, bearer token
+     * only when there is one. The URL is the identity for most webhooks, so
+     * even a query string has to survive untouched. */
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_WEBHOOK,
+                                 "https://ha.local/api/webhook/abc123?x=1", "", "",
+                                 "alert: 2 findings", "line one\nline two",
+                                 OBSERVORE_URGENCY_HIGH, &r),
+          "webhook builds without a token");
+    CHECK(strcmp(r.url, "https://ha.local/api/webhook/abc123?x=1") == 0,
+          "URL untouched: %s", r.url);
+    CHECK(strcmp(r.content_type, "application/json") == 0, "json content type");
+    CHECK(r.header_count == 0, "no auth header without a token, got %zu", r.header_count);
+    CHECK(strstr(r.body, "\"source\":\"observore\"") != NULL, "names its source");
+    CHECK(strstr(r.body, "\"urgency\":\"high\"") != NULL, "urgency as a word: %s", r.body);
+    CHECK(strstr(r.body, "\"title\":\"alert: 2 findings\"") != NULL, "title field");
+    CHECK(strstr(r.body, "\"message\":\"line one\\nline two\"") != NULL,
+          "newline escaped, not raw: %s", r.body);
+
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_WEBHOOK,
+                                 "http://192.168.1.5:8080/hook", "s3cret", "",
+                                 "t", "m", OBSERVORE_URGENCY_LOW, &r),
+          "webhook builds over plain http on the LAN");
+    CHECK(r.header_count == 1 && strcmp(r.headers[0].name, "Authorization") == 0 &&
+          strcmp(r.headers[0].value, "Bearer s3cret") == 0,
+          "bearer token when given");
+    CHECK(strstr(r.body, "\"urgency\":\"low\"") != NULL, "low urgency");
+
+    /* A message with a quote in it must not break the JSON. */
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_WEBHOOK, "https://x/y", "", "",
+                                 "t", "say \"hi\"", OBSERVORE_URGENCY_NORMAL, &r),
+          "builds with a quote");
+    CHECK(strstr(r.body, "say \\\"hi\\\"") != NULL, "quote escaped: %s", r.body);
+
+    /* Telegram: token in the path, chat id in the body, title and message
+     * joined by a newline, and a low digest arrives silently. */
+    CHECK(!observore_notify_build(OBSERVORE_PROVIDER_TELEGRAM, "", "", "12345",
+                                  "t", "m", OBSERVORE_URGENCY_NORMAL, &r),
+          "telegram needs a bot token");
+    CHECK(!observore_notify_build(OBSERVORE_PROVIDER_TELEGRAM, "", "123:ABC", "",
+                                  "t", "m", OBSERVORE_URGENCY_NORMAL, &r),
+          "telegram needs a chat id");
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_TELEGRAM, "", "123:ABC-def", "98765",
+                                 "alert: 1 finding", "drone 18:65:CF:00:23:EF -54 dBm",
+                                 OBSERVORE_URGENCY_NORMAL, &r),
+          "telegram builds with the default host");
+    CHECK(strcmp(r.url, "https://api.telegram.org/bot123:ABC-def/sendMessage") == 0,
+          "bot api path: %s", r.url);
+    CHECK(strstr(r.body, "\"chat_id\":\"98765\"") != NULL, "chat id: %s", r.body);
+    CHECK(strstr(r.body, "\"text\":\"alert: 1 finding\\ndrone 18:65:CF:00:23:EF -54 dBm\"") != NULL,
+          "title, newline, message: %s", r.body);
+    CHECK(strstr(r.body, "\"disable_notification\":false") != NULL, "normal makes a sound");
+
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_TELEGRAM, "", "123:ABC", "9",
+                                 "t", "m", OBSERVORE_URGENCY_LOW, &r),
+          "low builds");
+    CHECK(strstr(r.body, "\"disable_notification\":true") != NULL,
+          "a low digest arrives silently");
+
+    /* The full-size digest still fits both. */
+    char title[OBSERVORE_DIGEST_TITLE_LEN];
+    char body[OBSERVORE_DIGEST_BODY_LEN];
+    observore_digest_entry_t many[10];
+    static char lines[10][OBSERVORE_DIGEST_LINE_LEN];
+    for (size_t i = 0; i < 10; i++) {
+        snprintf(lines[i], sizeof(lines[i]), "follower EE:00:00:00:00:%02zu  -60 dBm", i);
+        many[i].rank = 4; many[i].rssi = -60; many[i].cls = "follower"; many[i].line = lines[i];
+    }
+    observore_digest_build(many, 10, "alert", title, sizeof(title), body, sizeof(body));
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_WEBHOOK, "https://x/y", "tok", "",
+                                 title, body, OBSERVORE_URGENCY_URGENT, &r),
+          "full digest fits a webhook");
+    CHECK(r.body[strlen(r.body) - 1] == '}', "webhook JSON is closed, not truncated");
+    CHECK(observore_notify_build(OBSERVORE_PROVIDER_TELEGRAM, "", "123:ABC", "9",
+                                 title, body, OBSERVORE_URGENCY_URGENT, &r),
+          "full digest fits telegram");
+    CHECK(r.body[strlen(r.body) - 1] == '}', "telegram JSON is closed, not truncated");
+}
+
 static void test_heapwatch(void)
 {
     banner("heap watch");
@@ -1450,6 +1533,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_webhook_and_telegram();
     test_heapwatch();
     test_version();
     test_name_keywords();

@@ -920,6 +920,35 @@ a bare number.
 | Gotify | **sent end to end** from the device to a live server over TLS |
 | ntfy | the exact request the firmware builds was **accepted by ntfy.sh**, with the title, multi-line body and priority arriving intact |
 | Pushover | the request shape was **accepted by api.pushover.net**, which parsed the form body and rejected only the deliberately invalid token — delivery itself is **unverified**, since that needs an account |
+| Webhook | **sent end to end** from the device to a listener on another VLAN, over plain HTTP: bearer header, JSON content type and body all arrived as built |
+| Telegram | the request is built to the Bot API's documented shape and host tested, including the bot token in the path and `disable_notification` for low urgency — delivery itself is **unverified**, since that needs a bot |
+
+### Webhook
+
+A JSON POST to whatever URL you give it, unchanged, with `Authorization:
+Bearer <token>` when a token is set. The body is:
+
+```json
+{"source":"observore","urgency":"high","title":"alert: 2 findings","message":"..."}
+```
+
+`urgency` is one of `low`, `normal`, `high`, `urgent`. The body names its own
+fields rather than pretending to be any one service's shape: a Home Assistant
+webhook trigger reads it directly, and anything that wants Discord's `content`
+or Slack's `text` maps it in a line of template. A body that tried to be all of
+them at once would carry the message three times and not fit.
+
+This is the one provider that can skip TLS. Pointing it at `http://` on your
+own network costs no handshake at all, which on this device is the entire
+expense of sending a notification. A Gotify or ntfy on the LAN over `http://`
+gets the same saving.
+
+### Telegram
+
+Token is the bot token, the second credential is the chat id. The token forms
+part of the request path, which is how the Bot API is shaped, so the notifier
+logs only the host of whatever it is configured with — a webhook URL is often
+the credential too, and serial logs end up in bug reports.
 
 All three wire formats are pinned by host tests: URL construction including
 trailing slashes, header names, body encoding, and the priority mapping. The
@@ -1346,10 +1375,10 @@ Read these before trusting it.
 - **A first update cannot arrive over the air:** an updater has to be running
   before it can fetch anything, so a device on a release older than v0.6.0 has
   to be flashed once over USB. After that it can update itself.
-- **Notification delivery is verified for two providers of three:** Gotify has
-  been sent end to end from the device; ntfy accepted the exact request the
-  firmware builds; Pushover accepted the request's shape but delivery has not
-  been confirmed, since that needs an account.
+- **Notification delivery is verified for three providers of five:** Gotify
+  and the webhook have been sent end to end from the device; ntfy accepted the
+  exact request the firmware builds; Pushover and Telegram have had their
+  request shapes checked but not delivery, since each needs an account.
 
 ## Legal note
 

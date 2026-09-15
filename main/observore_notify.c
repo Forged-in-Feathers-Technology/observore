@@ -114,9 +114,17 @@ static void load(void)
         s_provider = OBSERVORE_PROVIDER_GOTIFY;
     }
     if (s_url[0] || observore_provider_default_url(s_provider)[0]) {
-        ESP_LOGI(TAG, "notifying via %s: %s",
+        /* Host only. A webhook URL is frequently the credential -- Discord puts
+         * a token in the path and Home Assistant's webhook id is the whole of
+         * its authentication -- and serial logs end up pasted into bug reports.
+         * The host says where it goes, which is all a log needs. */
+        const char *url = s_url[0] ? s_url : observore_provider_default_url(s_provider);
+        const char *host = strstr(url, "://");
+        host = host ? host + 3 : url;
+        const char *end = strchr(host, '/');
+        ESP_LOGI(TAG, "notifying via %s: %.*s",
                  observore_provider_name(s_provider),
-                 s_url[0] ? s_url : observore_provider_default_url(s_provider));
+                 end ? (int)(end - host) : (int)strlen(host), host);
     }
 }
 
