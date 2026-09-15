@@ -51,10 +51,18 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # Pinned to the patch version, not the v5.5 line.
+      #
+      # Images built on v5.5 hang between the PSRAM memory test and user code
+      # when they are booted from ota_1, so every over-the-air update rolled
+      # back and none ever took. The same source built on v5.5.5 boots from
+      # ota_1 and confirms itself. See #79 -- the mechanism was never
+      # identified, only the difference, which is a reason to pin exactly
+      # rather than to track a line that moves underneath us.
       - name: Build with ESP-IDF
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5
+          esp_idf_version: v5.5.5
           target: ${{ matrix.target }}
           command: >-
             idf.py
