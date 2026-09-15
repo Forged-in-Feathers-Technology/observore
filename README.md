@@ -34,7 +34,16 @@ stored configuration, so it upgrades an existing device without losing its mute
 rules, credentials or console password. Skip to step 2 below once it finishes.
 
 To build it yourself instead you also need
-[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) v5.5 or later.
+[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) **v5.5.5**, which is
+what CI is pinned to.
+
+Not "v5.5 or later", and the difference is not cosmetic. Images built on the
+v5.5 line run perfectly when flashed over USB and hang during early startup
+when booted from the second OTA slot, somewhere between the PSRAM memory test
+and the first line of application code. Every over-the-air update rolled back
+and none ever took. The same source built on v5.5.5 boots from that slot and
+confirms itself. What actually differs inside ESP-IDF was never identified,
+only that it does, which is why the pin is exact rather than a floor.
 
 **1. Build and flash.**
 
@@ -920,7 +929,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.6.0 && git push origin v0.6.0
+git tag v0.6.1 && git push origin v0.6.1
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
@@ -1322,12 +1331,6 @@ Read these before trusting it.
 - **A first update cannot arrive over the air:** an updater has to be running
   before it can fetch anything, so a device on a release older than v0.6.0 has
   to be flashed once over USB. After that it can update itself.
-- **The successful half of rollback is untested on hardware:** an image that
-  fails to confirm is demonstrably replaced by the previous one, verified by
-  installing a release that predates the confirmation code and watching the
-  watchdog put the old image back. An image that confirms and stays has only
-  been measured for timing -- 66 seconds against a 120 second window -- not
-  observed surviving a real update.
 - **Notification delivery is verified for two providers of three:** Gotify has
   been sent end to end from the device; ntfy accepted the exact request the
   firmware builds; Pushover accepted the request's shape but delivery has not
