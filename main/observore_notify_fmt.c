@@ -49,7 +49,16 @@ static const struct {
     [OBSERVORE_PROVIDER_PUSHOVER] = {
         "pushover", "https://api.pushover.net/1/messages.json",
         "leave blank for api.pushover.net", true},
+    [OBSERVORE_PROVIDER_WEBHOOK] = {
+        "webhook", "", "https://example.com/hook", false},
+    [OBSERVORE_PROVIDER_TELEGRAM] = {
+        "telegram", "https://api.telegram.org",
+        "leave blank for api.telegram.org", true},
 };
+
+/* Urgency as a word, for anything that is going to be read by a rule rather
+ * than a person. Indexed like the priority tables above. */
+static const char *const URGENCY_NAME[] = {"low", "normal", "high", "urgent"};
 
 const char *observore_provider_name(observore_provider_t p)
 {
@@ -239,6 +248,57 @@ bool observore_notify_build(observore_provider_t provider,
             n += form_escape_into(out->body + n, sizeof(out->body) - n, message);
             snprintf(out->body + n, sizeof(out->body) - n, "&priority=%d",
                      PUSHOVER_PRIORITY[u]);
+            return true;
+        }
+
+        case OBSERVORE_PROVIDER_WEBHOOK: {
+            /* Posted to the URL exactly as given: a webhook is an address
+             * somebody was handed, and rewriting it would break the ones with
+             * a path or query that carries the identity, which is most of them.
+             *
+             * The body names its fields rather than pretending to be any one
+             * service's shape. A receiver that wants Discord's "content" or
+             * Slack's "text" maps it in a line; a body that tried to be all of
+             * them at once would carry the message three times and not fit. */
+            snprintf(out->url, sizeof(out->url), "%s", base);
+            out->content_type = "application/json";
+            if (token && *token) {
+                add_header(out, "Authorization", "Bearer %s", token);
+            }
+            size_t n = 0;
+            n += snprintf(out->body + n, sizeof(out->body) - n,
+                          "{\"source\":\"observore\",\"urgency\":\"%s\",\"title\":\"",
+                          URGENCY_NAME[u]);
+            n += json_escape_into(out->body + n, sizeof(out->body) - n, title);
+            n += snprintf(out->body + n, sizeof(out->body) - n, "\",\"message\":\"");
+            n += json_escape_into(out->body + n, sizeof(out->body) - n, message);
+            snprintf(out->body + n, sizeof(out->body) - n, "\"}");
+            return true;
+        }
+
+        case OBSERVORE_PROVIDER_TELEGRAM: {
+            /* The bot token is part of the path, which is how the Bot API is
+             * shaped and not a choice made here. It travels in the URL rather
+             * than a header, so it will appear in any log that prints URLs;
+             * the notifier logs the host and not the path for that reason. */
+            if (!token || !*token) {
+                return false;
+            }
+            snprintf(out->url, sizeof(out->url), "%s/bot%s/sendMessage", base, token);
+            out->content_type = "application/json";
+            size_t n = 0;
+            n += snprintf(out->body + n, sizeof(out->body) - n, "{\"chat_id\":\"");
+            n += json_escape_into(out->body + n, sizeof(out->body) - n, user);
+            n += snprintf(out->body + n, sizeof(out->body) - n, "\",\"text\":\"");
+            n += json_escape_into(out->body + n, sizeof(out->body) - n, title);
+            n += snprintf(out->body + n, sizeof(out->body) - n, "\\n");
+            n += json_escape_into(out->body + n, sizeof(out->body) - n, message);
+            /* Telegram has no priority. The one lever it offers is whether the
+             * phone makes a sound, and a low-urgency digest is the case for
+             * not doing so. */
+            snprintf(out->body + n, sizeof(out->body) - n,
+                     "\",\"disable_notification\":%s}",
+                     u == 0 ? "true" : "false");
             return true;
         }
 

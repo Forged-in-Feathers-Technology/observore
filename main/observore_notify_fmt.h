@@ -21,6 +21,12 @@ typedef enum {
     OBSERVORE_PROVIDER_GOTIFY = 0,
     OBSERVORE_PROVIDER_NTFY,
     OBSERVORE_PROVIDER_PUSHOVER,
+    /* A JSON POST to any URL, with an optional bearer token. One format that
+     * reaches Home Assistant, n8n, Node-RED, Apprise, signal-cli and anything
+     * on the LAN that accepts a POST. */
+    OBSERVORE_PROVIDER_WEBHOOK,
+    /* The Bot API. The token is the bot's, the second credential is the chat. */
+    OBSERVORE_PROVIDER_TELEGRAM,
     OBSERVORE_PROVIDER_MAX,
 } observore_provider_t;
 

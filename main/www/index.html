@@ -185,6 +185,8 @@
       <option value="gotify">Gotify</option>
       <option value="ntfy">ntfy</option>
       <option value="pushover">Pushover</option>
+      <option value="webhook">Webhook</option>
+      <option value="telegram">Telegram</option>
     </select>
     <input id="gurl" placeholder="https://gotify.example.com" autocomplete="off"
            style="min-width:260px">
@@ -197,7 +199,8 @@
     <button id="gclear" class="mini">Forget</button>
   </div>
   <p class="note" id="gnote">
-    Pushes to Gotify, ntfy or Pushover. Detections found while patrolling are queued and
+    Pushes to Gotify, ntfy, Pushover, Telegram, or any webhook that takes a JSON POST
+    &mdash; Home Assistant, n8n, Node-RED, Apprise. Detections found while patrolling are queued and
     delivered the next time the uplink is up &mdash; the SoftAP has no route to
     your server, so sending only works while joined to your network.
   </p>
@@ -760,14 +763,25 @@ $('netclear').addEventListener('click', () => {
 });
 
 // Pushover supplies its own endpoint, so a URL is only required elsewhere.
-const PROVIDER_NEEDS_URL = { gotify: true, ntfy: true, pushover: false };
+const PROVIDER_NEEDS_URL = { gotify: true, ntfy: true, pushover: false,
+                             webhook: true, telegram: false };
+// Providers that take a second credential besides the token.
+const PROVIDER_NEEDS_USER = { pushover: true, telegram: true };
 
 $('gprov').addEventListener('change', () => {
   const p = $('gprov').value;
-  $('guser').hidden = p !== 'pushover';
+  $('guser').hidden = !PROVIDER_NEEDS_USER[p];
+  $('guser').placeholder = p === 'telegram' ? 'chat id' : 'user key';
+  $('gtoken').placeholder = { gotify: 'application token',
+                              ntfy: 'access token (optional)',
+                              pushover: 'application token',
+                              webhook: 'bearer token (optional)',
+                              telegram: 'bot token' }[p];
   $('gurl').placeholder = { gotify: 'https://gotify.example.com',
                             ntfy: 'https://ntfy.sh/your-topic',
-                            pushover: 'leave blank for api.pushover.net' }[p];
+                            pushover: 'leave blank for api.pushover.net',
+                            webhook: 'https://example.com/hook',
+                            telegram: 'leave blank for api.telegram.org' }[p];
 });
 
 $('gsave').addEventListener('click', () => {
@@ -779,7 +793,7 @@ $('gsave').addEventListener('click', () => {
   let q = '/api/notify?provider=' + p +
           '&url=' + encodeURIComponent(url) +
           '&token=' + encodeURIComponent($('gtoken').value);
-  if (p === 'pushover') q += '&user=' + encodeURIComponent($('guser').value);
+  if (PROVIDER_NEEDS_USER[p]) q += '&user=' + encodeURIComponent($('guser').value);
   // never leave credentials sitting in the DOM
   $('gtoken').value = '';
   $('guser').value = '';
