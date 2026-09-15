@@ -72,7 +72,8 @@ jobs:
       - name: Collect the flashable parts
         run: |
           python3 tools/collect_release.py \
-            --target ${{ matrix.target }} --board ${{ matrix.board }} --out dist
+            --target ${{ matrix.target }} --board ${{ matrix.board }} --out dist \
+            --expect-version "${{ github.event.inputs.tag || github.ref_name }}"
 
       - uses: actions/upload-artifact@v7
         with:
