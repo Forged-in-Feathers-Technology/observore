@@ -9,6 +9,7 @@
 
 #include "observore_detect.h"
 #include "observore_version.h"
+#include "observore_heapwatch.h"
 #include "observore_mute.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
@@ -1184,6 +1185,57 @@ static void test_wps(void)
 
 /* The two names that were actually in the air when this device failed to
  * classify them, plus the substring hazard that kept a third keyword out. */
+static void test_heapwatch(void)
+{
+    banner("heap watch");
+
+    observore_heapwatch_init();
+    CHECK(observore_heapwatch_latest() == NULL, "nothing recorded at start");
+
+    /* The first reading is always a new low. */
+    CHECK(observore_heapwatch_note(40000, 30000, 0, "patrol", 1000000),
+          "first reading is recorded");
+    /* A drop smaller than the step is not an event: a slow slide should
+     * record milestones, not every byte. */
+    CHECK(!observore_heapwatch_note(39000, 30000, 0, "patrol", 2000000),
+          "a 1 KB drop is below the step");
+    CHECK(observore_heapwatch_note(30000, 20000, 3, "uplink", 3000000),
+          "a 10 KB drop is an event");
+    /* Going back up is never an event; the mark only moves down. */
+    CHECK(!observore_heapwatch_note(45000, 30000, 0, "patrol", 4000000),
+          "recovery is not recorded");
+
+    const observore_heap_event_t *l = observore_heapwatch_latest();
+    CHECK(l && l->free_min == 30000, "latest is the deepest, got %u", l ? l->free_min : 0);
+    CHECK(l && strcmp(l->mode, "uplink") == 0, "mode travels with it: %s", l ? l->mode : "?");
+    CHECK(l && l->queued == 3, "queue depth travels with it");
+    CHECK(l && l->at_us == 3000000, "and so does the moment");
+
+    observore_heap_event_t ev[OBSERVORE_HEAPWATCH_EVENTS];
+    size_t n = observore_heapwatch_events(ev, OBSERVORE_HEAPWATCH_EVENTS);
+    CHECK(n == 2, "two events, got %zu", n);
+    CHECK(ev[0].free_min == 40000 && ev[1].free_min == 30000, "oldest first");
+
+    /* Fill past capacity: the oldest fall off, order is preserved. */
+    observore_heapwatch_init();
+    for (uint32_t i = 0; i < OBSERVORE_HEAPWATCH_EVENTS + 3; i++) {
+        observore_heapwatch_note(100000 - i * 5000, 1000, i, "patrol", (int64_t)i);
+    }
+    n = observore_heapwatch_events(ev, OBSERVORE_HEAPWATCH_EVENTS);
+    CHECK(n == OBSERVORE_HEAPWATCH_EVENTS, "ring holds %d, got %zu",
+          OBSERVORE_HEAPWATCH_EVENTS, n);
+    CHECK(ev[0].at_us == 3, "the three oldest fell off, got %lld", (long long)ev[0].at_us);
+    CHECK(ev[n-1].at_us == OBSERVORE_HEAPWATCH_EVENTS + 2, "the newest is last");
+    for (size_t i = 1; i < n; i++) {
+        CHECK(ev[i].free_min < ev[i-1].free_min, "each event is lower than the last");
+    }
+
+    /* Asking for fewer than held returns the most recent, still in order. */
+    n = observore_heapwatch_events(ev, 3);
+    CHECK(n == 3 && ev[2].at_us == OBSERVORE_HEAPWATCH_EVENTS + 2,
+          "a short read ends at the newest");
+}
+
 static void test_version(void)
 {
     banner("firmware versions");
@@ -1398,6 +1450,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_heapwatch();
     test_version();
     test_name_keywords();
     test_digest();

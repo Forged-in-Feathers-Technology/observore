@@ -12,6 +12,7 @@
 #include "observore_util.h"
 #include "observore_track.h"
 #include "observore_update.h"
+#include "observore_heapwatch.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
 #include "esp_heap_caps.h"
@@ -146,8 +147,9 @@ static esp_err_t status_handler(httpd_req_t *req)
      * uptime as though it were a date. */
     char now_iso[24];
     observore_clock_iso(now, now_iso, sizeof(now_iso));
+    const observore_heap_event_t *latest = observore_heapwatch_latest();
 
-    char body[768];
+    char body[896];
     observore_jbuf_t jb;
     observore_jb_init(&jb, body, sizeof(body), 2);   /* room for "}}" */
 
@@ -159,6 +161,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"version\":\"%s\",\"board\":\"%s\""
         ",\"latest\":\"%s\",\"update\":%s"
         ",\"update_state\":\"%s\",\"update_pct\":%d"
+        ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
+        ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -170,7 +174,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_update_latest_version(),
         observore_update_available() ? "true" : "false",
         observore_update_state_name(observore_update_state()),
-        observore_update_progress());
+        observore_update_progress(),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+        latest ? (long long)(latest->at_us / 1000000) : -1LL,
+        latest ? latest->mode : "",
+        latest ? (unsigned)latest->queued : 0u);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
@@ -740,6 +750,28 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* Every recorded drop, oldest first. Small enough to build in one buffer:
+ * eight events at under sixty characters each. */
+static esp_err_t heap_handler(httpd_req_t *req)
+{
+    observore_heap_event_t ev[OBSERVORE_HEAPWATCH_EVENTS];
+    size_t n = observore_heapwatch_events(ev, OBSERVORE_HEAPWATCH_EVENTS);
+
+    char body[640];
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, body, sizeof(body), 2);
+    observore_jb_printf(&jb, "{\"events\":[");
+    for (size_t i = 0; i < n; i++) {
+        observore_jb_printf(&jb,
+            "%s{\"at_s\":%lld,\"min\":%" PRIu32 ",\"largest\":%" PRIu32
+            ",\"queued\":%" PRIu32 ",\"mode\":\"%s\"}",
+            i ? "," : "", (long long)(ev[i].at_us / 1000000),
+            ev[i].free_min, ev[i].largest, ev[i].queued, ev[i].mode);
+    }
+    observore_jb_close(&jb, "]}");
+    return send_json(req, body);
+}
+
 static esp_err_t update_handler(httpd_req_t *req)
 {
     esp_err_t err = observore_update_install();
@@ -841,6 +873,7 @@ esp_err_t observore_web_start(void)
         {"/api/unmute",    HTTP_POST, unmute_handler,     false},
         {"/api/baseline",  HTTP_POST, baseline_handler,   false},
         {"/api/update",    HTTP_POST, update_handler,     false},
+        {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},

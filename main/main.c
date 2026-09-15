@@ -22,6 +22,7 @@
 #include "observore_util.h"
 #include "observore_notify.h"
 #include "observore_update.h"
+#include "observore_heapwatch.h"
 #include "observore_track.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
@@ -254,6 +255,7 @@ void app_main(void)
     observore_auth_init();
     observore_notify_init();
     observore_update_init();
+    observore_heapwatch_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.
@@ -293,24 +295,24 @@ void app_main(void)
         observore_status_t st = publish();
 
         /* Say when the internal-heap low-water mark moves, not just what it
-         * ended up at.
+         * ended up at -- and keep it, so the next morning's check can read
+         * when it happened and during what, instead of just how far it fell.
          *
-         * A device left running overnight came back reporting a minimum of 176
-         * bytes free -- an order of magnitude below the 1.4 KB that once left
-         * the SoftAP unable to answer an ARP request. The watermark alone says
-         * it nearly died and nothing about when or during what, which makes it
-         * a puzzle rather than a lead. Logging the moment it drops, with the
-         * mode and the queue depth, turns the next soak into evidence. */
+         * Two overnight runs each came back with a number and no lead: one at
+         * 1,072 bytes, one at 2,932, both logged at the moment they happened to
+         * a serial port nobody was reading. The watermark alone is a puzzle;
+         * the moment, the mode and the queue depth are a lead. */
         {
-            static unsigned s_reported_min = UINT_MAX;
-            unsigned low = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-            if (low + 2048 < s_reported_min) {
-                s_reported_min = low;
-                ESP_LOGW(TAG, "internal heap low-water fell to %u bytes "
-                              "(%s, %zu queued, largest block %u)",
+            uint32_t low     = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+            uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            if (observore_heapwatch_note(low, largest,
+                                         (uint32_t)observore_notify_pending(),
+                                         observore_mode_name(observore_wifi_mode()),
+                                         now)) {
+                ESP_LOGW(TAG, "internal heap low-water fell to %" PRIu32 " bytes "
+                              "(%s, %zu queued, largest block %" PRIu32 ")",
                          low, observore_mode_name(observore_wifi_mode()),
-                         observore_notify_pending(),
-                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                         observore_notify_pending(), largest);
             }
         }
 

@@ -1033,6 +1033,21 @@ Whether a board has PSRAM is not a property of the chip. The C6 has none; the
 C5 has it on `R`-suffixed modules and not otherwise, which is why the shipped
 C5 image is built to boot either way. The XIAO ESP32S3 has 8 MB.
 
+### When it ran low, not just how low
+
+The console header shows free internal RAM and the lowest it has been since
+boot, with when that happened and what the device was doing at the time. The
+same is on `/api/status` under `heap`, and `/api/heap` lists the last eight
+drops in order.
+
+That is there because the low-water mark on its own is a puzzle. Two overnight
+runs each came back with a number and nothing else: 1,072 bytes one night,
+2,932 the next, with the moment it happened logged to a serial port that nobody
+was reading. A minimum says the device nearly ran out; the moment, the mode and
+the notification queue depth say why. A drop only counts once it is 2 KB past
+the last one recorded, so a slow slide leaves a handful of milestones rather
+than filling the list with noise.
+
 This is not premature tuning. An earlier version used static internal scratch
 (two 20 KB device snapshots plus 32 KB and 12 KB response buffers) and drove
 free internal heap down to 1.4 KB with a largest free block of 768 bytes. At
