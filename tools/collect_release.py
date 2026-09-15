@@ -40,6 +40,21 @@ def parse_flash_args(path):
     return sorted(parts)
 
 
+def image_version(path):
+    """Read the version out of a built application image.
+
+    The esp_app_desc_t structure sits immediately after the image and first
+    segment headers, at a fixed offset, and its version field is a 32-byte
+    NUL-padded string. Read directly rather than shelled out to esptool so this
+    stays a pure check with no toolchain in the way.
+    """
+    with open(path, "rb") as fh:
+        head = fh.read(0x70)
+    if len(head) < 0x70 or head[0] != 0xE9:
+        raise SystemExit("%s is not an ESP application image" % path)
+    return head[0x30:0x50].split(b"\x00")[0].decode("ascii", "replace")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True)
@@ -49,7 +64,22 @@ def main():
                          "different firmware")
     ap.add_argument("--build-dir", default="build")
     ap.add_argument("--out", default="dist")
+    ap.add_argument("--expect-version",
+                    help="tag this release is being cut as; the application "
+                         "descriptor in the built image must match it")
     args = ap.parse_args()
+
+    if args.expect_version:
+        app = os.path.join(args.build_dir, "observore.bin")
+        found = image_version(app)
+        if found != args.expect_version:
+            raise SystemExit(
+                "the built image says %r but this release is %r.\n"
+                "ESP-IDF takes the version from git describe unless version.txt\n"
+                "exists, so a stray version.txt -- the kind written by hand to\n"
+                "test an update -- silently stamps the whole release with it."
+                % (found, args.expect_version))
+        print("image version %s matches the tag" % found)
 
     family = CHIP_FAMILY.get(args.target)
     if family is None:

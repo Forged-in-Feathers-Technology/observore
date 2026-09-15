@@ -10,3 +10,8 @@ test/run
 credentials.conf
 *.local.conf
 sdkconfig.defaults.local
+
+# Overrides PROJECT_VER for local experiments (installing an older build to
+# test an update, say).  Committing it would stamp a release with whatever it
+# happens to contain, so it never belongs in the repository.
+version.txt
