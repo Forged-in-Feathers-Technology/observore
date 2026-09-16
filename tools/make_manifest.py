@@ -74,13 +74,23 @@ def main():
                 part["path"] = "%s/%s" % (args.base.rstrip("/"), part["path"])
 
         manifest = {
-            "name": "Observore (%s)" % LABELS.get(board, board),
+            # Exactly what the firmware answers to an Improv device-info request,
+            # because that is how ESP Web Tools decides whether it is looking at
+            # an upgrade or a new install: install-dialog.js compares the two
+            # strings for equality and nothing else. With the board label in
+            # here they never matched, every install of Observore over Observore
+            # was treated as new, and -- see below -- was erased without asking.
+            # The board is named in boards.json, which is what the picker reads.
+            "name": "Observore",
             "version": args.version,
-            # An upgrade must not erase NVS: the mute rules, Wi-Fi credentials,
-            # notifier token, detection history and generated console password
-            # all live there. ESP Web Tools still offers an erase checkbox for a
-            # deliberate clean install.
-            "new_install_prompt_erase": False,
+            # True means "ask", and the checkbox it produces defaults to off.
+            # False does not mean "do not erase": it means erase a new install
+            # without offering a choice. This was False, on the belief that it
+            # was the safe setting, and the flasher wiped the mute rules, the
+            # Wi-Fi credentials, the notifier token, the history and the console
+            # password on every install. Read from the installer's source rather
+            # than from its name.
+            "new_install_prompt_erase": True,
             "builds": [build],
         }
         out = os.path.join(args.out_dir, "manifest-%s.json" % board)
