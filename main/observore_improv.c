@@ -30,6 +30,7 @@
 #if !CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG && CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG
 #define IMPROV_SECOND_TRANSPORT 1
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #else
 #define IMPROV_SECOND_TRANSPORT 0
 #endif
@@ -538,6 +539,17 @@ static void improv_task(void *arg)
     if (!have_usb) {
         ESP_LOGW(TAG, "no USB serial transport; provisioning works on the UART "
                       "port only");
+    } else {
+        /* Once the driver owns the peripheral, everything has to go through
+         * it -- including the secondary console's log output, which until now
+         * kept writing by polling the FIFO directly. Two writers with two ideas
+         * of the FIFO's state coexist until the host drops and re-raises DTR,
+         * which is exactly what a browser does when it opens the port; after
+         * that the port went silent for the rest of the boot, and a device
+         * that cannot answer the Improv handshake gets no Wi-Fi dialog and is
+         * treated as a new install. Found by opening the port with pyserial
+         * and watching the log stop. */
+        usb_serial_jtag_vfs_use_driver();
     }
 #endif
 

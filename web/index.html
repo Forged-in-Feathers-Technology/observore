@@ -97,17 +97,47 @@ normally there, and reports what is new.</p>
   bridge. Either flashes, and the log appears on both.</p>
 </div>
 
+<h2>What happens when you press Install</h2>
+<div class="panel">
+  <p>The installer connects to the board and asks it what it is running.</p>
+  <ul>
+    <li><strong>If it finds Observore already there,</strong> it offers an
+      <em>Update</em>. That writes the new firmware and leaves everything else
+      alone: your Wi-Fi details, notification token, mute rules, history and
+      console password all stay put.</li>
+    <li><strong>If it finds something else, or nothing it can talk to,</strong>
+      it asks whether you want to <em>erase the device</em> first. The box
+      starts unticked. Leave it that way to keep whatever settings are on the
+      board; tick it for a clean start, which also generates a new console
+      password on the next boot.</li>
+  </ul>
+  <p class="note">You will only see &ldquo;Erasing device&rdquo; if you ticked
+  that box. If you see it without having done so, that is a bug &mdash; please
+  <a href="https://github.com/Forged-in-Feathers-Technology/observore/issues">tell
+  us</a>.</p>
+  <p>After the firmware is written the board restarts, and a moment later the
+  installer offers to <strong>connect it to Wi-Fi</strong>. Pick your network,
+  type the password, and the board joins it and tells you its address. That
+  step is the one thing this page can do that a bare terminal cannot, so it is
+  worth waiting for.</p>
+  <p class="note">If the Wi-Fi step never appears, the board most likely did not
+  restart into the firmware after flashing. Unplug it, plug it back in, and
+  press Install again: the second time it will find Observore running and go
+  straight to Wi-Fi. This is a quirk of the chip's own USB port rather than
+  anything you did, and the XIAO ESP32-S3 in particular is prone to it.</p>
+</div>
+
 <h2>What this installs, and what it leaves alone</h2>
 <div class="panel">
   <ul>
-    <li><strong>Your settings survive an upgrade:</strong> The bootloader,
-      partition table and application are written at their own offsets, so the
-      stored configuration is untouched: the mute rules, the Wi-Fi
-      credentials, the notifier token and the device's console password all
-      stay.</li>
-    <li><strong>Tick “erase device” only if you mean it:</strong> That wipes
-      the stored configuration, including the console password, and a new one
-      is generated on the next boot.</li>
+    <li><strong>An update keeps your settings.</strong> The firmware is
+      written at its own offset and the stored configuration is not touched:
+      mute rules, Wi-Fi credentials, notifier token, history, console password.
+      Releases before v0.7.0 got this wrong on this page. The installer did not
+      recognise its own firmware, treated every install as new, and erased the
+      board without asking. If that happened to you, it is why you had to set
+      things up again. It does not happen any more, and erasing is a box you
+      tick, never a default.</li>
     <li><strong>Nothing is sent anywhere:</strong> The firmware is fetched from
       this page and written by your browser over USB. No account, no telemetry.</li>
   </ul>
