@@ -25,6 +25,23 @@
  * someone else's problem, and they dominate the false-positive rate. */
 #define OBSERVORE_RSSI_FLOOR (-90)
 
+/* Following a device across an address rotation.
+ *
+ * A phone rotates its BLE address roughly every fifteen minutes. Keyed by
+ * address alone, the tracker saw each rotation as a new device, so a
+ * neighbour's handset sitting still all night produced a fresh follower alert
+ * every quarter hour -- and a device that genuinely followed someone for two
+ * hours was invisible, because none of its addresses lasted long enough.
+ *
+ * A new random address whose advert fingerprint matches a slot that went
+ * quiet in the last ROTATION_WINDOW, at a similar signal strength, is taken to
+ * be that slot's device. The quiet requirement is what keeps two identical
+ * phones apart: the old address stops transmitting when the new one starts,
+ * so a slot still being heard from a moment ago is not the one that rotated. */
+#define OBSERVORE_ROTATION_WINDOW_US (20 * 60 * 1000000LL)
+#define OBSERVORE_ROTATION_QUIET_US  (10 * 1000000LL)
+#define OBSERVORE_ROTATION_RSSI_DB   15
+
 typedef enum {
     OBSERVORE_LEVEL_CLEAR = 0,   /* score 0-2  */
     OBSERVORE_LEVEL_CAUTION,     /* score 3-5  */

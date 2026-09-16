@@ -84,6 +84,11 @@ typedef struct {
     int64_t          first_seen_us;
     int64_t          last_seen_us;
     uint32_t         hits;
+    /* How many times this device has changed its address while being tracked.
+     * A randomised address that has rotated and is still here is the strongest
+     * persistence evidence a rotating device can give: it outlasted the thing
+     * designed to make it forgettable. */
+    uint8_t          rotations;
 } observore_event_t;
 
 const char *observore_class_name(observore_class_t cls);
