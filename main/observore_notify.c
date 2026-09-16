@@ -215,19 +215,41 @@ esp_err_t observore_notify_set(observore_provider_t provider, const char *url,
         strncmp(url, "https://", 8) != 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (observore_provider_needs_user(provider) && (!user || !*user)) {
-        return ESP_ERR_INVALID_ARG;
-    }
     if ((have_url && strlen(url) >= OBSERVORE_NOTIFY_URL_LEN) ||
         (token && strlen(token) >= OBSERVORE_NOTIFY_TOKEN_LEN) ||
         (user && strlen(user) >= OBSERVORE_NOTIFY_USER_LEN)) {
         return ESP_ERR_INVALID_SIZE;
     }
+
     LOCK();
+    /* A blank credential keeps the stored one -- but only for the same
+     * provider.
+     *
+     * Saving with the token box empty used to wipe the token, so changing a
+     * URL, or trying a new provider and coming back, cost people a credential
+     * they had not asked to lose. Keeping it is the obvious fix and it is
+     * wrong across a provider change: the stored token belongs to the old
+     * service, and carrying it over would send a Gotify key as the bearer
+     * header of whatever webhook was just typed in. A credential must never
+     * travel to a service it was not issued for, so a provider switch with
+     * nothing entered starts clean, and the console says so. */
+    bool same = (provider == s_provider);
+    bool keep_token = same && (!token || !*token) && s_token[0];
+    bool keep_user  = same && (!user  || !*user)  && s_user[0];
+
+    if (observore_provider_needs_user(provider) && !keep_user && (!user || !*user)) {
+        UNLOCK();
+        return ESP_ERR_INVALID_ARG;
+    }
+
     s_provider = provider;
     snprintf(s_url, sizeof(s_url), "%s", have_url ? url : "");
-    snprintf(s_token, sizeof(s_token), "%s", token ? token : "");
-    snprintf(s_user, sizeof(s_user), "%s", user ? user : "");
+    if (!keep_token) {
+        snprintf(s_token, sizeof(s_token), "%s", token ? token : "");
+    }
+    if (!keep_user) {
+        snprintf(s_user, sizeof(s_user), "%s", user ? user : "");
+    }
     save();
     UNLOCK();
     return ESP_OK;

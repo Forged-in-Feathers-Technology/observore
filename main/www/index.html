@@ -794,10 +794,23 @@ $('gsave').addEventListener('click', () => {
           '&url=' + encodeURIComponent(url) +
           '&token=' + encodeURIComponent($('gtoken').value);
   if (PROVIDER_NEEDS_USER[p]) q += '&user=' + encodeURIComponent($('guser').value);
+  const blankToken = !$('gtoken').value;
   // never leave credentials sitting in the DOM
   $('gtoken').value = '';
   $('guser').value = '';
-  post(q, 'saved — use Send test while on the uplink', 'gnote');
+  // Say what happened to the token. Blank keeps the stored one for the same
+  // provider and clears it on a switch, and the difference is worth a word:
+  // a user who switched providers should not find out at the next send.
+  fetch(q, { method: 'POST' }).then(r => r.json()).then(out => {
+    if (!out.ok) { $('gnote').textContent = 'failed: ' + out.error; return; }
+    let msg = 'saved — use Send test while on the uplink';
+    if (blankToken) {
+      msg += out.kept_token ? ' (existing token kept)'
+                            : ' (no token stored: provider changed, enter one)';
+    }
+    $('gnote').textContent = msg;
+    refreshLive();
+  }).catch(e => { $('gnote').textContent = 'failed: ' + e.message; });
 });
 $('gtest').addEventListener('click', () => post('/api/notify?test=1', 'test sent', 'gnote'));
 $('gclear').addEventListener('click', () => {

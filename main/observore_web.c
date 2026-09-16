@@ -720,8 +720,8 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     observore_provider_t provider = OBSERVORE_PROVIDER_GOTIFY;
     if (query_param(req, "provider", provname, sizeof(provname))) {
         if (!observore_provider_from_name(provname, &provider)) {
-            return fail(req, "unknown provider -- expected gotify, ntfy or "
-                             "pushover");
+            return fail(req, "unknown provider -- expected gotify, ntfy, "
+                             "pushover, webhook or telegram");
         }
     } else {
         provider = observore_notify_provider();
@@ -730,12 +730,20 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     query_param(req, "token", token, sizeof(token));
     query_param(req, "user", user, sizeof(user));
 
+    /* Decided before the buffers are wiped, because they are wiped before the
+     * error is reported and the old check ran on the empty buffer -- so it
+     * could never be true and the message it guarded was never shown. */
+    bool same_provider = (provider == observore_notify_provider());
+    bool blank_token   = !*token;
+    bool blank_user    = !*user;
+
     esp_err_t err = observore_notify_set(provider, url, token, user);
     memset(token, 0, sizeof(token));
     memset(user, 0, sizeof(user));
     if (err == ESP_ERR_INVALID_ARG) {
-        if (observore_provider_needs_user(provider) && !*user) {
-            return fail(req, "this provider needs a user key as well as a token");
+        if (observore_provider_needs_user(provider) && blank_user) {
+            return fail(req, "this provider needs a second credential -- a "
+                             "user key or chat id -- as well as a token");
         }
         return fail(req, "a url is required, starting with http:// or https://");
     }
@@ -745,9 +753,19 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         return fail(req, "could not store the notifier settings");
     }
-    ESP_LOGI(TAG, "notifier set to %s via %s", url,
-             observore_provider_name(provider));
-    return ok(req);
+    /* Provider only. The URL can be the credential -- a webhook usually is --
+     * and this line ends up in bug reports. */
+    ESP_LOGI(TAG, "notifier set to %s", observore_provider_name(provider));
+
+    /* Tell the page what happened to the credentials, so it can say "token
+     * kept" or "token cleared" instead of leaving the user to find out at the
+     * next send. */
+    char body[96];
+    snprintf(body, sizeof(body),
+             "{\"ok\":true,\"kept_token\":%s,\"kept_user\":%s}",
+             (same_provider && blank_token) ? "true" : "false",
+             (same_provider && blank_user)  ? "true" : "false");
+    return send_json(req, body);
 }
 
 /* Every recorded drop, oldest first. Small enough to build in one buffer:
