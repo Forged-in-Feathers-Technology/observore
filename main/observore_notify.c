@@ -4,6 +4,9 @@
 
 #include "observore_clock.h"
 #include "observore_notify.h"
+
+#include "sdkconfig.h"
+#if CONFIG_OBSERVORE_NOTIFIER
 #include "observore_util.h"
 #include "observore_wifi.h"
 #include "esp_crt_bundle.h"
@@ -604,3 +607,31 @@ esp_err_t observore_notify_test(void)
     }
     return err;
 }
+
+#else /* !CONFIG_OBSERVORE_NOTIFIER */
+
+/* Built without a notifier. Every entry point is here so the rest of the
+ * firmware does not have to know, and each does the least surprising nothing:
+ * queues are empty, nothing is configured, and asking to configure something
+ * says so rather than pretending. */
+void observore_notify_init(void) {}
+bool observore_notify_configured(void) { return false; }
+bool observore_notify_url(char *out, size_t len) { if (out && len) out[0] = '\0'; return false; }
+esp_err_t observore_notify_set(observore_provider_t p, const char *u, const char *t, const char *s)
+{ (void)p; (void)u; (void)t; (void)s; return ESP_ERR_NOT_SUPPORTED; }
+observore_provider_t observore_notify_provider(void) { return OBSERVORE_PROVIDER_GOTIFY; }
+bool observore_notify_has_user(void) { return false; }
+esp_err_t observore_notify_clear(void) { return ESP_OK; }
+void observore_notify_event(const observore_event_t *ev) { (void)ev; }
+void observore_notify_level(observore_level_t f, observore_level_t t, uint16_t s) { (void)f; (void)t; (void)s; }
+void observore_notify_update_available(const char *v) { (void)v; }
+void observore_notify_pump(void) {}
+esp_err_t observore_notify_test(void) { return ESP_ERR_NOT_SUPPORTED; }
+uint32_t observore_notify_sent(void) { return 0; }
+uint32_t observore_notify_failed(void) { return 0; }
+uint32_t observore_notify_dropped(void) { return 0; }
+uint32_t observore_notify_retry_in_s(void) { return 0; }
+size_t observore_notify_pending(void) { return 0; }
+const char *observore_notify_last_error(void) { return ""; }
+
+#endif /* CONFIG_OBSERVORE_NOTIFIER */

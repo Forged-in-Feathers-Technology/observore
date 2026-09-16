@@ -140,6 +140,20 @@ config OBSERVORE_PATROL_WINDOW_S
         entirely.  So it alternates: patrol for this long, then join the
         network briefly to push what it found.
 
+config OBSERVORE_NOTIFIER
+    bool "Push notifications"
+    default y
+    help
+        Whether the image can send notifications at all. Off means absent,
+        not disabled: the notifier and its queue are not compiled in, and the
+        console hides the panel rather than showing a form that cannot work.
+
+        For a device with a display, or one only ever read through the
+        console. Every memory problem this project has had was on the uplink
+        and most of it was the TLS handshake behind a notification, so a board
+        with little RAM and no PSRAM is better off without the code than with
+        it switched off. The update check and OTA keep their own TLS path.
+
 config OBSERVORE_BOARD
     string "Board identifier"
     default ""

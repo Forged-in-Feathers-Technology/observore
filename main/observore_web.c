@@ -185,7 +185,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"update_state\":\"%s\",\"update_pct\":%d"
         ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
-        ",\"reset_reason\":\"%s\""
+        ",\"reset_reason\":\"%s\",\"notifier\":%s"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -204,7 +204,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         latest ? (long long)(latest->at_us / 1000000) : -1LL,
         latest ? latest->mode : "",
         latest ? (unsigned)latest->queued : 0u,
-        reset_reason_name(esp_reset_reason()));
+        reset_reason_name(esp_reset_reason()),
+#if CONFIG_OBSERVORE_NOTIFIER
+        "true"
+#else
+        "false"
+#endif
+        );
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
@@ -773,6 +779,9 @@ static esp_err_t notify_set_handler(httpd_req_t *req)
     }
     if (err == ESP_ERR_INVALID_SIZE) {
         return fail(req, "url or token is too long");
+    }
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        return fail(req, "this build has no notifier");
     }
     if (err != ESP_OK) {
         return fail(req, "could not store the notifier settings");
