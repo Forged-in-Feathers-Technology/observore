@@ -56,6 +56,9 @@ jobs:
           - board: xiao-esp32c6
             target: esp32c6
             profile: boards/xiao-esp32c6.defaults
+          - board: cyd-2432s028r-st7789
+            target: esp32
+            profile: boards/cyd-2432s028r-st7789.defaults
     steps:
       - uses: actions/checkout@v7
       - name: Build with ESP-IDF
@@ -136,7 +139,7 @@ jobs:
         # portability breaks surface here rather than months later when
         # somebody tries the port -- a RISC-V build is about a fifth larger
         # than Xtensa, which has already overflowed a partition once.
-        target: [esp32s3, esp32c6, esp32c5]
+        target: [esp32s3, esp32c6, esp32c5, esp32]
     steps:
       - uses: actions/checkout@v7
       - name: Build with ESP-IDF

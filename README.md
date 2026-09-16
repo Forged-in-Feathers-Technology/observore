@@ -573,6 +573,7 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | ESP32-C5 DevKitC / Waveshare *(default for C5)* | GPIO27, WS2812 | GPIO28 | two USB sockets, either works |
 | `boards/xiao-esp32c5` | GPIO27, plain | GPIO28 | 8 MB PSRAM, native USB only |
 | `boards/xiao-esp32c6` | GPIO15, plain | GPIO9 | **no PSRAM**, so TLS is tight |
+| `boards/cyd-2432s028r-st7789` | GPIO16, plain (green of the RGB) | GPIO0 | original ESP32, **no PSRAM, no notifier**; the ST7789 2.8" CYD, screen not driven yet |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
@@ -1231,7 +1232,7 @@ The board matters as much as the version. Two of the four boards here are
 ESP32-C5s and their images are not interchangeable, which is why the installer
 offers a picker rather than deciding from the chip. A device updating itself has
 the same problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
-`devkit-esp32c5`, `xiao-esp32c5` or `xiao-esp32c6`. CI asserts that each board's
+`devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6` or `cyd-2432s028r-st7789`. CI asserts that each board's
 build resolves to its own name, checked against the `sdkconfig` the build
 actually produced rather than by re-deriving the layering.
 
