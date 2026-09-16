@@ -111,7 +111,6 @@
 <header>
   <h1>Observore</h1>
   <span class="sub" id="uptime"></span>
-  <span class="sub" id="version"></span>
   <span class="sub" id="heap" title="internal RAM: free now, and the lowest it has been since boot"></span>
 </header>
 
@@ -242,10 +241,6 @@
     <input id="value" placeholder="AA:BB:CC:DD:EE:FF">
     <button id="add">Ignore</button>
   </div>
-  <div class="add" id="updatebox" hidden>
-    <button id="install">Install update</button>
-    <span class="note" id="updatenote"></span>
-  </div>
   <div class="add">
     <button id="baseline">Set baseline</button>
     <span class="note" id="baselinenote">
@@ -254,6 +249,17 @@
       then the advert's shape, and only then the MAC.
       Use it somewhere you trust &mdash; it ignores detected threats too.
     </span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Firmware <span id="fwinfo" class="dim"></span></h2>
+  <div class="add">
+    <span id="version"></span>
+  </div>
+  <div class="add">
+    <button id="install" disabled>Install update</button>
+    <span class="note" id="updatenote"></span>
   </div>
 </div>
 
@@ -424,28 +430,25 @@ function renderStatus(s) {
   $('uptime').textContent = 'up ' + ago(s.uptime_s) +
     (s.reset_reason && s.reset_reason !== 'power-on' ? ' after ' + s.reset_reason : '') +
     (s.time_valid ? '' : ' \u00b7 clock not set');
-  // Which firmware this is, said plainly. Anyone reporting a problem needs it,
-  // and it is the one question a console should always be able to answer about
-  // itself.
-  // The board, not just the chip: two of the boards this runs on are the same
-  // chip and take different images, and "which board is this" is the question
-  // someone has to answer before they can flash it by hand.
-  $('version').textContent = (s.version || '') +
-    (s.board ? ' \u00b7 ' + s.board : '');
   renderUpdate(s);
   renderHeap(s.heap);
-  $('version').className = 'sub' + (s.update ? ' update' : '');
-  $('version').title = s.update
-    ? s.latest + ' is available'
-    : (s.latest ? 'latest published is ' + s.latest : '');
 }
 
-// Only shown when there is something to do or something happening. A button
-// that is present but refuses to work is worse than one that is not there.
+// The firmware panel: what this is, what is published, and the one action.
+// The button is always there and greyed out when there is nothing to install,
+// so its absence never has to be explained.
 function renderUpdate(s) {
   const busy = s.update_state === 'requested' || s.update_state === 'running' ||
                s.update_state === 'rebooting';
-  $('updatebox').hidden = !(s.update || busy || s.update_state === 'failed');
+  // Which firmware this is, and which board: two of the boards this runs on
+  // are the same chip and take different images, and "which board is this" is
+  // the question someone has to answer before they can flash it by hand.
+  $('version').textContent = (s.version || '\u2014') +
+    (s.board ? ' on ' + s.board : '');
+  $('fwinfo').textContent = s.update
+    ? '\u2014 ' + s.latest + ' is available'
+    : (s.latest ? '\u2014 up to date, latest published is ' + s.latest
+                : '\u2014 not checked yet');
   $('install').disabled = busy || !s.update;
 
   if (s.update_state === 'running') {
@@ -464,6 +467,10 @@ function renderUpdate(s) {
     $('updatenote').textContent = s.latest + ' is available. Downloading takes a ' +
       'few minutes, during which the device is not detecting anything, and it ' +
       'restarts afterwards.';
+  } else {
+    $('updatenote').textContent = s.latest
+      ? 'Nothing newer to install. The device checks once a day.'
+      : 'Checks for a newer release once a day, on the uplink.';
   }
 }
 
