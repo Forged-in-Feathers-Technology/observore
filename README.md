@@ -477,6 +477,20 @@ Every tagged release carries a bootloader, partition table and application
 Tools](https://esphome.github.io/esp-web-tools/) `manifest.json` and the
 per-target `builds-<target>.json` the manifest is assembled from.
 
+The browser installer decides whether it is looking at an upgrade or a fresh
+install by asking the board what it is running. If it finds Observore, it
+offers an *Update*, which writes the firmware and touches nothing else. If it
+finds something else, or nothing that answers, it asks whether to erase first,
+and the box starts unticked.
+
+**Releases before v0.7.0 got this wrong**, and if you ever set a device up
+twice this is why. The installer matches on an exact name, the manifests
+carried the board label in theirs, and the firmware did not, so every install
+looked like a fresh one. With the erase prompt turned off, on the belief that
+off meant safe, the installer erased without asking. Both settings were read
+from the installer's source before being changed, and the page says what it
+does now.
+
 With `esptool` alone — note that **the bootloader offset is not the same on
 every chip**, so these commands are not interchangeable:
 
@@ -1017,7 +1031,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.6.1 && git push origin v0.6.1
+git tag v0.7.0 && git push origin v0.7.0
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
