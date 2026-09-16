@@ -25,3 +25,7 @@ void observore_display_init(void);
 void observore_display_render(const observore_status_t *st,
                               const observore_event_t *top, size_t n,
                               int64_t now_us);
+
+/* Show one line, in the attention colour, for a few seconds. For the result
+ * of something the person standing at the device just did. */
+void observore_display_notice(const char *text, int seconds);

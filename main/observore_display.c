@@ -14,6 +14,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_st7789.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "observore_detect.h"
 #include "observore_font.h"
@@ -55,6 +56,8 @@ static esp_lcd_panel_handle_t s_panel;
 static char     s_shown[ROWS][COLS + 1];
 static uint16_t s_shown_bg[ROWS];
 static bool     s_ready;
+static char     s_notice[COLS + 1];
+static int64_t  s_notice_until_us;
 
 /* A whole 320x240 framebuffer is 150 KB, which this board does not have, so
  * drawing is done a glyph at a time through 256-byte cells. Slow in the
@@ -219,9 +222,16 @@ void observore_display_render(const observore_status_t *st,
              (unsigned long)st->total_sightings);
     line(1, text, C_BLACK, band);
 
+    int row = 2;
+    /* Something the person at the device just did, for a few seconds. */
+    if (s_notice[0] && now_us < s_notice_until_us) {
+        line(row++, s_notice, C_BLACK, C_AMBER);
+    } else {
+        s_notice[0] = '\0';
+    }
+
     /* Findings, most recent first: class, address, signal, and what it was
      * called. Same facts as a digest line, fitted to forty columns. */
-    int row = 2;
     const int last_row = ROWS - 1;
     for (size_t i = 0; i < n && row < last_row; i++, row++) {
         char mac[OBSERVORE_MAC_STR_LEN];
@@ -250,8 +260,15 @@ void observore_display_render(const observore_status_t *st,
     line(last_row, text, C_GREY, C_BLACK);
 }
 
+void observore_display_notice(const char *text, int seconds)
+{
+    snprintf(s_notice, sizeof(s_notice), " %s", text ? text : "");
+    s_notice_until_us = esp_timer_get_time() + (int64_t)seconds * 1000000;
+}
+
 #else /* no display on this board */
 
+void observore_display_notice(const char *text, int seconds) { (void)text; (void)seconds; }
 void observore_display_init(void) {}
 void observore_display_render(const observore_status_t *st,
                               const observore_event_t *top, size_t n,

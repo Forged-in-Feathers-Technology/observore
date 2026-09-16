@@ -2,6 +2,8 @@
 
 #include "observore_detect.h"
 #include "observore_mute.h"
+#include "observore_track.h"
+#include <stdio.h>
 
 #ifdef OBSERVORE_HOST_TEST
 /* The host build exercises the matching and list logic without NVS. */
@@ -353,4 +355,77 @@ bool observore_mute_parse_class(const char *name, observore_class_t *out)
         }
     }
     return false;
+}
+
+void observore_mute_baseline(observore_event_t *scratch, size_t cap,
+                             observore_baseline_t *out)
+{
+    observore_baseline_t r = {0};
+    r.seen = observore_track_all(scratch, cap);
+
+    for (size_t i = 0; i < r.seen; i++) {
+        const observore_event_t *e = &scratch[i];
+        observore_mute_rule_t rule;
+        memset(&rule, 0, sizeof(rule));
+
+        /* Pick the most durable rule this device supports.
+         *
+         * A name is best: it survives address rotation and is specific enough
+         * to mean one device ("Encharg/492232007683").
+         *
+         * Otherwise a fingerprint, which also survives rotation -- but it
+         * matches a KIND of device, so it is not used for the classes where
+         * that could hide a real threat.
+         *
+         * Otherwise the MAC, which for a rotating address buys only an hour
+         * or so.  Counted as temporary and reported as such. */
+        if (e->detail[0] != '\0') {
+            rule.kind = OBSERVORE_MUTE_NAME;
+            snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
+        } else if (e->fingerprint != 0 &&
+                   !observore_mute_class_is_protected(e->cls)) {
+            rule.kind = OBSERVORE_MUTE_FINGERPRINT;
+            rule.fingerprint = e->fingerprint;
+        } else {
+            rule.kind = OBSERVORE_MUTE_MAC;
+            memcpy(rule.mac, e->mac, OBSERVORE_MAC_LEN);
+        }
+
+        bool is_new = false;
+        esp_err_t err = observore_mute_add_deferred(&rule, &is_new);
+        if (err == ESP_ERR_NO_MEM) {
+            r.no_room++;
+            continue;
+        }
+        if (err != ESP_OK) {
+            continue;
+        }
+        if (!is_new) {
+            r.already++;
+            continue;
+        }
+        r.added++;
+        switch (rule.kind) {
+            case OBSERVORE_MUTE_NAME:        r.by_name++; break;
+            case OBSERVORE_MUTE_FINGERPRINT: r.by_fingerprint++; break;
+            default:
+                r.by_mac++;
+                if (e->addr_random) {
+                    r.temporary++;
+                }
+                break;
+        }
+    }
+
+    /* One flash write for the whole baseline rather than one per rule. */
+    observore_mute_save();
+
+    /* Everything in range is now known, so the score and the log start from
+     * a clean slate -- that is what makes it a baseline rather than just a
+     * bulk mute. */
+    observore_track_clear();
+
+    if (out) {
+        *out = r;
+    }
 }
