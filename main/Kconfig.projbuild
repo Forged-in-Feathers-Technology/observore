@@ -140,6 +140,67 @@ config OBSERVORE_PATROL_WINDOW_S
         entirely.  So it alternates: patrol for this long, then join the
         network briefly to push what it found.
 
+menu "Display"
+
+config OBSERVORE_DISPLAY_ST7789
+    bool "ST7789 panel over SPI"
+    default n
+    help
+        A 240x320 ST7789 driven through esp_lcd, used in landscape. Off on
+        every board that has no panel. Named for the controller rather than
+        for a product, because the same product ships with other panels and a
+        build for one shows garbage on the other.
+
+if OBSERVORE_DISPLAY_ST7789
+
+config OBSERVORE_DISPLAY_MOSI
+    int "MOSI GPIO"
+    default 13
+config OBSERVORE_DISPLAY_MISO
+    int "MISO GPIO (-1 if unused)"
+    default 12
+config OBSERVORE_DISPLAY_SCLK
+    int "SCLK GPIO"
+    default 14
+config OBSERVORE_DISPLAY_CS
+    int "CS GPIO"
+    default 15
+config OBSERVORE_DISPLAY_DC
+    int "DC GPIO"
+    default 2
+config OBSERVORE_DISPLAY_RST
+    int "Reset GPIO (-1 if wired to EN)"
+    default -1
+config OBSERVORE_DISPLAY_BL
+    int "Backlight GPIO (-1 if always on)"
+    default 21
+config OBSERVORE_DISPLAY_MHZ
+    int "SPI clock, MHz"
+    default 26
+    range 1 80
+config OBSERVORE_DISPLAY_INVERT
+    bool "Invert colours"
+    default n
+    help
+        Wrong looks like a photographic negative and is obvious at a glance.
+        The ST7789 revision of the 2432S028R on the bench did not need it,
+        despite reports that it does; other panels may.
+config OBSERVORE_DISPLAY_BGR
+    bool "Panel takes BGR order"
+    default n
+    help
+        Wrong swaps red and blue: the alert band comes out blue.
+config OBSERVORE_DISPLAY_MIRROR_X
+    bool "Mirror X"
+    default y
+config OBSERVORE_DISPLAY_MIRROR_Y
+    bool "Mirror Y"
+    default n
+
+endif
+
+endmenu
+
 config OBSERVORE_NOTIFIER
     bool "Push notifications"
     default y

@@ -18,3 +18,15 @@ CONFIG_OBSERVORE_BOARD="cyd-2432s028r-st7789"
 # connects to anything. Costs some flash and a little RAM, both measured in the
 # PR that added this.
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+
+# IRAM on the classic ESP32 is 128 KB and the headless build already used 97%
+# of it; the display driver overflowed it by 4.4 KB. The SPI master driver
+# places its interrupt handler and transaction code in IRAM by default so
+# transfers stay fast during flash cache misses. A status screen redrawn every
+# two seconds has no use for that, so both go to flash. FreeRTOS and the ring
+# buffer likewise: their IRAM placement is a latency optimisation, not a
+# correctness one. Measured, in the PR that added the display.
+CONFIG_SPI_MASTER_ISR_IN_IRAM=n
+CONFIG_SPI_MASTER_IN_IRAM=n
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y

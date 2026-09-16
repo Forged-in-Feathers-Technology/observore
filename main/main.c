@@ -23,6 +23,7 @@
 #include "observore_notify.h"
 #include "observore_update.h"
 #include "observore_heapwatch.h"
+#include "observore_display.h"
 #include "observore_track.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
@@ -256,6 +257,7 @@ void app_main(void)
     observore_notify_init();
     observore_update_init();
     observore_heapwatch_init();
+    observore_display_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.
@@ -293,6 +295,18 @@ void app_main(void)
         observore_track_tick(now);
 
         observore_status_t st = publish();
+
+        /* The screen, on boards that have one. Rate limited here rather than
+         * inside, so the snapshot it needs is only taken when it will be used. */
+        {
+            static int64_t s_last_draw_us;
+            if (now - s_last_draw_us >= 2 * 1000000) {
+                s_last_draw_us = now;
+                static observore_event_t s_top[12];
+                size_t n = observore_track_snapshot(s_top, 12);
+                observore_display_render(&st, s_top, n, now);
+            }
+        }
 
         /* Say when the internal-heap low-water mark moves, not just what it
          * ended up at -- and keep it, so the next morning's check can read

@@ -14,6 +14,12 @@
 #   RGB LED        R 4  G 16  B 17  (active low)
 #   BOOT           GPIO 0
 
+# The 2.8" ST7789 over HSPI, verified on the bench 2026-09-16: no colour
+# inversion, RGB order, X mirrored, Y not. The first light-up was a negative
+# with a cyan band and unreadable text; each of those was one setting, and
+# each is a build option so the next panel revision is a config change.
+CONFIG_OBSERVORE_DISPLAY_ST7789=y
+
 # The green element of the RGB LED, as a plain active-low LED.
 CONFIG_OBSERVORE_LED_MONO=y
 CONFIG_OBSERVORE_LED_GPIO=16
