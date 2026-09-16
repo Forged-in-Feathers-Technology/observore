@@ -881,7 +881,11 @@ Escalations of the overall threat level are pushed too; drops are not, because
 an alert that clears is not news.
 
 Tokens and user keys are stored in NVS and are **write-only** — no endpoint
-returns them, exactly like the Wi-Fi password.
+returns them, exactly like the Wi-Fi password. Saving with the token left blank
+keeps the stored one, so changing a URL does not cost you a credential — but
+only for the same provider. Switching provider with nothing entered starts
+clean, because a token issued for one service must never be sent to another,
+and the console says which happened.
 
 **Sending needs the uplink.** Detections happen during patrol, which has no
 network, so notices are queued and flushed the next time you are joined. The
