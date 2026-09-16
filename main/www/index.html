@@ -493,7 +493,10 @@ function renderDevices(list) {
     cell(tr, '', d.rssi + ' dBm');
     cell(tr, 'dim', d.source);
     cell(tr, 'dim', d.evidence);
-    cell(tr, 'dim', String(d.hits));
+    // Hits, and how many addresses they were collected under. A random
+    // address that has rotated and is still here is the clearest thing the
+    // table can say about persistence.
+    cell(tr, 'dim', String(d.hits) + (d.rotations ? ' \u00b7 ' + d.rotations + '\u00d7' : ''));
     cell(tr, 'dim', when(d.last_seen_s, d.last_seen));
     ignoreCell(tr, d);
     rows.appendChild(tr);

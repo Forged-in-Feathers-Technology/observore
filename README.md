@@ -1382,11 +1382,16 @@ nothing useful to continue doing, and a boot loop is at least honest about it.
 
 Read these before trusting it.
 
-- **MAC randomisation defeats the follower heuristic:** modern phones and
-  most trackers in separated mode rotate their Bluetooth address every ~15
-  minutes. A follower that rotates will never accumulate 3 sightings under one
-  address. Observore catches devices with static or slowly-rotating addresses; it
-  will miss a well-behaved rotating one.
+- **MAC randomisation is followed, not defeated -- but only for BLE, and only
+  by a kind, not an individual:** phones rotate their Bluetooth address every
+  ~15 minutes. A new random address whose advert fingerprint matches a device
+  that went quiet in the last 20 minutes, at a similar signal strength, is taken
+  to be the same device, so a handset that stays two hours shows as one device
+  that stayed two hours and rotated seven times, rather than eight strangers.
+  The fingerprint identifies a *kind* of device, so two identical handsets can
+  be merged if one falls silent as the other appears; the quiet requirement
+  makes that rare, and the cost is a merged pair rather than a missed one.
+  Wi-Fi addresses rotate too and are not yet followed.
 - **Absence of evidence is not evidence of absence:** wired cameras, cellular
   ALPR units with the radio off, and — on anything but a C5. 5 GHz devices
   are invisible to it.

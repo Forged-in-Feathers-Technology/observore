@@ -1185,6 +1185,139 @@ static void test_wps(void)
 
 /* The two names that were actually in the air when this device failed to
  * classify them, plus the substring hazard that kept a third keyword out. */
+/* A phone's address rotates every fifteen minutes. Keyed by address alone the
+ * tracker saw each rotation as a new device -- a neighbour's handset produced a
+ * fresh follower alert every quarter hour, and a device that genuinely stayed
+ * two hours was invisible because none of its addresses lasted long enough. */
+static void test_rotation_continuity(void)
+{
+    banner("following a device across an address rotation");
+
+    /* A stable advert: flags plus a 16-bit service UUID. The fingerprint hashes
+     * the structure and the UUID, neither of which changes when the address
+     * does. */
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t a1[6] = {0x4A, 0x11, 0x11, 0x11, 0x11, 0x11};  /* random (0x4A) */
+    const uint8_t a2[6] = {0x5E, 0x22, 0x22, 0x22, 0x22, 0x22};  /* random (0x5E) */
+    const uint8_t a3[6] = {0x6A, 0x33, 0x33, 0x33, 0x33, 0x33};
+
+    observore_observation_t o1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                  .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+    observore_observation_t o2 = o1; o2.mac = a2;
+    observore_observation_t o3 = o1; o3.mac = a3;
+    observore_status_t st;
+
+    /* One device, seen under its first address, becomes a follower. */
+    observore_track_init();
+    observore_track_observe(&o1, SECS(0));
+    observore_track_observe(&o1, SECS(100));
+    observore_track_observe(&o1, SECS(200));
+    CHECK(observore_track_observe(&o1, SECS(310)), "follower under the first address");
+    observore_track_status(&st, SECS(310));
+    CHECK(st.device_count == 1, "one device, got %u", st.device_count);
+
+    /* It rotates. Thirty seconds of silence, then the same advert from a new
+     * address at the same strength. That must be the same device: still one
+     * device, hits carried over, and it is not a new detection. */
+    observore_track_observe(&o2, SECS(340));
+    observore_track_status(&st, SECS(340));
+    CHECK(st.device_count == 1, "a rotation must not create a device, got %u",
+          st.device_count);
+    observore_event_t snap[8];
+    size_t n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1, "one classified device after rotation, got %zu", n);
+    CHECK(n == 1 && memcmp(snap[0].mac, a2, 6) == 0, "the slot now carries the new address");
+    CHECK(n == 1 && snap[0].hits == 5, "hits carry over, got %u", n ? snap[0].hits : 0);
+    CHECK(n == 1 && snap[0].rotations == 1, "one rotation counted, got %u",
+          n ? snap[0].rotations : 0);
+    CHECK(n == 1 && snap[0].first_seen_us == SECS(0), "first sighting is preserved");
+    CHECK(n == 1 && strstr(snap[0].label, "rotated 1x") != NULL,
+          "the label says it rotated: %s", n ? snap[0].label : "");
+
+    /* The old address is gone: a sighting of it now would be a new device. */
+    CHECK(observore_track_snapshot(snap, 8) == 1, "still one");
+
+    /* A second rotation, twenty minutes on. */
+    observore_track_observe(&o3, SECS(340 + 15 * 60 + 30));
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].rotations == 2, "two rotations, got %u", n ? snap[0].rotations : 0);
+    CHECK(n == 1 && memcmp(snap[0].mac, a3, 6) == 0, "carries the third address");
+
+    /* Not the same device: different fingerprint. */
+    observore_track_init();
+    observore_track_observe(&o1, SECS(0));
+    uint8_t other_adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0xFA, 0xFF};
+    observore_observation_t different = o2;
+    different.adv = other_adv; different.adv_len = sizeof(other_adv);
+    observore_track_observe(&different, SECS(30));
+    observore_track_status(&st, SECS(30));
+    CHECK(st.device_count == 0, "unclassified pair should not count yet");
+    /* Count slots by giving both enough to classify. */
+    observore_track_observe(&o1, SECS(100)); observore_track_observe(&o1, SECS(200));
+    observore_track_observe(&o1, SECS(310));
+    observore_track_observe(&different, SECS(130)); observore_track_observe(&different, SECS(230));
+    observore_track_observe(&different, SECS(340));
+    observore_track_status(&st, SECS(340));
+    CHECK(st.device_count == 2, "different adverts are different devices, got %u",
+          st.device_count);
+
+    /* Not the same device: the old address is still transmitting. Two identical
+     * handsets in one room must stay two devices. */
+    observore_track_init();
+    observore_track_observe(&o1, SECS(0));
+    observore_track_observe(&o1, SECS(5));
+    observore_track_observe(&o2, SECS(7));      /* a1 heard 2 s ago: not quiet */
+    observore_track_observe(&o1, SECS(100)); observore_track_observe(&o1, SECS(200));
+    observore_track_observe(&o1, SECS(310));
+    observore_track_observe(&o2, SECS(107)); observore_track_observe(&o2, SECS(207));
+    observore_track_observe(&o2, SECS(317));
+    observore_track_status(&st, SECS(317));
+    CHECK(st.device_count == 2, "two concurrent identical devices stay two, got %u",
+          st.device_count);
+
+    /* Not the same device: too far away in signal. */
+    observore_track_init();
+    observore_track_observe(&o1, SECS(0));
+    observore_observation_t far = o2; far.rssi = -85;
+    observore_track_observe(&far, SECS(30));
+    n = observore_track_snapshot(snap, 8);
+    observore_track_observe(&o1, SECS(100)); observore_track_observe(&o1, SECS(200));
+    observore_track_observe(&o1, SECS(310));
+    observore_track_status(&st, SECS(310));
+    CHECK(st.device_count == 1, "a 25 dB weaker sighting is a different device");
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && memcmp(snap[0].mac, a1, 6) == 0 && snap[0].rotations == 0,
+          "and the original was not rewritten");
+
+    /* Not the same device: silent for longer than the window. */
+    observore_track_init();
+    observore_track_observe(&o1, SECS(0));
+    observore_track_observe(&o2, SECS(25 * 60));
+    observore_track_observe(&o2, SECS(25 * 60 + 100));
+    observore_track_observe(&o2, SECS(25 * 60 + 200));
+    observore_track_observe(&o2, SECS(25 * 60 + 310));
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].rotations == 0 && snap[0].hits == 4,
+          "beyond the window it starts fresh: rotations %u hits %u",
+          n ? snap[0].rotations : 0, n ? snap[0].hits : 0);
+
+    /* Not the same device: a public address never rotates, so never inherits. */
+    observore_track_init();
+    const uint8_t pub1[6] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+    const uint8_t pub2[6] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x66};
+    observore_observation_t p1 = o1; p1.mac = pub1; p1.addr_random = false;
+    observore_observation_t p2 = o1; p2.mac = pub2; p2.addr_random = false;
+    observore_track_observe(&p1, SECS(0));
+    observore_track_observe(&p2, SECS(30));
+    observore_track_observe(&p1, SECS(100)); observore_track_observe(&p1, SECS(200));
+    observore_track_observe(&p1, SECS(310));
+    observore_track_observe(&p2, SECS(130)); observore_track_observe(&p2, SECS(230));
+    observore_track_observe(&p2, SECS(340));
+    observore_track_status(&st, SECS(340));
+    CHECK(st.device_count == 2, "public addresses are never merged, got %u",
+          st.device_count);
+}
+
 static void test_webhook_and_telegram(void)
 {
     banner("webhook and telegram");
@@ -1533,6 +1666,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_rotation_continuity();
     test_webhook_and_telegram();
     test_heapwatch();
     test_version();

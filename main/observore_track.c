@@ -61,6 +61,55 @@ static observore_slot_t *find_slot(const uint8_t mac[OBSERVORE_MAC_LEN])
     return NULL;
 }
 
+/* The slot a freshly rotated address most likely belongs to, or NULL.
+ *
+ * Only for random BLE addresses with something stable to match on. Among the
+ * candidates -- same fingerprint, random, quiet for at least ROTATION_QUIET but
+ * heard within ROTATION_WINDOW, within ROTATION_RSSI_DB of this sighting, and
+ * not carrying a different name -- the one heard from most recently wins,
+ * because it is the one whose old address fell silent last.
+ *
+ * A fingerprint identifies a kind of device rather than one device, so this
+ * can be wrong in a room with two identical handsets. The quiet requirement
+ * makes that rare, and the cost of being wrong is one merged pair rather than
+ * a missed threat: the merged device is still reported, still persistent, and
+ * still where it was. */
+static observore_slot_t *find_rotated_slot(const observore_observation_t *obs,
+                                           uint32_t fingerprint,
+                                           const char *name, int64_t now_us)
+{
+    if (obs->src != OBSERVORE_SRC_BLE || fingerprint == 0 ||
+        !observore_obs_is_random(obs)) {
+        return NULL;
+    }
+    observore_slot_t *best = NULL;
+    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
+        observore_slot_t *c = &s_devices[i];
+        if (!c->in_use || c->ev.src != OBSERVORE_SRC_BLE || !c->ev.addr_random ||
+            c->ev.fingerprint != fingerprint ||
+            memcmp(c->ev.mac, obs->mac, OBSERVORE_MAC_LEN) == 0) {
+            continue;
+        }
+        int64_t silent = now_us - c->ev.last_seen_us;
+        if (silent < OBSERVORE_ROTATION_QUIET_US || silent > OBSERVORE_ROTATION_WINDOW_US) {
+            continue;
+        }
+        if (obs->rssi != 0 && c->ev.rssi != 0) {
+            int diff = (int)obs->rssi - (int)c->ev.rssi;
+            if (diff > OBSERVORE_ROTATION_RSSI_DB || diff < -OBSERVORE_ROTATION_RSSI_DB) {
+                continue;
+            }
+        }
+        if (name && name[0] && c->ev.detail[0] && strcmp(name, c->ev.detail) != 0) {
+            continue;       /* both named, and differently: not the same device */
+        }
+        if (!best || c->ev.last_seen_us > best->ev.last_seen_us) {
+            best = c;
+        }
+    }
+    return best;
+}
+
 /* Claim a slot, evicting the least recently seen entry when the table is full.
  * Classified devices are never evicted in favour of an unclassified one --
  * losing a confirmed bodycam to make room for a passing phone would be the
@@ -169,6 +218,18 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 
     observore_slot_t *slot = find_slot(obs->mac);
     if (!slot) {
+        slot = find_rotated_slot(obs, fingerprint, name, now_us);
+        if (slot) {
+            /* Same device, new address. Everything it has earned -- hits, first
+             * sighting, classification, score -- carries over, and it is not
+             * announced again. Only the key changes. */
+            memcpy(slot->ev.mac, obs->mac, OBSERVORE_MAC_LEN);
+            if (slot->ev.rotations < 255) {
+                slot->ev.rotations++;
+            }
+        }
+    }
+    if (!slot) {
         slot = claim_slot();
         memset(slot, 0, sizeof(*slot));
         slot->in_use = true;
@@ -233,6 +294,17 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
                                             : "device");
             slot->classified = true;
         }
+    }
+
+    /* A rotating address that is still here after changing has outlasted the
+     * one thing meant to make it forgettable. Say so on the label, because it
+     * is the strongest persistence evidence a random address can offer and the
+     * thing a reader most needs to know about it. Fits OBSERVORE_LABEL_LEN
+     * at three digits, which the counter cannot exceed. */
+    if (slot->classified && slot->ev.cls == OBSERVORE_CLASS_FOLLOWER &&
+        slot->ev.addr_random && slot->ev.rotations > 0) {
+        snprintf(slot->ev.label, sizeof(slot->ev.label), "rotated %ux, persists",
+                 (unsigned)slot->ev.rotations);
     }
 
     bool reportable = slot->classified;

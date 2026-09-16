@@ -221,11 +221,11 @@ static esp_err_t devices_handler(httpd_req_t *req)
         observore_jb_escape(&jb, e->detail);
         observore_jb_printf(&jb,
             "\",\"evidence\":\"%s\",\"source\":\"%s\",\"rssi\":%d,"
-            "\"channel\":%u,\"hits\":%" PRIu32 ",\"first_seen_s\":%" PRId64
+            "\"channel\":%u,\"hits\":%" PRIu32 ",\"rotations\":%u,\"first_seen_s\":%" PRId64
             ",\"last_seen_s\":%" PRId64
             ",\"first_seen\":\"%s\",\"last_seen\":\"%s\"}",
             observore_evidence_name(e->evidence), observore_source_name(e->src),
-            e->rssi, e->channel, e->hits,
+            e->rssi, e->channel, e->hits, (unsigned)e->rotations,
             (now - e->first_seen_us) / 1000000,
             (now - e->last_seen_us) / 1000000,
             first_iso, last_iso);
