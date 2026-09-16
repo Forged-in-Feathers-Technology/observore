@@ -419,7 +419,10 @@ function renderStatus(s) {
   $('mode').textContent = s.mode;
   // Say so when the clock has never been set, rather than letting every row
   // quietly show only "4m ago" and leaving the reader to wonder why.
+  // How this boot started is how the last run ended. "brownout" after a night
+  // on battery is the battery; "panic" or a watchdog is us.
   $('uptime').textContent = 'up ' + ago(s.uptime_s) +
+    (s.reset_reason && s.reset_reason !== 'power-on' ? ' after ' + s.reset_reason : '') +
     (s.time_valid ? '' : ' \u00b7 clock not set');
   // Which firmware this is, said plainly. Anyone reporting a problem needs it,
   // and it is the one question a console should always be able to answer about

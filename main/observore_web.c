@@ -16,6 +16,7 @@
 #include "observore_web.h"
 #include "observore_wifi.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -136,6 +137,27 @@ static esp_err_t index_handler(httpd_req_t *req)
                            index_html_end - index_html_start);
 }
 
+/* Why this boot happened, which is the same thing as how the previous run
+ * ended. A device found up for seven hours after a night on battery could
+ * have crashed or could have run flat, and until this was exposed the two
+ * were indistinguishable the next morning. */
+static const char *reset_reason_name(esp_reset_reason_t r)
+{
+    switch (r) {
+        case ESP_RST_POWERON:   return "power-on";
+        case ESP_RST_SW:        return "software";    /* esp_restart(): an update, a reboot */
+        case ESP_RST_PANIC:     return "panic";
+        case ESP_RST_INT_WDT:   return "interrupt-watchdog";
+        case ESP_RST_TASK_WDT:  return "task-watchdog";
+        case ESP_RST_WDT:       return "watchdog";    /* incl. the rollback watchdog */
+        case ESP_RST_BROWNOUT:  return "brownout";    /* the battery ran out */
+        case ESP_RST_DEEPSLEEP: return "deep-sleep";
+        case ESP_RST_USB:       return "usb";
+        case ESP_RST_JTAG:      return "jtag";
+        default:                return "unknown";
+    }
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     int64_t now = esp_timer_get_time();
@@ -163,6 +185,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"update_state\":\"%s\",\"update_pct\":%d"
         ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
+        ",\"reset_reason\":\"%s\""
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -180,7 +203,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
         latest ? (long long)(latest->at_us / 1000000) : -1LL,
         latest ? latest->mode : "",
-        latest ? (unsigned)latest->queued : 0u);
+        latest ? (unsigned)latest->queued : 0u,
+        reset_reason_name(esp_reset_reason()));
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
