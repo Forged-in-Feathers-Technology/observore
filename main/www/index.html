@@ -177,7 +177,7 @@
   </div>
 </div>
 
-<div class="panel">
+<div class="panel" id="notifypanel">
   <h2>Notifications <span id="notifyinfo" class="dim"></span></h2>
   <div class="add">
     <select id="gprov">
@@ -432,6 +432,9 @@ function renderStatus(s) {
     (s.time_valid ? '' : ' \u00b7 clock not set');
   renderUpdate(s);
   renderHeap(s.heap);
+  // A build without a notifier has nothing to configure. Hide the panel rather
+  // than show a form whose Save would only ever say "not supported".
+  $('notifypanel').hidden = (s.notifier === false);
 }
 
 // The firmware panel: what this is, what is published, and the one action.
