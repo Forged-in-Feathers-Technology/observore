@@ -936,6 +936,33 @@ esp_err_t observore_web_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
+    /* Close with a reset, not a FIN that waits for a reply.
+     *
+     * Three overnight runs ended with the internal heap at a few hundred bytes
+     * and the console unable to start, and the serial log of the third showed
+     * why: a browser tab left open on the console reconnects each uplink
+     * window, asks for the history, and stops reading. The send fails with
+     * EAGAIN, the handler gives up, the server is stopped when the device
+     * leaves the uplink -- and lwIP keeps the unsent 9 KB queued behind a FIN
+     * it retransmits for minutes to a client that is not there, then does it
+     * again next window. Three windows cost 26 KB for good.
+     *
+     * A zero linger turns close into a reset: the connection and everything
+     * queued on it are freed at once. Nothing is lost that was going to arrive
+     * anyway, since the client had stopped reading. */
+    cfg.enable_so_linger = true;
+    cfg.linger_timeout = 0;
+    /* And fewer of them, purged sooner. A browser opens about six connections
+     * and a backgrounded tab stops reading on all of them; with the default
+     * seven allowed and five seconds before a blocked send gives up, six
+     * stalled responses sit in lwIP's send buffers at once and the heap is
+     * gone before the reset above ever gets its chance. Three sockets is
+     * plenty for one person reading a page, LRU purge evicts the oldest the
+     * moment a fourth arrives, and a send that cannot make progress in two
+     * seconds is to a client that has stopped listening. */
+    cfg.max_open_sockets = 3;
+    cfg.send_wait_timeout = 2;
+    cfg.recv_wait_timeout = 2;
     cfg.stack_size = 8192;   /* the JSON handlers are not frugal */
     /* Sized from the table rather than left at the default of 8.  Overflowing
      * it makes httpd_register_uri_handler fail and the route simply not exist,
