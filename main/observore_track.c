@@ -353,10 +353,16 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 
     bool reportable = slot->classified;
     if (reportable) {
-        /* Still scored -- the level must be honest -- but a device that was
+        /* Still scored -- the level must be honest -- but a follower that was
          * announced in the last few hours and merely faded and returned is not
-         * news, so it is marked as already reported before the digest sees it. */
-        if (!slot->reported && announced_recently(&slot->ev, now_us)) {
+         * news, so it is marked as already reported before the digest sees it.
+         *
+         * Followers only. A follower is an inference from persistence, and a
+         * persistent thing coming back is the same inference again. A body
+         * camera, an ALPR unit, a drone or a tracker is a signature match, and
+         * one of those coming back is exactly what the device exists to say. */
+        if (!slot->reported && slot->ev.cls == OBSERVORE_CLASS_FOLLOWER &&
+            announced_recently(&slot->ev, now_us)) {
             slot->reported = true;
         }
         score_device(slot, now_us);

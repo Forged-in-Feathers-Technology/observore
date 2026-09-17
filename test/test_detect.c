@@ -1250,6 +1250,21 @@ static void test_edge_of_range_noise(void)
     for (int i = 0; i < 4; i++) observore_track_observe(&near, t + SECS(i * 120));
     CHECK(observore_track_drain_new(out, 4) == 1, "after the memory expires it is announced");
 
+    /* A signature class is announced every time it comes back. A body camera
+     * at 20:00 and again at 22:00 is two pieces of news, not one; only the
+     * persistence inference is the same inference twice. */
+    observore_track_init();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x00, 0x00, 0x01};   /* Axon OUI */
+    observore_observation_t bwc = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -70,
+                                   .adv = adv, .adv_len = sizeof(adv)};
+    observore_track_observe(&bwc, SECS(0));
+    CHECK(observore_track_drain_new(out, 4) == 1 && out[0].cls == OBSERVORE_CLASS_BODYCAM,
+          "a body camera is announced on sight");
+    observore_track_tick(SECS(40 * 60));
+    observore_track_observe(&bwc, SECS(40 * 60));
+    CHECK(observore_track_drain_new(out, 4) == 1,
+          "and announced again when it comes back forty minutes later");
+
     /* A rotating address is remembered by its advert, not its address. */
     observore_track_init();
     const uint8_t r1[6] = {0x4A, 1, 1, 1, 1, 1}, r2[6] = {0x5E, 2, 2, 2, 2, 2};
