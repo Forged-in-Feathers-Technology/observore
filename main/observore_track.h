@@ -13,6 +13,25 @@
 #define OBSERVORE_FOLLOWER_MIN_HITS    3
 #define OBSERVORE_FOLLOWER_MIN_SPAN_US (5 * 60 * 1000000LL)
 
+/* A random address has to have come closer than this, at least once, before
+ * persistence alone makes it a follower.
+ *
+ * A random address carries no vendor to reason with, so distance is the only
+ * evidence left, and at the edge of range it is evidence of nothing. The case
+ * that set this: a neighbour's gadget with a static random address sitting at
+ * -82 to -90 dBm, drifting across the floor, announced afresh every time it
+ * came back. Things genuinely near a person read -40 to -70. Vendor-identified
+ * addresses keep the wider floor; a Ring at the edge of range is still a Ring. */
+#define OBSERVORE_RANDOM_FOLLOWER_RSSI (-80)
+
+/* How long a device stays "already announced" after it drops out of the
+ * table. It is still tracked and still scored when it comes back -- the level
+ * is honest -- but the digest does not repeat it. Six hours covers a device
+ * fading and returning through an evening without covering one that has
+ * genuinely gone and come back the next day. */
+#define OBSERVORE_ANNOUNCED_TTL_US (6LL * 3600 * 1000000)
+#define OBSERVORE_ANNOUNCED_MAX    32
+
 /* Scoring. */
 #define OBSERVORE_SCORE_DECAY_INTERVAL_US (60 * 1000000LL)  /* -1 point per minute */
 #define OBSERVORE_SCORE_COOLDOWN_US      (120 * 1000000LL)  /* per device re-score */

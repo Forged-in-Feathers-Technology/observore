@@ -30,8 +30,22 @@ static uint16_t     s_score;
 static int64_t      s_last_decay_us;
 static uint32_t     s_total_sightings;
 
+/* Devices announced recently, so that one which fades and returns is not
+ * announced again. Keyed by address for a static one and by advert fingerprint
+ * for a rotating one, since that is what survives the rotation. */
+typedef struct {
+    uint8_t  mac[OBSERVORE_MAC_LEN];
+    uint32_t fingerprint;
+    int64_t  at_us;
+} announced_t;
+static announced_t s_announced[OBSERVORE_ANNOUNCED_MAX];
+static size_t      s_announced_next;
+
+
 void observore_track_init(void)
 {
+    memset(s_announced, 0, sizeof(s_announced));
+    s_announced_next = 0;
 #ifndef OBSERVORE_HOST_TEST
     if (!s_lock) {
         s_lock = xSemaphoreCreateRecursiveMutex();
@@ -48,6 +62,32 @@ void observore_track_clear(void)
     s_last_decay_us = 0;
     s_total_sightings = 0;
     OBSERVORE_UNLOCK();
+}
+
+static bool announced_recently(const observore_event_t *ev, int64_t now_us)
+{
+    for (size_t i = 0; i < OBSERVORE_ANNOUNCED_MAX; i++) {
+        const announced_t *a = &s_announced[i];
+        if (a->at_us == 0 || now_us - a->at_us > OBSERVORE_ANNOUNCED_TTL_US) {
+            continue;
+        }
+        if (memcmp(a->mac, ev->mac, OBSERVORE_MAC_LEN) == 0) {
+            return true;
+        }
+        if (ev->addr_random && ev->fingerprint != 0 &&
+            a->fingerprint == ev->fingerprint) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void note_announced(const observore_event_t *ev, int64_t now_us)
+{
+    announced_t *a = &s_announced[s_announced_next++ % OBSERVORE_ANNOUNCED_MAX];
+    memcpy(a->mac, ev->mac, OBSERVORE_MAC_LEN);
+    a->fingerprint = ev->addr_random ? ev->fingerprint : 0;
+    a->at_us = now_us;
 }
 
 static observore_slot_t *find_slot(const uint8_t mac[OBSERVORE_MAC_LEN])
@@ -283,8 +323,12 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
         /* The follower heuristic.  This is the piece that catches hardware
          * with no signature at all -- the reason to build the thing. */
         int64_t span = slot->ev.last_seen_us - slot->ev.first_seen_us;
+        /* ev.rssi is the strongest seen, so this asks whether the device was
+         * ever within the floor, not whether it is right now. */
+        bool close_enough = !slot->ev.addr_random ||
+                            slot->ev.rssi >= OBSERVORE_RANDOM_FOLLOWER_RSSI;
         if (slot->ev.hits >= OBSERVORE_FOLLOWER_MIN_HITS &&
-            span >= OBSERVORE_FOLLOWER_MIN_SPAN_US) {
+            span >= OBSERVORE_FOLLOWER_MIN_SPAN_US && close_enough) {
             slot->ev.cls = OBSERVORE_CLASS_FOLLOWER;
             slot->ev.evidence = OBSERVORE_EVIDENCE_PERSISTENCE;
             slot->ev.points = observore_class_points(OBSERVORE_CLASS_FOLLOWER);
@@ -309,6 +353,18 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 
     bool reportable = slot->classified;
     if (reportable) {
+        /* Still scored -- the level must be honest -- but a follower that was
+         * announced in the last few hours and merely faded and returned is not
+         * news, so it is marked as already reported before the digest sees it.
+         *
+         * Followers only. A follower is an inference from persistence, and a
+         * persistent thing coming back is the same inference again. A body
+         * camera, an ALPR unit, a drone or a tracker is a signature match, and
+         * one of those coming back is exactly what the device exists to say. */
+        if (!slot->reported && slot->ev.cls == OBSERVORE_CLASS_FOLLOWER &&
+            announced_recently(&slot->ev, now_us)) {
+            slot->reported = true;
+        }
         score_device(slot, now_us);
     }
     OBSERVORE_UNLOCK();
@@ -441,6 +497,7 @@ size_t observore_track_drain_new(observore_event_t *out, size_t max)
         if (s_devices[i].in_use && s_devices[i].classified &&
             !s_devices[i].reported) {
             s_devices[i].reported = true;
+            note_announced(&s_devices[i].ev, s_devices[i].ev.last_seen_us);
             out[n++] = s_devices[i].ev;
         }
     }

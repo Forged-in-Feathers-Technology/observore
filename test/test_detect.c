@@ -1189,6 +1189,95 @@ static void test_wps(void)
  * tracker saw each rotation as a new device -- a neighbour's handset produced a
  * fresh follower alert every quarter hour, and a device that genuinely stayed
  * two hours was invisible because none of its addresses lasted long enough. */
+/* The device that set these rules: a static random address at -82 to -90 dBm,
+ * fading below the floor and returning, announced afresh every time. */
+static void test_edge_of_range_noise(void)
+{
+    banner("edge-of-range noise");
+
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t far_mac[6]  = {0xFE, 0xF2, 0xB3, 0x9D, 0x42, 0x46};
+    const uint8_t near_mac[6] = {0xFE, 0xF2, 0xB3, 0x00, 0x00, 0x01};
+    observore_observation_t far = {.mac = far_mac, .src = OBSERVORE_SRC_BLE, .rssi = -83,
+                                   .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+    observore_observation_t near = far; near.mac = near_mac; near.rssi = -60;
+    observore_status_t st;
+
+    /* A random address that has never come closer than -83 is never a
+     * follower, however long it persists. */
+    observore_track_init();
+    for (int i = 0; i < 12; i++) observore_track_observe(&far, SECS(i * 60));
+    observore_track_status(&st, SECS(720));
+    CHECK(st.device_count == 0, "a -83 dBm random address is not a follower, got %u",
+          st.device_count);
+
+    /* The same address, once seen at -60, is -- persistence then counts. */
+    far.rssi = -60; observore_track_observe(&far, SECS(780)); far.rssi = -83;
+    observore_track_observe(&far, SECS(840));
+    observore_track_status(&st, SECS(840));
+    CHECK(st.device_count == 1, "having once been close, it counts, got %u", st.device_count);
+
+    /* A public address at -83 keeps the old rule: a vendor can be reasoned with. */
+    observore_track_init();
+    const uint8_t pub[6] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+    observore_observation_t p = far; p.mac = pub; p.addr_random = false; p.rssi = -83;
+    for (int i = 0; i < 4; i++) observore_track_observe(&p, SECS(i * 120));
+    observore_track_status(&st, SECS(360));
+    CHECK(st.device_count == 1, "a public address at -83 is still a follower, got %u",
+          st.device_count);
+
+    /* Announced once, faded out, came back: tracked and scored again, but not
+     * handed to the digest a second time. */
+    observore_track_init();
+    observore_event_t out[4];
+    for (int i = 0; i < 4; i++) observore_track_observe(&near, SECS(i * 120));
+    CHECK(observore_track_drain_new(out, 4) == 1, "first appearance is announced");
+    /* Gone for 40 minutes: past the 30-minute TTL, the slot is evicted. */
+    observore_track_tick(SECS(360 + 40 * 60));
+    observore_track_status(&st, SECS(360 + 40 * 60));
+    CHECK(st.device_count == 0, "evicted while away, got %u", st.device_count);
+    /* Back, and persistent again. */
+    int64_t t = SECS(360 + 40 * 60);
+    for (int i = 0; i < 4; i++) observore_track_observe(&near, t + SECS(i * 120));
+    observore_track_status(&st, t + SECS(360));
+    CHECK(st.device_count == 1, "tracked again on return, got %u", st.device_count);
+    CHECK(st.score > 0, "and scored again: the level stays honest");
+    CHECK(observore_track_drain_new(out, 4) == 0, "but not announced again within six hours");
+
+    /* Seven hours later it is news again. */
+    observore_track_tick(t + SECS(7 * 3600));
+    t += SECS(7 * 3600);
+    for (int i = 0; i < 4; i++) observore_track_observe(&near, t + SECS(i * 120));
+    CHECK(observore_track_drain_new(out, 4) == 1, "after the memory expires it is announced");
+
+    /* A signature class is announced every time it comes back. A body camera
+     * at 20:00 and again at 22:00 is two pieces of news, not one; only the
+     * persistence inference is the same inference twice. */
+    observore_track_init();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x00, 0x00, 0x01};   /* Axon OUI */
+    observore_observation_t bwc = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -70,
+                                   .adv = adv, .adv_len = sizeof(adv)};
+    observore_track_observe(&bwc, SECS(0));
+    CHECK(observore_track_drain_new(out, 4) == 1 && out[0].cls == OBSERVORE_CLASS_BODYCAM,
+          "a body camera is announced on sight");
+    observore_track_tick(SECS(40 * 60));
+    observore_track_observe(&bwc, SECS(40 * 60));
+    CHECK(observore_track_drain_new(out, 4) == 1,
+          "and announced again when it comes back forty minutes later");
+
+    /* A rotating address is remembered by its advert, not its address. */
+    observore_track_init();
+    const uint8_t r1[6] = {0x4A, 1, 1, 1, 1, 1}, r2[6] = {0x5E, 2, 2, 2, 2, 2};
+    observore_observation_t a = near; a.mac = r1;
+    for (int i = 0; i < 4; i++) observore_track_observe(&a, SECS(i * 120));
+    CHECK(observore_track_drain_new(out, 4) == 1, "rotating device announced once");
+    observore_track_tick(SECS(360 + 40 * 60)); t = SECS(360 + 40 * 60);
+    a.mac = r2;                                   /* new address, same advert */
+    for (int i = 0; i < 4; i++) observore_track_observe(&a, t + SECS(i * 120));
+    CHECK(observore_track_drain_new(out, 4) == 0,
+          "the same advert under a new address is not announced again");
+}
+
 static void test_rotation_continuity(void)
 {
     banner("following a device across an address rotation");
@@ -1666,6 +1755,7 @@ int main(void)
     test_mac_parsing();
 
     test_wps();
+    test_edge_of_range_noise();
     test_rotation_continuity();
     test_webhook_and_telegram();
     test_heapwatch();
