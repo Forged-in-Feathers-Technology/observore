@@ -113,3 +113,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # about 35 seconds, which leaves room for a slow scan without leaving a genuinely
 # hung image running for long.
 CONFIG_BOOTLOADER_WDT_TIME_MS=120000
+
+# Lets the console close a stalled connection with a reset instead of a FIN
+# that waits on a client which has stopped reading. See observore_web_start().
+CONFIG_LWIP_SO_LINGER=y
+# Half the default TCP send buffer. The console's largest response is 9 KB,
+# and this is the amount a stalled client can pin per socket; the extra round
+# trips on a LAN are not noticeable, the pinned memory was.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2920
