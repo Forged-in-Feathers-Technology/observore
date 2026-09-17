@@ -268,6 +268,13 @@ it is where most detections come from.
 | hold 1.5 s | swap between patrol and uplink |
 | hold 4 s | raise the console SoftAP |
 
+On a board with a screen the short hold does something else: it **sets the
+baseline**, and the screen says what it did — `baseline set: 14 now ignored`,
+in amber, for a few seconds. That is the one action a person standing at the
+device needs, and swapping modes by hand mattered only when the console was the
+only way to see anything. The long hold still raises the console, which is
+where the Wi-Fi gets configured.
+
 With no network configured the short hold gives you the console instead, since
 that is where a network gets configured. The firmware logs how long it saw the
 button held, so a press a shade too short is distinguishable from a button that
@@ -871,6 +878,39 @@ MAC rules. A minute later, after rotation, the score was still zero.
 
 Up to 128 rules are stored, in NVS, surviving reboots.
 
+## The screen
+
+The ESP32-2432S028R — the 2.8" "Cheap Yellow Display" — is the one board here
+with a panel, and the firmware draws on it: the level as a coloured band with
+the score and device count, the top findings one per line in the same words a
+digest uses, and uptime with the version along the bottom. It is a status
+screen, redrawn every couple of seconds, and only the lines that changed are
+sent.
+
+Two decisions about what the screen is. Nothing on it is gated: the glass on a
+desk is a personal display and the authentication belongs to the network-facing
+console, not to the thing in the room with you. And the console password is
+never drawn on it, for the same reason in reverse — a screen faces a room, and
+the device already prints the password to serial for whoever is setting it up.
+
+That board does not send notifications. It cannot: the notifier is a build
+option (`CONFIG_OBSERVORE_NOTIFIER`) and the CYD profile leaves it out, which
+is what makes the port fit. Every memory problem this project has had was on
+the uplink and most of it was the TLS handshake behind a notification, so the
+board with the least RAM and no PSRAM is better off without the code than with
+it switched off. Off means absent: the console hides the panel, and asking to
+configure a provider says "this build has no notifier". Any board can be built
+that way; the CYD is the one that is.
+
+The profile is named for the panel controller, `cyd-2432s028r-st7789`, not
+just the product, because the same product ships with an ILI9341 in other
+revisions, a build for one shows garbage on the other, and the chip is
+identical so the flasher cannot tell them apart. Three things about this panel
+were settled on the bench against what is written about it: it does not want
+colour inversion, the SPI path does not byte-swap for you, and the panel driver
+returns before DMA has read the buffer you handed it. Each is a build setting
+or a comment where the next revision will look.
+
 ## Notifications
 
 Observore pushes to **[Gotify](https://gotify.net/)**, **[ntfy](https://ntfy.sh/)**
@@ -1039,7 +1079,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.7.0 && git push origin v0.7.0
+git tag v0.7.1 && git push origin v0.7.1
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
