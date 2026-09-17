@@ -32,11 +32,13 @@ LABELS = {
     "xiao-esp32c5":     "Seeed XIAO ESP32-C5",
     "xiao-esp32c6":     "Seeed XIAO ESP32C6",
     "devkit-esp32c5":   "ESP32-C5-DevKitC-1 / Waveshare C5",
+    "cyd-2432s028r-st7789": "ESP32-2432S028R 2.8\" CYD (ST7789 panel)",
 }
 
 NOTES = {
     "xiao-esp32c6": "no PSRAM, so TLS for notifications is tight on this board",
     "devkit-esp32c5": "two USB sockets; either one works",
+    "cyd-2432s028r-st7789": "no notifier in this build; ST7789 revision only, the screen is not driven yet",
 }
 
 
@@ -111,7 +113,7 @@ def main():
     # that does not match -- but being refused on the first click is a poor way
     # to meet a tool.
     order = {"xiao-esp32s3": 0, "devkit-esp32c5": 1, "xiao-esp32c5": 2,
-             "xiao-esp32c6": 3}
+             "xiao-esp32c6": 3, "cyd-2432s028r-st7789": 4}
     index.sort(key=lambda e: (order.get(e["board"], 99), e["label"]))
     idx = os.path.join(args.out_dir, "boards.json")
     with open(idx, "w", encoding="utf-8") as fh:

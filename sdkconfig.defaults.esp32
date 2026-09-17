@@ -1,0 +1,20 @@
+# The original ESP32: Xtensa, dual core, 2.4 GHz only, BLE 4.2, and on every
+# board this project targets, no PSRAM. The tightest chip here, which is why the
+# board profile that uses it leaves the notifier out.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# A CH340 UART bridge is the only serial connection on these boards, so the
+# console is the UART and nothing else. Improv listens there too.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# Which board this image is for. The chip does not say: see OBSERVORE_BOARD.
+CONFIG_OBSERVORE_BOARD="cyd-2432s028r-st7789"
+
+# The classic ESP32 cannot build an observer-only NimBLE. ESP-IDF forces
+# host-based privacy on for this chip (esp_nimble_cfg.h, under
+# CONFIG_IDF_TARGET_ESP32), which compiles the address-resolution code, which
+# calls the security manager, which is only compiled when a connecting role
+# exists. So it gets a central role it will never use; the device still never
+# connects to anything. Costs some flash and a little RAM, both measured in the
+# PR that added this.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y

@@ -1,0 +1,27 @@
+# ESP32-2432S028R, the 2.8" "Cheap Yellow Display", in its ST7789 revision.
+#
+# Named for the panel controller, not just the product: the same product name
+# ships with an ILI9341 in other revisions, a build for one shows garbage on the
+# other, and the chip is identical so the flasher cannot tell them apart. An
+# ILI9341 unit gets a sibling profile when one reaches a bench, not a guess.
+#
+# The screen is not driven yet. This profile is the board running headless --
+# LED, button, no notifier -- to learn whether the chip has the room before a
+# pixel is drawn. Pin map as widely documented, verified on the bench:
+#
+#   ST7789   HSPI  MOSI 13  MISO 12  SCLK 14  CS 15  DC 2  backlight 21
+#   XPT2046        MOSI 32  MISO 39  SCLK 25  CS 33  IRQ 36
+#   RGB LED        R 4  G 16  B 17  (active low)
+#   BOOT           GPIO 0
+
+# The green element of the RGB LED, as a plain active-low LED.
+CONFIG_OBSERVORE_LED_MONO=y
+CONFIG_OBSERVORE_LED_GPIO=16
+CONFIG_OBSERVORE_LED_ACTIVE_LOW=y
+CONFIG_OBSERVORE_BUTTON_GPIO=0
+
+# A device with a display does not need to push notifications, and the classic
+# ESP32 with no PSRAM is the board least able to afford the TLS behind them.
+# CONFIG_OBSERVORE_NOTIFIER is not set
+
+CONFIG_OBSERVORE_BOARD="cyd-2432s028r-st7789"
