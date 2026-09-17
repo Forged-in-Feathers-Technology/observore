@@ -94,3 +94,21 @@ bool observore_mute_parse_mac(const char *text, uint8_t *out, size_t want);
 
 /* Map a class name as the API spells it back to the enum. */
 bool observore_mute_parse_class(const char *name, observore_class_t *out);
+
+/* What a baseline did, for whoever asked for it. */
+typedef struct {
+    size_t seen;        /* devices in the table at the time */
+    size_t added;       /* new rules */
+    size_t already;     /* devices a rule already covered */
+    size_t by_name, by_fingerprint, by_mac;
+    size_t temporary;   /* MAC rules on rotating addresses: back within the hour */
+    size_t no_room;     /* rules refused because the table is full */
+} observore_baseline_t;
+
+/* Mark everything currently in range as known and start the score from a
+ * clean slate. Prefers the most durable rule each device supports -- a name,
+ * then the advert fingerprint where the class allows it, and only then the
+ * MAC. Saves once. `scratch` must hold `cap` events; the caller owns it
+ * because the size that fits depends on the board. */
+void observore_mute_baseline(observore_event_t *scratch, size_t cap,
+                             observore_baseline_t *out);

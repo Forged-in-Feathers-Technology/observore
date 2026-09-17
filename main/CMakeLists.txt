@@ -13,6 +13,7 @@ idf_component_register(
         "observore_version.c"
         "observore_update.c"
         "observore_heapwatch.c"
+        "observore_display.c"
         "observore_ble.c"
         "observore_wifi.c"
         "observore_web.c"
@@ -35,6 +36,7 @@ idf_component_register(
         esp_wifi
         app_update
         esp_https_ota
+        esp_lcd
         nvs_flash
 )
 

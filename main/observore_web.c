@@ -607,84 +607,20 @@ static esp_err_t nearby_handler(httpd_req_t *req)
  * the action is fully reversible from the same panel. */
 static esp_err_t baseline_handler(httpd_req_t *req)
 {
-    observore_event_t *snap = s_snap;
-    size_t count = observore_track_all(snap, s_snap_cap);
-
-    size_t added = 0, existing = 0, full = 0, temporary = 0;
-    size_t by_name = 0, by_fp = 0, by_mac = 0;
-
-    for (size_t i = 0; i < count; i++) {
-        const observore_event_t *e = &snap[i];
-        observore_mute_rule_t rule;
-        memset(&rule, 0, sizeof(rule));
-
-        /* Pick the most durable rule this device supports.
-         *
-         * A name is best: it survives address rotation and is specific enough
-         * to mean one device ("Encharg/492232007683").
-         *
-         * Otherwise a fingerprint, which also survives rotation -- but it
-         * matches a KIND of device, so it is not used for the classes where
-         * that could hide a real threat.
-         *
-         * Otherwise the MAC, which for a rotating address buys only an hour
-         * or so.  Counted as temporary and reported as such. */
-        if (e->detail[0] != '\0') {
-            rule.kind = OBSERVORE_MUTE_NAME;
-            snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
-        } else if (e->fingerprint != 0 &&
-                   !observore_mute_class_is_protected(e->cls)) {
-            rule.kind = OBSERVORE_MUTE_FINGERPRINT;
-            rule.fingerprint = e->fingerprint;
-        } else {
-            rule.kind = OBSERVORE_MUTE_MAC;
-            memcpy(rule.mac, e->mac, OBSERVORE_MAC_LEN);
-        }
-
-        bool is_new = false;
-        esp_err_t err = observore_mute_add_deferred(&rule, &is_new);
-        if (err == ESP_ERR_NO_MEM) {
-            full++;
-            continue;
-        }
-        if (err != ESP_OK) {
-            continue;
-        }
-        if (!is_new) {
-            existing++;
-            continue;
-        }
-        added++;
-        switch (rule.kind) {
-            case OBSERVORE_MUTE_NAME:        by_name++; break;
-            case OBSERVORE_MUTE_FINGERPRINT: by_fp++;   break;
-            default:
-                by_mac++;
-                if (e->addr_random) {
-                    temporary++;   /* this one will be back under a new MAC */
-                }
-                break;
-        }
-    }
-
-    /* One flash write for the whole baseline rather than one per rule. */
-    observore_mute_save();
-
-    /* Everything in range is now known, so the score and the log start from
-     * a clean slate -- that is what makes it a baseline rather than just a
-     * bulk mute. */
-    observore_track_clear();
+    observore_baseline_t b;
+    observore_mute_baseline(s_snap, s_snap_cap, &b);
 
     char body[256];
     snprintf(body, sizeof(body),
              "{\"ok\":true,\"seen\":%zu,\"added\":%zu,\"already\":%zu,"
              "\"by_name\":%zu,\"by_fingerprint\":%zu,\"by_mac\":%zu,"
              "\"temporary\":%zu,\"no_room\":%zu,\"rules\":%zu}",
-             count, added, existing, by_name, by_fp, by_mac, temporary, full,
-             observore_mute_count());
+             b.seen, b.added, b.already, b.by_name, b.by_fingerprint, b.by_mac,
+             b.temporary, b.no_room, observore_mute_count());
     ESP_LOGI(TAG, "baseline: %zu seen, %zu muted (%zu by name, %zu by "
                   "fingerprint, %zu by MAC of which %zu temporary), %zu no room",
-             count, added, by_name, by_fp, by_mac, temporary, full);
+             b.seen, b.added, b.by_name, b.by_fingerprint, b.by_mac,
+             b.temporary, b.no_room);
     return send_json(req, body);
 }
 

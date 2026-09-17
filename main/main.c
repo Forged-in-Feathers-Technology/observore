@@ -23,6 +23,7 @@
 #include "observore_notify.h"
 #include "observore_update.h"
 #include "observore_heapwatch.h"
+#include "observore_display.h"
 #include "observore_track.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
@@ -55,6 +56,9 @@ static void enter_mode(observore_mode_t next);
 
 static int64_t s_mode_since_us;
 static int64_t s_next_uplink_try_us;
+/* Set by the button task, acted on by the main loop, which has the heap for
+ * the snapshot a baseline needs. */
+static volatile bool s_baseline_requested;
 /* Set once this boot has actually patrolled, which is half of what a new image
  * has to do before its rollback is cancelled. */
 static bool    s_patrolled_since_boot;
@@ -206,9 +210,19 @@ static void button_task(void *arg)
              * allowed to continue into the long gesture before it can be
              * judged short. */
             if (!acted && held_ms >= BUTTON_HOLD_MS) {
+#if CONFIG_OBSERVORE_DISPLAY_ST7789
+                /* On a board with a screen the short hold sets the baseline:
+                 * it is the one action a person standing at the device needs,
+                 * and the screen can say what it did. Swapping patrol and
+                 * uplink by hand mattered when the console was the only way
+                 * to see anything; here it is not. */
+                ESP_LOGI(TAG, "button held %" PRIu32 " ms -- baseline", held_ms);
+                s_baseline_requested = true;
+#else
                 ESP_LOGI(TAG, "button held %" PRIu32 " ms -- switching mode",
                          held_ms);
                 toggle_mode();
+#endif
             } else if (!acted && held_ms > 150) {
                 /* Say what was actually seen.  A press a shade too short is
                  * otherwise indistinguishable from a button that is not wired
@@ -256,6 +270,7 @@ void app_main(void)
     observore_notify_init();
     observore_update_init();
     observore_heapwatch_init();
+    observore_display_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.
@@ -282,7 +297,11 @@ void app_main(void)
     }
 #endif
 
+#if CONFIG_OBSERVORE_DISPLAY_ST7789
+    ESP_LOGI(TAG, "hold %d ms to set the baseline, %d ms for the console.",
+#else
     ESP_LOGI(TAG, "hold %d ms to swap patrol/uplink, %d ms for the console.",
+#endif
              BUTTON_HOLD_MS, BUTTON_CONSOLE_MS);
 
     int64_t last_heartbeat_us = 0;
@@ -292,7 +311,38 @@ void app_main(void)
         int64_t now = esp_timer_get_time();
         observore_track_tick(now);
 
+        if (s_baseline_requested) {
+            s_baseline_requested = false;
+            /* Borrowed, not static: a snapshot of every slot is about 23 KB,
+             * which this board can spare for a moment and not for good. */
+            observore_event_t *snap = malloc(sizeof(*snap) * OBSERVORE_MAX_DEVICES);
+            if (snap) {
+                observore_baseline_t b;
+                observore_mute_baseline(snap, OBSERVORE_MAX_DEVICES, &b);
+                free(snap);
+                char msg[48];
+                snprintf(msg, sizeof(msg), "baseline set: %zu now ignored", b.added);
+                observore_display_notice(msg, 6);
+                ESP_LOGI(TAG, "baseline from the button: %zu seen, %zu muted",
+                         b.seen, b.added);
+            } else {
+                observore_display_notice("baseline failed: out of memory", 6);
+            }
+        }
+
         observore_status_t st = publish();
+
+        /* The screen, on boards that have one. Rate limited here rather than
+         * inside, so the snapshot it needs is only taken when it will be used. */
+        {
+            static int64_t s_last_draw_us;
+            if (now - s_last_draw_us >= 2 * 1000000) {
+                s_last_draw_us = now;
+                static observore_event_t s_top[12];
+                size_t n = observore_track_snapshot(s_top, 12);
+                observore_display_render(&st, s_top, n, now);
+            }
+        }
 
         /* Say when the internal-heap low-water mark moves, not just what it
          * ended up at -- and keep it, so the next morning's check can read
