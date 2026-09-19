@@ -142,16 +142,38 @@ config OBSERVORE_PATROL_WINDOW_S
 
 menu "Display"
 
-config OBSERVORE_DISPLAY_ST7789
-    bool "ST7789 panel over SPI"
+config OBSERVORE_DISPLAY
+    bool "Panel over SPI"
     default n
     help
-        A 240x320 ST7789 driven through esp_lcd, used in landscape. Off on
-        every board that has no panel. Named for the controller rather than
-        for a product, because the same product ships with other panels and a
-        build for one shows garbage on the other.
+        A 240x320 panel driven through esp_lcd, used in landscape. Off on
+        every board that has no panel. Which controller sits behind the glass
+        is a separate choice, because the same product ships with more than
+        one and a build for one shows garbage on the other.
 
-if OBSERVORE_DISPLAY_ST7789
+if OBSERVORE_DISPLAY
+
+choice OBSERVORE_DISPLAY_PANEL
+    prompt "Panel controller"
+    default OBSERVORE_DISPLAY_ST7789
+
+config OBSERVORE_DISPLAY_ST7789
+    bool "ST7789"
+    help
+        The later revisions of the 2.8" ESP32-2432S028R. Verified on the
+        bench.
+
+config OBSERVORE_DISPLAY_ILI9341
+    bool "ILI9341"
+    help
+        The original 2.8" ESP32-2432S028R and most 2.4" and 3.2" siblings.
+        Driven through the espressif/esp_lcd_ili9341 component. Not yet
+        confirmed on a bench: the colour order, inversion and mirroring below
+        are the values every other project uses for it, and each is a build
+        option in case they are wrong.
+
+endchoice
+
 
 config OBSERVORE_DISPLAY_MOSI
     int "MOSI GPIO"
@@ -184,7 +206,8 @@ config OBSERVORE_DISPLAY_INVERT
     help
         Wrong looks like a photographic negative and is obvious at a glance.
         The ST7789 revision of the 2432S028R on the bench did not need it,
-        despite reports that it does; other panels may.
+        despite reports that it does; the ILI9341 revision is not expected to
+        either.
 config OBSERVORE_DISPLAY_BGR
     bool "Panel takes BGR order"
     default n

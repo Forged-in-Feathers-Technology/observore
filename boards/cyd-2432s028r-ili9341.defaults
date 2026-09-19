@@ -1,0 +1,37 @@
+# ESP32-2432S028R, the 2.8" "Cheap Yellow Display", in its original ILI9341
+# revision -- the one most of the tutorials and most of the units out there
+# are. The 2.4" ESP32-2432S024 and 3.2" ESP32-2432S032 with the same
+# controller are the same board with different glass and take this build too.
+#
+# Not yet verified on a bench. The pins are shared with the ST7789 revision
+# and are certain; the panel settings are what every other project uses for
+# this controller, and each is a build option so a wrong one is a one-line
+# fix, not a port:
+#
+#   colours a negative        -> CONFIG_OBSERVORE_DISPLAY_INVERT=y
+#   alert band blue not red   -> CONFIG_OBSERVORE_DISPLAY_BGR=n
+#   image upside down         -> MIRROR_X=n and MIRROR_Y=y
+#
+#   ILI9341  HSPI  MOSI 13  MISO 12  SCLK 14  CS 15  DC 2  backlight 21
+#   XPT2046        MOSI 32  MISO 39  SCLK 25  CS 33  IRQ 36
+#   RGB LED        R 4  G 16  B 17  (active low)
+#   BOOT           GPIO 0
+
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_ILI9341=y
+CONFIG_OBSERVORE_DISPLAY_BGR=y
+# CONFIG_OBSERVORE_DISPLAY_INVERT is not set
+CONFIG_OBSERVORE_DISPLAY_MIRROR_X=y
+# CONFIG_OBSERVORE_DISPLAY_MIRROR_Y is not set
+
+# The green element of the RGB LED, as a plain active-low LED.
+CONFIG_OBSERVORE_LED_MONO=y
+CONFIG_OBSERVORE_LED_GPIO=16
+CONFIG_OBSERVORE_LED_ACTIVE_LOW=y
+CONFIG_OBSERVORE_BUTTON_GPIO=0
+
+# A device with a display does not need to push notifications, and the classic
+# ESP32 with no PSRAM is the board least able to afford the TLS behind them.
+# CONFIG_OBSERVORE_NOTIFIER is not set
+
+CONFIG_OBSERVORE_BOARD="cyd-2432s028r-ili9341"

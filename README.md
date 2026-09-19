@@ -536,6 +536,13 @@ esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
     0x8000  partition-table-cyd-2432s028r-st7789.bin \
     0x10000 ota_data_initial-cyd-2432s028r-st7789.bin \
     0x20000 observore-cyd-2432s028r-st7789.bin
+
+# ESP32-2432S028R (2.8" CYD, ILI9341 revision) -- same board, other panel
+esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
+    0x1000  bootloader-cyd-2432s028r-ili9341.bin \
+    0x8000  partition-table-cyd-2432s028r-ili9341.bin \
+    0x10000 ota_data_initial-cyd-2432s028r-ili9341.bin \
+    0x20000 observore-cyd-2432s028r-ili9341.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
@@ -587,7 +594,8 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | ESP32-C5 DevKitC / Waveshare *(default for C5)* | GPIO27, WS2812 | GPIO28 | two USB sockets, either works |
 | `boards/xiao-esp32c5` | GPIO27, plain | GPIO28 | 8 MB PSRAM, native USB only |
 | `boards/xiao-esp32c6` | GPIO15, plain | GPIO9 | **no PSRAM**, so TLS is tight |
-| `boards/cyd-2432s028r-st7789` | GPIO16, plain (green of the RGB) | GPIO0 | original ESP32, **no PSRAM, no notifier**; the ST7789 2.8" CYD, screen not driven yet |
+| `boards/cyd-2432s028r-st7789` | GPIO16, plain (green of the RGB) | GPIO0 | original ESP32, **no PSRAM, no notifier**; the later 2.8" CYD, on-screen display |
+| `boards/cyd-2432s028r-ili9341` | GPIO16, plain (green of the RGB) | GPIO0 | as above for the original 2.8" CYD and its 2.4"/3.2" siblings; **not yet confirmed on hardware** |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
@@ -902,10 +910,15 @@ it switched off. Off means absent: the console hides the panel, and asking to
 configure a provider says "this build has no notifier". Any board can be built
 that way; the CYD is the one that is.
 
-The profile is named for the panel controller, `cyd-2432s028r-st7789`, not
-just the product, because the same product ships with an ILI9341 in other
-revisions, a build for one shows garbage on the other, and the chip is
-identical so the flasher cannot tell them apart. Three things about this panel
+The profiles are named for the panel controller, `cyd-2432s028r-st7789` and
+`cyd-2432s028r-ili9341`, not just the product, because the same product ships
+with either, a build for one shows garbage on the other, and the chip is
+identical so the flasher cannot tell them apart. If you do not know which you
+have, flash one: the wrong one is a negative or has red and blue swapped, and
+the right one is the other build. The ST7789 profile was settled on the bench;
+the ILI9341 one carries the settings every other project uses for that
+controller and is waiting for someone with the board to confirm them (an
+issue with a photo is all it takes). Three things about the ST7789 panel
 were settled on the bench against what is written about it: it does not want
 colour inversion, the SPI path does not byte-swap for you, and the panel driver
 returns before DMA has read the buffer you handed it. Each is a build setting
@@ -1279,7 +1292,8 @@ The board matters as much as the version. Two of the four boards here are
 ESP32-C5s and their images are not interchangeable, which is why the installer
 offers a picker rather than deciding from the chip. A device updating itself has
 the same problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
-`devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6` or `cyd-2432s028r-st7789`. CI asserts that each board's
+`devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789` or
+`cyd-2432s028r-ili9341`. CI asserts that each board's
 build resolves to its own name, checked against the `sdkconfig` the build
 actually produced rather than by re-deriving the layering.
 

@@ -5,14 +5,22 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_OBSERVORE_DISPLAY_ST7789
+#if CONFIG_OBSERVORE_DISPLAY
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_app_desc.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
+#if CONFIG_OBSERVORE_DISPLAY_ILI9341
+#include "esp_lcd_ili9341.h"
+#define PANEL_NAME "ILI9341"
+#define new_panel  esp_lcd_new_panel_ili9341
+#else
 #include "esp_lcd_panel_st7789.h"
+#define PANEL_NAME "ST7789"
+#define new_panel  esp_lcd_new_panel_st7789
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -150,16 +158,17 @@ void observore_display_init(void)
         .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
     };
-    err = esp_lcd_new_panel_st7789(io, &panel_cfg, &s_panel);
+    err = new_panel(io, &panel_cfg, &s_panel);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ST7789: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, PANEL_NAME ": %s", esp_err_to_name(err));
         return;
     }
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
-    /* The ST7789 revision of this board is widely reported to need inversion;
-     * an ILI9341 one would not. Both are a build setting, because the failure
-     * looks like a negative and is obvious the moment the screen is looked at. */
+    /* The ST7789 revision of this board is widely reported to need inversion
+     * and on the bench did not; the ILI9341 one is not expected to. It is a
+     * build setting either way, because the failure looks like a negative and
+     * is obvious the moment the screen is looked at. */
     esp_lcd_panel_invert_color(s_panel, CONFIG_OBSERVORE_DISPLAY_INVERT);
     esp_lcd_panel_swap_xy(s_panel, true);
     esp_lcd_panel_mirror(s_panel, CONFIG_OBSERVORE_DISPLAY_MIRROR_X,
@@ -185,7 +194,7 @@ void observore_display_init(void)
     if (CONFIG_OBSERVORE_DISPLAY_BL >= 0) {
         gpio_set_level(CONFIG_OBSERVORE_DISPLAY_BL, 1);
     }
-    ESP_LOGI(TAG, "ST7789 %dx%d, %d columns", DISP_W, DISP_H, COLS);
+    ESP_LOGI(TAG, PANEL_NAME " %dx%d, %d columns", DISP_W, DISP_H, COLS);
 }
 
 static const char *ago(int64_t us, char *buf, size_t len)

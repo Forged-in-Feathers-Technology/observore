@@ -6,5 +6,10 @@ dependencies:
   # plain LED.  Depended on unconditionally rather than per target, because the
   # LED backend is a Kconfig choice: any board could be wired either way.
   espressif/led_strip: "^3.0.0"
+  # The ILI9341 panel driver; the ST7789 one ships inside esp_lcd. Pulled in
+  # for every target for the same reason as the LED strip: the panel is a
+  # Kconfig choice, and a component that is not selected costs a build
+  # nothing beyond the download.
+  espressif/esp_lcd_ili9341: "^1.2.0"
   idf:
     version: ">=5.0"
