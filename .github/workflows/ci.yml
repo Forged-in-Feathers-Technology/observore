@@ -59,6 +59,9 @@ jobs:
           - board: cyd-2432s028r-st7789
             target: esp32
             profile: boards/cyd-2432s028r-st7789.defaults
+          - board: cyd-2432s028r-ili9341
+            target: esp32
+            profile: boards/cyd-2432s028r-ili9341.defaults
     steps:
       - uses: actions/checkout@v7
       - name: Build with ESP-IDF

@@ -151,7 +151,7 @@ static void enter_mode(observore_mode_t next)
     }
 }
 
-#if !CONFIG_OBSERVORE_DISPLAY_ST7789
+#if !CONFIG_OBSERVORE_DISPLAY
 /* Short hold: alternate the two working modes.  With no network configured
  * there is only one sensible destination, the console, since that is where a
  * network gets configured.  On a board with a screen the short hold sets the
@@ -244,7 +244,7 @@ static void button_task(void *arg)
              * allowed to continue into the long gesture before it can be
              * judged short. */
             if (!acted && held_ms >= BUTTON_HOLD_MS) {
-#if CONFIG_OBSERVORE_DISPLAY_ST7789
+#if CONFIG_OBSERVORE_DISPLAY
                 /* On a board with a screen the short hold sets the baseline:
                  * it is the one action a person standing at the device needs,
                  * and the screen can say what it did. Swapping patrol and
@@ -331,7 +331,7 @@ void app_main(void)
     }
 #endif
 
-#if CONFIG_OBSERVORE_DISPLAY_ST7789
+#if CONFIG_OBSERVORE_DISPLAY
     ESP_LOGI(TAG, "hold %d ms to set the baseline, %d ms for the console.",
 #else
     ESP_LOGI(TAG, "hold %d ms to swap patrol/uplink, %d ms for the console.",

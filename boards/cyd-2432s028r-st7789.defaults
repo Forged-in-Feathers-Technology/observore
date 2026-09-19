@@ -2,12 +2,10 @@
 #
 # Named for the panel controller, not just the product: the same product name
 # ships with an ILI9341 in other revisions, a build for one shows garbage on the
-# other, and the chip is identical so the flasher cannot tell them apart. An
-# ILI9341 unit gets a sibling profile when one reaches a bench, not a guess.
+# other, and the chip is identical so the flasher cannot tell them apart. The
+# ILI9341 revision is boards/cyd-2432s028r-ili9341.defaults.
 #
-# The screen is not driven yet. This profile is the board running headless --
-# LED, button, no notifier -- to learn whether the chip has the room before a
-# pixel is drawn. Pin map as widely documented, verified on the bench:
+# Pin map as widely documented, verified on the bench:
 #
 #   ST7789   HSPI  MOSI 13  MISO 12  SCLK 14  CS 15  DC 2  backlight 21
 #   XPT2046        MOSI 32  MISO 39  SCLK 25  CS 33  IRQ 36
@@ -18,6 +16,7 @@
 # inversion, RGB order, X mirrored, Y not. The first light-up was a negative
 # with a cyan band and unreadable text; each of those was one setting, and
 # each is a build option so the next panel revision is a config change.
+CONFIG_OBSERVORE_DISPLAY=y
 CONFIG_OBSERVORE_DISPLAY_ST7789=y
 
 # The green element of the RGB LED, as a plain active-low LED.
