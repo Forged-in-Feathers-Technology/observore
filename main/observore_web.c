@@ -95,10 +95,18 @@ static bool scratch_alloc(void)
     }
     s_snap_cap = SNAP_INTERNAL;
     s_body_cap = JSON_BUF_INTERNAL;
-    ESP_LOGW(TAG, "no PSRAM: console scratch is %d KB of internal RAM and "
-                  "reports at most %d devices per request",
-             (int)((sizeof(observore_event_t) * SNAP_INTERNAL +
-                    JSON_BUF_INTERNAL) / 1024), SNAP_INTERNAL);
+    /* Worth saying once. The scratch is taken afresh for every uplink window,
+     * and a warning repeated every few minutes for the life of the device --
+     * 536 times in one night on a board that has never had PSRAM -- is not a
+     * warning any more, just the log getting harder to read. */
+    static bool s_said;
+    if (!s_said) {
+        s_said = true;
+        ESP_LOGW(TAG, "no PSRAM: console scratch is %d KB of internal RAM and "
+                      "reports at most %d devices per request",
+                 (int)((sizeof(observore_event_t) * SNAP_INTERNAL +
+                        JSON_BUF_INTERNAL) / 1024), SNAP_INTERNAL);
+    }
     return true;
 }
 

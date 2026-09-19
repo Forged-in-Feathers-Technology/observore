@@ -65,11 +65,42 @@ static bool    s_patrolled_since_boot;
 static bool    s_image_confirmed;
 static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
 
+/* Say when the internal-heap low-water mark moves, not just what it ended up
+ * at -- and keep it, so the next morning's check can read when it happened
+ * and during what, instead of just how far it fell.
+ *
+ * Two overnight runs each came back with a number and no lead: one at 1,072
+ * bytes, one at 2,932, both logged at the moment they happened to a serial
+ * port nobody was reading. The watermark alone is a puzzle; the moment, the
+ * mode and the queue depth are a lead.
+ *
+ * The loop samples this once a heartbeat, which is ~35 s on patrol, so a dip
+ * in the last seconds of an uplink window used to be found by the first patrol
+ * heartbeat and filed under "patrol" -- the one mode in which it cannot have
+ * happened, since the console and the station are both down. It is therefore
+ * also sampled at the moment the uplink is left, before anything is torn down,
+ * so a dip on the uplink is filed under the uplink. */
+static void note_heap_low_water(int64_t now)
+{
+    uint32_t low     = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (observore_heapwatch_note(low, largest,
+                                 (uint32_t)observore_notify_pending(),
+                                 observore_mode_name(observore_wifi_mode()),
+                                 now)) {
+        ESP_LOGW(TAG, "internal heap low-water fell to %" PRIu32 " bytes "
+                      "(%s, %zu queued, largest block %" PRIu32 ")",
+                 low, observore_mode_name(observore_wifi_mode()),
+                 observore_notify_pending(), largest);
+    }
+}
+
 static void enter_mode(observore_mode_t next)
 {
     s_mode_since_us = esp_timer_get_time();
 
     if (next == OBSERVORE_MODE_PATROL) {
+        note_heap_low_water(s_mode_since_us);
         observore_web_stop();
         /* Patrol is the fallback, so there is nowhere further to fall back to
          * and nothing to decide -- but it must not fail silently. The mode is
@@ -120,9 +151,11 @@ static void enter_mode(observore_mode_t next)
     }
 }
 
+#if !CONFIG_OBSERVORE_DISPLAY_ST7789
 /* Short hold: alternate the two working modes.  With no network configured
  * there is only one sensible destination, the console, since that is where a
- * network gets configured. */
+ * network gets configured.  On a board with a screen the short hold sets the
+ * baseline instead, so this is only compiled where it still switches modes. */
 static void toggle_mode(void)
 {
     if (!observore_netcfg_is_set()) {
@@ -140,6 +173,7 @@ static void toggle_mode(void)
         enter_mode(OBSERVORE_MODE_UPLINK);
     }
 }
+#endif
 
 /* Report whatever has been found: the serial log, the notifier queue and the
  * LED.  Called from the main loop and again between patrol channel dwells, so a
@@ -344,27 +378,7 @@ void app_main(void)
             }
         }
 
-        /* Say when the internal-heap low-water mark moves, not just what it
-         * ended up at -- and keep it, so the next morning's check can read
-         * when it happened and during what, instead of just how far it fell.
-         *
-         * Two overnight runs each came back with a number and no lead: one at
-         * 1,072 bytes, one at 2,932, both logged at the moment they happened to
-         * a serial port nobody was reading. The watermark alone is a puzzle;
-         * the moment, the mode and the queue depth are a lead. */
-        {
-            uint32_t low     = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-            uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-            if (observore_heapwatch_note(low, largest,
-                                         (uint32_t)observore_notify_pending(),
-                                         observore_mode_name(observore_wifi_mode()),
-                                         now)) {
-                ESP_LOGW(TAG, "internal heap low-water fell to %" PRIu32 " bytes "
-                              "(%s, %zu queued, largest block %" PRIu32 ")",
-                         low, observore_mode_name(observore_wifi_mode()),
-                         observore_notify_pending(), largest);
-            }
-        }
+        note_heap_low_water(now);
 
         /* Confirm a freshly installed image once it has completed a patrol
          * cycle: it booted, brought up the radio, scanned, swept the channels
