@@ -530,13 +530,19 @@ esptool.py --chip esp32c6 -p /dev/ttyACM0 write_flash \
     0x10000 ota_data_initial-xiao-esp32c6.bin \
     0x20000 observore-xiao-esp32c6.bin
 
-# ESP32-2432S028R (2.8" CYD, ST7789 revision) -- a CH340 bridge, so ttyUSB.
-# For the ILI9341 revision substitute cyd-2432s028r-ili9341 in the four names.
+# ESP32-2432S028R (2.8" CYD, ST7789 revision) -- a CH340 bridge, so ttyUSB
 esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
     0x1000  bootloader-cyd-2432s028r-st7789.bin \
     0x8000  partition-table-cyd-2432s028r-st7789.bin \
     0x10000 ota_data_initial-cyd-2432s028r-st7789.bin \
     0x20000 observore-cyd-2432s028r-st7789.bin
+
+# ESP32-2432S028R (2.8" CYD, ILI9341 revision) -- same board, other panel
+esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
+    0x1000  bootloader-cyd-2432s028r-ili9341.bin \
+    0x8000  partition-table-cyd-2432s028r-ili9341.bin \
+    0x10000 ota_data_initial-cyd-2432s028r-ili9341.bin \
+    0x20000 observore-cyd-2432s028r-ili9341.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
