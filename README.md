@@ -1110,7 +1110,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.7.1 && git push origin v0.7.1
+git tag v0.8.0 && git push origin v0.8.0
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
@@ -1306,14 +1306,15 @@ itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
 
-The board matters as much as the version. Two of the four boards here are
-ESP32-C5s and their images are not interchangeable, which is why the installer
-offers a picker rather than deciding from the chip. A device updating itself has
-the same problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
+The board matters as much as the version. Two of the six boards here are
+ESP32-C5s and two are the same classic ESP32 behind different glass, and none of
+those images are interchangeable, which is why the installer offers a picker
+rather than deciding from the chip. A device updating itself has the same
+problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
 `devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789` or
-`cyd-2432s028r-ili9341`. CI asserts that each board's
-build resolves to its own name, checked against the `sdkconfig` the build
-actually produced rather than by re-deriving the layering.
+`cyd-2432s028r-ili9341`. CI asserts that each board's build resolves to its own
+name, checked against the `sdkconfig` the build actually produced rather than
+by re-deriving the layering.
 
 Nothing is downloaded by the check. Installing is a separate and deliberate
 act: the console grows an **Install update** button when there is something to
