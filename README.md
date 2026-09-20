@@ -870,6 +870,10 @@ comes back with an error if the device rejects it.
 **Set baseline** marks everything currently in range as known and resets the
 score, so the device starts watching for what changes from *here* rather than
 reporting the whole neighbourhood. Run it where it will live, and what it flags afterwards is genuinely new.
+"In range" means everything in the device table, which holds a device for
+thirty minutes after it was last heard — so a baseline taken within half an
+hour of an alert includes the device that raised it, whether or not it is still
+advertising at that moment.
 
 It mutes detected threats too, which is the point: your own doorbell camera is
 exactly the thing you want silenced. It asks for confirmation once, and
@@ -879,6 +883,20 @@ Baseline picks the most durable rule each device supports: its name if it
 broadcasts one, else its advert fingerprint, else — only as a last resort — its
 MAC. It reports the breakdown, and counts how many rules are merely temporary
 because they had to fall back to a rotating address.
+
+One exception to the fingerprint rule above is made here, and only here. A
+`follower` on a rotating address gets a fingerprint rule from a baseline, where
+a console mute would refuse one. "Follower" is a verdict about how long
+something has been near you, not about what it is; in your own home the device
+that has been near you for five minutes is your phone, and a MAC rule for it
+dies at its next rotation — which is how the same handset ends up announced
+every day. A baseline is you standing at the device saying that what is here
+now is yours, and your phones are the whole point of that. The cost is stated
+plainly: a stranger carrying the same model, advertising the same way, is quiet
+too. Trackers, drones, body-worn cameras and the rest keep their protection,
+because they are classified by what they are, and a baseline does not change
+what they are. A `follower` that keeps a fixed address gets the MAC rule, which
+is both more specific and just as durable.
 
 Measured on real air: fourteen devices in range, all of them rotating their
 addresses, produced three name rules and ten fingerprint rules and **zero**

@@ -826,6 +826,80 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_baseline_follower(void)
+{
+    banner("a baseline mutes a rotating follower by fingerprint, not by address");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* A plain phone-shaped advert on a rotating address, in the room long
+     * enough to be promoted. */
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t a1[6] = {0x73, 0x85, 0x1A, 0x47, 0xA6, 0xAD};
+    const uint8_t a2[6] = {0x64, 0x59, 0x0D, 0x93, 0xD7, 0xB7};
+    observore_observation_t o1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                  .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+    observore_observation_t o2 = o1; o2.mac = a2;
+
+    observore_track_observe(&o1, SECS(0));
+    observore_track_observe(&o1, SECS(100));
+    observore_track_observe(&o1, SECS(200));
+    observore_track_observe(&o1, SECS(310));
+    observore_status_t st;
+    observore_track_status(&st, SECS(310));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 1, "promoted to follower first");
+
+    /* The owner holds the button. */
+    static observore_event_t scratch[OBSERVORE_MAX_DEVICES];
+    observore_baseline_t r;
+    observore_mute_baseline(scratch, OBSERVORE_MAX_DEVICES, &r);
+    CHECK(r.added == 1, "one rule for the one device (got %zu)", r.added);
+    CHECK(r.by_fingerprint == 1 && r.by_mac == 0,
+          "a rotating follower gets a fingerprint rule, not a MAC that dies with the rotation");
+
+    /* Tomorrow, under a fresh address, the same handset sits in the room
+     * for as long as it likes and is never promoted again. */
+    observore_track_init();
+    observore_track_observe(&o2, SECS(90000));
+    observore_track_observe(&o2, SECS(90100));
+    observore_track_observe(&o2, SECS(90200));
+    CHECK(!observore_track_observe(&o2, SECS(90310)),
+          "the same advert shape under a new address must not report");
+    observore_track_status(&st, SECS(90310));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 0 && st.device_count == 0,
+          "and never enters the table (followers %d, devices %d)",
+          (int)st.class_counts[OBSERVORE_CLASS_FOLLOWER], (int)st.device_count);
+
+    /* A follower on a public address keeps the more specific MAC rule. */
+    observore_mute_clear();
+    observore_track_init();
+    const uint8_t pub[6] = {0x25, 0x10, 0x30, 0xB6, 0x39, 0x8E};
+    observore_observation_t op = o1; op.mac = pub; op.addr_random = false;
+    observore_track_observe(&op, SECS(0));
+    observore_track_observe(&op, SECS(100));
+    observore_track_observe(&op, SECS(200));
+    observore_track_observe(&op, SECS(310));
+    observore_mute_baseline(scratch, OBSERVORE_MAX_DEVICES, &r);
+    CHECK(r.by_mac == 1 && r.by_fingerprint == 0,
+          "a follower that keeps its address is muted by that address");
+
+    /* A tracker is still never muted by fingerprint, baseline or not. */
+    observore_mute_clear();
+    observore_track_init();
+    uint8_t findmy[31] = {0};
+    findmy[0] = 0x1E; findmy[1] = 0xFF; findmy[2] = 0x4C; findmy[3] = 0x00;
+    findmy[4] = 0x12; findmy[5] = 0x19; findmy[6] = 0x10;
+    observore_observation_t ot = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                  .addr_random = true, .adv = findmy, .adv_len = sizeof(findmy)};
+    observore_track_observe(&ot, SECS(0));
+    observore_mute_baseline(scratch, OBSERVORE_MAX_DEVICES, &r);
+    CHECK(r.by_fingerprint == 0, "a tracker in a baseline is never a fingerprint rule");
+
+    observore_mute_clear();
+}
+
 static void test_name_rule_matches_ble(void)
 {
     banner("name rules across a MAC rotation");
@@ -1751,6 +1825,7 @@ int main(void)
     test_mute();
     test_fingerprint();
     test_fingerprint_safety();
+    test_baseline_follower();
     test_name_rule_matches_ble();
     test_mac_parsing();
 
