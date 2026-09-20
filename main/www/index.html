@@ -111,6 +111,7 @@
 <header>
   <h1>Observore</h1>
   <span class="sub" id="uptime"></span>
+  <span class="sub" id="runs" title="how long the previous runs lasted and how each ended -- on battery, that is the battery"></span>
   <span class="sub" id="heap" title="internal RAM: free now, and the lowest it has been since boot"></span>
 </header>
 
@@ -258,6 +259,7 @@
     <span id="version"></span>
   </div>
   <div class="add">
+    <button id="check">Check now</button>
     <button id="install" disabled>Install update</button>
     <span class="note" id="updatenote"></span>
   </div>
@@ -279,6 +281,12 @@ function ago(s) {
   if (s < 60) return s + 's';
   if (s < 3600) return Math.floor(s / 60) + 'm';
   return Math.floor(s / 3600) + 'h';
+}
+
+// A duration where the minutes matter: "14h20m" is battery data, "14h" is not.
+function dur(s) {
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  return Math.floor(s / 3600) + 'h' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + 'm';
 }
 
 // "4m ago" answers how long, not when. Once the device knows the time it also
@@ -430,6 +438,7 @@ function renderStatus(s) {
   $('uptime').textContent = 'up ' + ago(s.uptime_s) +
     (s.reset_reason && s.reset_reason !== 'power-on' ? ' after ' + s.reset_reason : '') +
     (s.time_valid ? '' : ' \u00b7 clock not set');
+  renderRuns(s.runs);
   renderUpdate(s);
   renderHeap(s.heap);
   // A build without a notifier has nothing to configure. Hide the panel rather
@@ -453,6 +462,10 @@ function renderUpdate(s) {
     : (s.latest ? '\u2014 up to date, latest published is ' + s.latest
                 : '\u2014 not checked yet');
   $('install').disabled = busy || !s.update;
+  // A check the page asked for is answered in the status a few seconds later,
+  // one way or the other; the button stays down until it is.
+  $('check').disabled = busy || s.checking || s.mode !== 'uplink';
+  $('check').textContent = s.checking ? 'Checking\u2026' : 'Check now';
 
   if (s.update_state === 'running') {
     $('updatenote').textContent = s.update_pct >= 0
@@ -470,11 +483,29 @@ function renderUpdate(s) {
     $('updatenote').textContent = s.latest + ' is available. Downloading takes a ' +
       'few minutes, during which the device is not detecting anything, and it ' +
       'restarts afterwards.';
+  } else if (s.checking) {
+    $('updatenote').textContent = 'Asking the release page what is newest.';
+  } else if (s.check_error) {
+    $('updatenote').textContent = 'The last check failed: ' + s.check_error +
+      (s.checked_s >= 0 ? ' (last good answer ' + ago(s.checked_s) + ' ago)' : '');
   } else {
+    const when = s.checked_s >= 0 ? 'Checked ' + ago(s.checked_s) + ' ago; ' : '';
     $('updatenote').textContent = s.latest
-      ? 'Nothing newer to install. The device checks once a day.'
+      ? when + 'nothing newer to install. The device checks once a day on its own.'
       : 'Checks for a newer release once a day, on the uplink.';
   }
+}
+
+// The runs before this one: how long each lasted and how it ended. Newest
+// first, the way a person asks "and the one before that?".
+function renderRuns(runs) {
+  const el = $('runs');
+  if (!runs || !runs.length) { el.textContent = ''; return; }
+  const one = r => dur(r.up_s) + ' (' + r.end + ')';
+  el.textContent = 'previous run ' + one(runs[0]);
+  el.title = runs.map(one).join(' \u2190 ') +
+    '\n\nhow long each previous run lasted and how it ended, newest first; ' +
+    'to within five minutes. On battery, a run ending in power-on or brownout is the battery.';
 }
 
 // The low-water mark alone is a puzzle; the moment it happened is a lead. Say
@@ -574,7 +605,8 @@ async function refreshLive() {
   renderStatus(await getJSON('/api/status', {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
     version: '', board: '', latest: '', update: false,
-    update_state: 'idle', update_pct: -1, heap: null }));
+    update_state: 'idle', update_pct: -1, heap: null, runs: [],
+    checked_s: -1, checking: false, check_error: '' }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory((await getJSON('/api/history', { history: [] })).history);
@@ -719,6 +751,18 @@ $('install').addEventListener('click', async () => {
   }
 });
 
+$('check').addEventListener('click', async () => {
+  $('check').disabled = true;
+  $('check').textContent = 'Checking\u2026';
+  const out = await fetch('/api/update/check', { method: 'POST' })
+    .then(r => r.json()).catch(() => ({ ok: false }));
+  if (!out.ok) {
+    $('updatenote').textContent = out.error || 'could not ask for a check';
+    $('check').disabled = false;
+    $('check').textContent = 'Check now';
+  }
+});
+
 $('baseline').addEventListener('click', async () => {
   const b = $('baseline');
   if (b.dataset.armed !== '1') {
@@ -840,7 +884,16 @@ fetch('/api/auth').then(r => r.json()).then(a => {
   showLogin(a.required && !a.authenticated);
   if (!locked) { refreshLive(); refreshConfig(); }
 }).catch(() => { refreshLive(); refreshConfig(); });
-setInterval(refreshLive, 2000);
+// Poll only while someone can see the page. A tab left open in the
+// background used to reconnect every uplink window, ask for everything, and
+// stop reading -- and six stalled responses sitting in the network stack's
+// send buffers is how a browser tab once took the device down (#96). The
+// device holds its uplink window open while the console is in use, so a
+// hidden tab that stays quiet also lets the device get back to detecting.
+setInterval(() => { if (!document.hidden) refreshLive(); }, 2000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshLive();
+});
 </script>
 </body>
 </html>

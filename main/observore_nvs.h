@@ -24,7 +24,8 @@
     X(GOTIFY_URL, "gotify_url", OBSERVORE_NVS_STR)  \
     X(GOTIFY_TOK, "gotify_tok",  OBSERVORE_NVS_STR) \
     X(NOTIFY_PROV, "notify_prov", OBSERVORE_NVS_STR) \
-    X(NOTIFY_USER, "notify_user", OBSERVORE_NVS_STR)
+    X(NOTIFY_USER, "notify_user", OBSERVORE_NVS_STR) \
+    X(RUNS,        "runs",        OBSERVORE_NVS_BLOB)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 

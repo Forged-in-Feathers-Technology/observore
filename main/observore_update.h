@@ -34,6 +34,16 @@ const char *observore_update_error(void);
 /* Seconds since the last successful check, or -1 if there has not been one. */
 long observore_update_age_s(void);
 
+/* Ask for a check at the next opportunity rather than on the daily schedule.
+ * The check itself still runs from the main loop on the uplink, so the caller
+ * gets an acknowledgement, not a result; the result appears in the status a
+ * few seconds later. Every release so far has been noticed only after a
+ * reboot, because the daily check had already run that day. */
+void observore_update_check_now(void);
+
+/* True between a check_now and the check that satisfies it. */
+bool observore_update_check_pending(void);
+
 /* Installing. Separate from the check on purpose: the device notices a release
  * on its own, and only ever downloads one because somebody asked it to. */
 

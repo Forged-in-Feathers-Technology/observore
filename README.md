@@ -1229,6 +1229,36 @@ the notification queue depth say why. A drop only counts once it is 2 KB past
 the last one recorded, so a slow slide leaves a handful of milestones rather
 than filling the list with noise.
 
+### How long the last run lasted
+
+The header also says how long the previous run lasted and how it ended, and
+hovering it lists the eight before that. The device writes its uptime to flash
+every five minutes; at boot, the last value written is the length of the run
+that just ended, filed with the reason this boot happened. A run shorter than
+five minutes leaves nothing behind, which is right: that was a false start,
+not a run.
+
+This is the battery question answered from measurement. A device found up for
+seven hours after a night on battery used to say only that; the run before it
+was gone. Now a run that ended in `power-on` or `brownout` on a device that
+was on battery is the battery's life, to within five minutes, and the runs
+before it say whether that is getting worse. The same list is on `/api/status`
+under `runs`, newest first.
+
+The flash cost is stated because it was checked: about three NVS entries per
+write fills a page every few hours, which is a sector erase every day or so per
+page against a rating of a hundred thousand — a lifetime measured in centuries,
+so this is not the thing that wears out.
+
+### A tab in the background is quiet
+
+The console polls only while it can be seen. A tab left open in the background
+used to reconnect every uplink window, ask for everything, and stop reading,
+and six stalled responses sitting in the network stack's send buffers is how a
+browser tab once took the device down. A hidden tab now sends nothing, which
+also means the device is not held on the uplink by a page nobody is looking at,
+and gets back to detecting. Switching back to the tab refreshes it at once.
+
 This is not premature tuning. An earlier version used static internal scratch
 (two 20 KB device snapshots plus 32 KB and 12 KB response buffers) and drove
 free internal heap down to 1.4 KB with a largest free block of 768 bytes. At
@@ -1295,6 +1325,16 @@ device, and there is no second piece of infrastructure to keep in step. The
 check runs inside an uplink window the device was going to open anyway, and it
 runs *after* the notification queue has been sent, so a findings digest never
 waits behind a version check for memory or for airtime.
+
+**Check now** in the console's Firmware panel asks for that check straight
+away, in the window the console is already holding open; the answer appears in
+the same panel a few seconds later, with when it was last checked. It exists
+because three releases in a row were noticed only after a reboot: the daily
+check had already run that morning, and the release came out in the afternoon.
+A check that fails to connect is tried once more five seconds later before it
+says so, since on the bench the first attempt a few seconds after the uplink
+came up did exactly that and the second did not. `POST /api/update/check` is the
+same thing without the button.
 
 A newer version is mentioned once, on the end of the next digest, and shown in
 the console until it is installed. Once per version, not once per window: a

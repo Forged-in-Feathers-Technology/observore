@@ -13,6 +13,7 @@
 #include "observore_track.h"
 #include "observore_update.h"
 #include "observore_heapwatch.h"
+#include "observore_runs.h"
 #include "observore_web.h"
 #include "observore_wifi.h"
 #include "esp_heap_caps.h"
@@ -145,27 +146,6 @@ static esp_err_t index_handler(httpd_req_t *req)
                            index_html_end - index_html_start);
 }
 
-/* Why this boot happened, which is the same thing as how the previous run
- * ended. A device found up for seven hours after a night on battery could
- * have crashed or could have run flat, and until this was exposed the two
- * were indistinguishable the next morning. */
-static const char *reset_reason_name(esp_reset_reason_t r)
-{
-    switch (r) {
-        case ESP_RST_POWERON:   return "power-on";
-        case ESP_RST_SW:        return "software";    /* esp_restart(): an update, a reboot */
-        case ESP_RST_PANIC:     return "panic";
-        case ESP_RST_INT_WDT:   return "interrupt-watchdog";
-        case ESP_RST_TASK_WDT:  return "task-watchdog";
-        case ESP_RST_WDT:       return "watchdog";    /* incl. the rollback watchdog */
-        case ESP_RST_BROWNOUT:  return "brownout";    /* the battery ran out */
-        case ESP_RST_DEEPSLEEP: return "deep-sleep";
-        case ESP_RST_USB:       return "usb";
-        case ESP_RST_JTAG:      return "jtag";
-        default:                return "unknown";
-    }
-}
-
 static esp_err_t status_handler(httpd_req_t *req)
 {
     int64_t now = esp_timer_get_time();
@@ -179,9 +159,16 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_clock_iso(now, now_iso, sizeof(now_iso));
     const observore_heap_event_t *latest = observore_heapwatch_latest();
 
-    char body[896];
+    /* The last check's error, escaped: it can carry an esp-tls string. */
+    char cerr[96];
+    observore_json_escape(observore_update_error(), cerr, sizeof(cerr));
+
+    /* The shared scratch rather than the stack: the status grew past what a
+     * handler's stack frame should carry once it started listing runs, and
+     * esp_http_server serves one request at a time, so nothing else is in it. */
+    char *body = s_body;
     observore_jbuf_t jb;
-    observore_jb_init(&jb, body, sizeof(body), 2);   /* room for "}}" */
+    observore_jb_init(&jb, body, s_body_cap, 2);   /* room for "}}" */
 
     observore_jb_printf(&jb,
         "{\"score\":%u,\"level\":\"%s\",\"devices\":%u,"
@@ -191,6 +178,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"version\":\"%s\",\"board\":\"%s\""
         ",\"latest\":\"%s\",\"update\":%s"
         ",\"update_state\":\"%s\",\"update_pct\":%d"
+        ",\"checked_s\":%ld,\"checking\":%s,\"check_error\":\"%s\""
         ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
         ",\"reset_reason\":\"%s\",\"notifier\":%s"
@@ -206,13 +194,16 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_update_available() ? "true" : "false",
         observore_update_state_name(observore_update_state()),
         observore_update_progress(),
+        observore_update_age_s(),
+        observore_update_check_pending() ? "true" : "false",
+        cerr,
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
         latest ? (long long)(latest->at_us / 1000000) : -1LL,
         latest ? latest->mode : "",
         latest ? (unsigned)latest->queued : 0u,
-        reset_reason_name(esp_reset_reason()),
+        observore_reset_reason_name(esp_reset_reason()),
 #if CONFIG_OBSERVORE_NOTIFIER
         "true"
 #else
@@ -224,7 +215,19 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
                             observore_class_name(c), st.class_counts[c]);
     }
-    observore_jb_close(&jb, "}}");
+
+    /* Completed runs, newest first: how long each lasted and how it ended.
+     * On battery, a run that ended in a brownout or a power-on is the
+     * battery's actual life, measured rather than guessed. */
+    observore_run_t runs[OBSERVORE_RUNS_MAX];
+    size_t nruns = observore_runs_list(runs, OBSERVORE_RUNS_MAX);
+    observore_jb_printf(&jb, "},\"runs\":[");
+    for (size_t i = 0; i < nruns; i++) {
+        observore_jb_printf(&jb, "%s{\"up_s\":%" PRIu32 ",\"end\":\"%s\"}",
+                            i ? "," : "", runs[i].up_s,
+                            observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
+    }
+    observore_jb_close(&jb, "]}");
     return send_json(req, body);
 }
 
@@ -780,6 +783,16 @@ static esp_err_t update_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* Ask for a version check now. The check runs from the main loop on the
+ * uplink, so this only queues it; the page watches `checking` and `checked_s`
+ * in the status for the answer. Cheap enough not to rate-limit: one small
+ * document over a connection the device is already holding open. */
+static esp_err_t update_check_handler(httpd_req_t *req)
+{
+    observore_update_check_now();
+    return ok(req);
+}
+
 static esp_err_t unauthorized(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "401 Unauthorized");
@@ -868,6 +881,7 @@ esp_err_t observore_web_start(void)
         {"/api/unmute",    HTTP_POST, unmute_handler,     false},
         {"/api/baseline",  HTTP_POST, baseline_handler,   false},
         {"/api/update",    HTTP_POST, update_handler,     false},
+        {"/api/update/check", HTTP_POST, update_check_handler, false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
