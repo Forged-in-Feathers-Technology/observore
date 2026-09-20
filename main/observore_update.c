@@ -38,6 +38,8 @@ static char     s_error[64];
 static int64_t  s_last_ok_us;
 static int64_t  s_next_check_us;
 static bool     s_available;
+static bool     s_check_pending;
+static bool     s_check_retried;
 static char     s_doc[DOC_MAX];
 
 void observore_update_init(void)
@@ -69,6 +71,15 @@ long observore_update_age_s(void)
     }
     return (long)((esp_timer_get_time() - s_last_ok_us) / 1000000);
 }
+
+void observore_update_check_now(void)
+{
+    s_check_pending = true;
+    s_check_retried = false;
+    s_next_check_us = 0;
+}
+
+bool observore_update_check_pending(void) { return s_check_pending; }
 
 /* Read the whole document into one buffer.
  *
@@ -137,9 +148,21 @@ void observore_update_check(void)
 
     if (fetch(s_doc, sizeof(s_doc)) != ESP_OK) {
         ESP_LOGW(TAG, "update check failed: %s", s_error);
+        /* A check someone asked for gets one more go a few seconds on. On
+         * the bench the first attempt seven seconds after the uplink came up
+         * failed to connect and the next, seconds later, succeeded; a button
+         * that answers "could not connect" to that is answering a question
+         * nobody asked. The daily check keeps its half-hour retry. */
+        if (s_check_pending && !s_check_retried) {
+            s_check_retried = true;
+            s_next_check_us = now + (5LL * 1000000);
+            return;
+        }
+        s_check_pending = false;
         s_next_check_us = now + RETRY_AFTER_US;
         return;
     }
+    s_check_pending = false;
 
     char found[sizeof(s_latest)];
     if (!observore_json_string_field(s_doc, "version", found, sizeof(found))) {

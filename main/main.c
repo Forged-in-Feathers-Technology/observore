@@ -23,6 +23,7 @@
 #include "observore_notify.h"
 #include "observore_update.h"
 #include "observore_heapwatch.h"
+#include "observore_runs.h"
 #include "observore_display.h"
 #include "observore_track.h"
 #include "observore_web.h"
@@ -304,6 +305,7 @@ void app_main(void)
     observore_notify_init();
     observore_update_init();
     observore_heapwatch_init();
+    observore_runs_init();
     observore_display_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
@@ -379,6 +381,7 @@ void app_main(void)
         }
 
         note_heap_low_water(now);
+        observore_runs_tick();
 
         /* Confirm a freshly installed image once it has completed a patrol
          * cycle: it booted, brought up the radio, scanned, swept the channels
