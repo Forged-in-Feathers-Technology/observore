@@ -378,12 +378,28 @@ void observore_mute_baseline(observore_event_t *scratch, size_t cap,
          * that could hide a real threat.
          *
          * Otherwise the MAC, which for a rotating address buys only an hour
-         * or so.  Counted as temporary and reported as such. */
+         * or so.  Counted as temporary and reported as such.
+         *
+         * A follower is the one protected class that gets a fingerprint here
+         * anyway, when its address rotates. "Follower" is a verdict about
+         * duration, not about what the device is: a phone that has sat in the
+         * room for five minutes is promoted, and after its address rolls a MAC
+         * rule is gone within the hour -- which is why the same handset was
+         * being announced every day on the bench. A baseline is the owner
+         * standing at the device saying "what is here now is mine", and the
+         * household's phones are the whole point of that. The cost is real
+         * and is stated: a stranger carrying the same model, advertising the
+         * same way, is quiet too. A tracker, a drone, a camera or a body-worn
+         * device keeps its protection, because those are classified by what
+         * they are, and nothing about a baseline changes what they are. */
+        bool rotating_follower = e->cls == OBSERVORE_CLASS_FOLLOWER &&
+                                 e->addr_random;
         if (e->detail[0] != '\0') {
             rule.kind = OBSERVORE_MUTE_NAME;
             snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
         } else if (e->fingerprint != 0 &&
-                   !observore_mute_class_is_protected(e->cls)) {
+                   (!observore_mute_class_is_protected(e->cls) ||
+                    rotating_follower)) {
             rule.kind = OBSERVORE_MUTE_FINGERPRINT;
             rule.fingerprint = e->fingerprint;
         } else {
