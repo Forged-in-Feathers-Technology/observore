@@ -543,6 +543,13 @@ esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
     0x8000  partition-table-cyd-2432s028r-ili9341.bin \
     0x10000 ota_data_initial-cyd-2432s028r-ili9341.bin \
     0x20000 observore-cyd-2432s028r-ili9341.bin
+
+# ESP32-3248S035R (3.5" CYD, resistive touch)
+esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
+    0x1000  bootloader-cyd-3248s035r-st7796.bin \
+    0x8000  partition-table-cyd-3248s035r-st7796.bin \
+    0x10000 ota_data_initial-cyd-3248s035r-st7796.bin \
+    0x20000 observore-cyd-3248s035r-st7796.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
@@ -596,6 +603,7 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | `boards/xiao-esp32c6` | GPIO15, plain | GPIO9 | **no PSRAM**, so TLS is tight |
 | `boards/cyd-2432s028r-st7789` | GPIO16, plain (green of the RGB) | GPIO0 | original ESP32, **no PSRAM, no notifier**; the later 2.8" CYD, on-screen display |
 | `boards/cyd-2432s028r-ili9341` | GPIO16, plain (green of the RGB) | GPIO0 | as above for the original 2.8" CYD and its 2.4"/3.2" siblings; **not yet confirmed on hardware** |
+| `boards/cyd-3248s035r-st7796` | GPIO16, plain (green of the RGB) | GPIO0 | the 3.5" CYD, 480x320 with touch; resistive **R** model only |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
@@ -1443,13 +1451,13 @@ itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
 
-The board matters as much as the version. Two of the six boards here are
+The board matters as much as the version. Two of the seven boards here are
 ESP32-C5s and two are the same classic ESP32 behind different glass, and none of
 those images are interchangeable, which is why the installer offers a picker
 rather than deciding from the chip. A device updating itself has the same
 problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
-`devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789` or
-`cyd-2432s028r-ili9341`. CI asserts that each board's build resolves to its own
+`devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789`,
+`cyd-2432s028r-ili9341` or `cyd-3248s035r-st7796`. CI asserts that each board's build resolves to its own
 name, checked against the `sdkconfig` the build actually produced rather than
 by re-deriving the layering.
 

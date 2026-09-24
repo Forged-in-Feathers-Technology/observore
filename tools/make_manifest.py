@@ -34,12 +34,16 @@ LABELS = {
     "devkit-esp32c5":   "ESP32-C5-DevKitC-1 / Waveshare C5",
     "cyd-2432s028r-st7789": "ESP32-2432S028R 2.8\" CYD (ST7789 panel)",
     "cyd-2432s028r-ili9341": "ESP32-2432S028R 2.8\" CYD (ILI9341 panel)",
+    "cyd-3248s035r-st7796": "ESP32-3248S035R 3.5\" CYD (ST7796 panel)",
 }
 
 NOTES = {
     "xiao-esp32c6": "no PSRAM, so TLS for notifications is tight on this board",
     "devkit-esp32c5": "two USB sockets; either one works",
     "cyd-2432s028r-st7789": "on-screen display, no notifier; the later revision of the 2.8\" CYD",
+    "cyd-3248s035r-st7796": "on-screen display with touch, no notifier; the 3.5\" CYD, "
+                            "480x320. Resistive touch (the R model) -- the capacitive C model has a "
+                            "different controller and is not supported yet",
     "cyd-2432s028r-ili9341": "on-screen display, no notifier; the original 2.8\" CYD and the 2.4\"/3.2\" siblings. "
                              "Not yet confirmed on real hardware -- if the picture is a negative or the colours are swapped, "
                              "tell us. The flasher cannot tell the two revisions apart: wrong one means wrong colours, "
@@ -119,7 +123,7 @@ def main():
     # to meet a tool.
     order = {"xiao-esp32s3": 0, "devkit-esp32c5": 1, "xiao-esp32c5": 2,
              "xiao-esp32c6": 3, "cyd-2432s028r-st7789": 4,
-             "cyd-2432s028r-ili9341": 5}
+             "cyd-2432s028r-ili9341": 5, "cyd-3248s035r-st7796": 6}
     index.sort(key=lambda e: (order.get(e["board"], 99), e["label"]))
     idx = os.path.join(args.out_dir, "boards.json")
     with open(idx, "w", encoding="utf-8") as fh:

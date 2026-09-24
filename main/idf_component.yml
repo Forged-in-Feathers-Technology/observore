@@ -11,5 +11,7 @@ dependencies:
   # Kconfig choice, and a component that is not selected costs a build
   # nothing beyond the download.
   espressif/esp_lcd_ili9341: "^1.2.0"
+  # And the 3.5" boards' controller, for the same reason.
+  espressif/esp_lcd_st7796: "^1.2.0"
   idf:
     version: ">=5.0"

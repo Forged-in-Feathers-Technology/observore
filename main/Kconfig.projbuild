@@ -163,6 +163,12 @@ config OBSERVORE_DISPLAY_ST7789
         The later revisions of the 2.8" ESP32-2432S028R. Verified on the
         bench.
 
+config OBSERVORE_DISPLAY_ST7796
+    bool "ST7796"
+    help
+        The 3.5" ESP32-3248S035 boards, 480x320 in landscape. Driven through
+        the espressif/esp_lcd_st7796 component.
+
 config OBSERVORE_DISPLAY_ILI9341
     bool "ILI9341"
     help
@@ -174,6 +180,18 @@ config OBSERVORE_DISPLAY_ILI9341
 
 endchoice
 
+
+config OBSERVORE_DISPLAY_WIDTH
+    int "Panel width in landscape, pixels"
+    default 320
+    help
+        320 for the 2.8" boards, 480 for the 3.5" ones. The text grid is
+        derived from this and the font: eight pixels per column, sixteen per
+        row.
+
+config OBSERVORE_DISPLAY_HEIGHT
+    int "Panel height in landscape, pixels"
+    default 240
 
 config OBSERVORE_DISPLAY_MOSI
     int "MOSI GPIO"
@@ -230,6 +248,16 @@ config OBSERVORE_TOUCH
 
 if OBSERVORE_TOUCH
 
+config OBSERVORE_TOUCH_SHARED_BUS
+    bool "Touch is on the panel's SPI bus"
+    default n
+    help
+        The 2.8" boards wire the touch controller to its own pins; some of the
+        3.5" ones put it on the same bus as the panel with a separate chip
+        select. With this set the pins below are ignored and the controller is
+        added as a second device on the panel's bus, which also serialises the
+        two so a measurement cannot land inside a screen update.
+
 config OBSERVORE_TOUCH_MOSI
     int "Touch MOSI GPIO"
     default 32
@@ -245,6 +273,17 @@ config OBSERVORE_TOUCH_CS
 config OBSERVORE_TOUCH_IRQ
     int "Touch PENIRQ GPIO"
     default 36
+
+config OBSERVORE_TOUCH_Z_MIN
+    int "Pressure below which a touch is ignored"
+    default 400
+    range 50 4095
+    help
+        Measured from both Z channels, so it is much flatter across the sheet
+        than Z1 alone -- but sheets still differ. Too high discards real
+        presses, and the symptom is a panel that reports nothing in one part of
+        the screen; too low lets electrical noise from the radio alongside it
+        look like a finger.
 
 config OBSERVORE_TOUCH_RAW_MIN_X
     int "Raw X at the low edge"

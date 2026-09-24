@@ -16,6 +16,10 @@
 #include "esp_lcd_ili9341.h"
 #define PANEL_NAME "ILI9341"
 #define new_panel  esp_lcd_new_panel_ili9341
+#elif CONFIG_OBSERVORE_DISPLAY_ST7796
+#include "esp_lcd_st7796.h"
+#define PANEL_NAME "ST7796"
+#define new_panel  esp_lcd_new_panel_st7796
 #else
 #include "esp_lcd_panel_st7789.h"
 #define PANEL_NAME "ST7789"
@@ -228,9 +232,24 @@ static char   s_wifi_msg[41];
  * last two rows and answers to the last three. Everything here must sit above
  * row ROWS - BAR_TOUCH_ROWS or it is drawn over and cannot be pressed --
  * which is exactly what happened to the first version of this page. */
-#define KB_TOP     3
 #define KB_HEIGHT  2
-#define ACTION_ROW (KB_TOP + KEY_ROWS * KB_HEIGHT)   /* 11 */
+/* Anchored to the bottom rather than the top, so the keyboard sits against the
+ * button bar on a screen of any height: forty by fifteen on the 2.8" boards,
+ * sixty by twenty on the 3.5". The action row is the last one clear of the
+ * bar's touch zone. */
+/* The action strip gets two rows and a blank one below it wherever the screen
+ * can spare them, which the 3.5" boards can and the 2.8" ones cannot.
+ *
+ * One row is sixteen pixels. The strip sits directly above the button bar, so
+ * on a single row a press a couple of pixels low crosses into it: ABC# and
+ * page answered each other's presses until the strip got a margin. */
+#define ACTION_ROWS ((ROWS >= 18) ? 2 : 1)
+#define ACTION_GAP  ((ROWS >= 18) ? 1 : 0)
+#define ACTION_TOP  (ROWS - BAR_TOUCH_ROWS - ACTION_GAP - ACTION_ROWS)
+#define ACTION_ROW  (ACTION_TOP + ACTION_ROWS - 1)   /* where the labels sit */
+#define KB_TOP      (ACTION_TOP - KEY_ROWS * KB_HEIGHT)
+/* Keys share the width: three columns each at forty, four at sixty. */
+#define KEY_W      (COLS / KEY_COLS)
 #endif
 
 /* Backlight, as a duty cycle rather than on/off. A 2.8" panel at full
@@ -637,7 +656,9 @@ static void draw_wifi(void)
         int pos = 0;
         for (int kc = 0; kc < KEY_COLS; kc++) {
             char ch = row_keys[kc] ? row_keys[kc] : ' ';
-            pos += snprintf(bot + pos, sizeof(bot) - pos, " %c ", ch);
+            /* The glyph in the middle of its key, whatever the key's width. */
+            pos += snprintf(bot + pos, sizeof(bot) - pos, "%*c%*s",
+                            KEY_W / 2 + 1, ch, KEY_W - KEY_W / 2 - 1, "");
         }
         bot[pos] = '\0';
         memset(top, ' ', (size_t)pos); top[pos] = '\0';
@@ -646,12 +667,17 @@ static void draw_wifi(void)
     }
 
     /* Four actions across the width, ten columns each. */
-    snprintf(text, sizeof(text), "%-10.10s%-10.10s%-10.10s%-10.10s",
-             s_shift ? "   abc" : "   ABC#", reveal ? "   hide" : "   show",
-             "   del", "   join");
+    const int aw = COLS / 4;
+    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s%-*.*s",
+             aw, aw, s_shift ? "   abc" : "   ABC#",
+             aw, aw, reveal ? "   hide" : "   show",
+             aw, aw, "   del", COLS - 3 * aw, COLS - 3 * aw, "   join");
+    for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
+        line(r, "", C_BLACK, C_GREY);      /* part of the same target */
+    }
     line(ACTION_ROW, text, C_BLACK, C_GREY);
     for (int r = ACTION_ROW + 1; r < ROWS - BAR_LAST; r++) {
-        line(r, "", C_WHITE, C_BLACK);
+        line(r, "", C_WHITE, C_BLACK);     /* the margin, and the bar's rows */
     }
 }
 
@@ -690,7 +716,7 @@ static void wifi_tap(int x, int y)
     /* Typing. */
     if (row >= KB_TOP && row < KB_TOP + KEY_ROWS * KB_HEIGHT) {
         int kr = (row - KB_TOP) / KB_HEIGHT;
-        int kc = (x / OBSERVORE_FONT_W) / 3;
+        int kc = (x / OBSERVORE_FONT_W) / KEY_W;
         if (kr < KEY_ROWS && kc < KEY_COLS) {
             char ch = KEYS[s_shift ? 1 : 0][kr][kc];
             if (ch && ch != ' ' && s_pass_len + 1 < sizeof(s_pass)) {
@@ -700,8 +726,9 @@ static void wifi_tap(int x, int y)
         }
         return;
     }
-    if (row == ACTION_ROW) {
-        int which = (x / OBSERVORE_FONT_W) / 10;
+    if (row >= ACTION_TOP && row <= ACTION_ROW) {
+        int which = (x / OBSERVORE_FONT_W) / (COLS / 4);
+        if (which > 3) which = 3;
         if (which == 0) {
             s_shift = !s_shift;
         } else if (which == 1) {
