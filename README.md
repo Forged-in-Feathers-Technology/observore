@@ -1161,7 +1161,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.8.2 && git push origin v0.8.2
+git tag v0.8.3 && git push origin v0.8.3
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
