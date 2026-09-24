@@ -12,6 +12,7 @@
 #include "observore_util.h"
 #include "observore_track.h"
 #include "observore_update.h"
+#include "observore_display.h"
 #include "observore_heapwatch.h"
 #include "observore_runs.h"
 #include "observore_web.h"
@@ -187,6 +188,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
         ",\"reset_reason\":\"%s\",\"notifier\":%s"
+        ",\"bright\":%d,\"bright_steps\":%d"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -214,7 +216,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 #else
         "false"
 #endif
-        );
+        , observore_display_brightness(), OBSERVORE_BRIGHT_STEPS);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
@@ -792,6 +794,26 @@ static esp_err_t update_handler(httpd_req_t *req)
  * uplink, so this only queues it; the page watches `checking` and `checked_s`
  * in the status for the answer. Cheap enough not to rate-limit: one small
  * document over a connection the device is already holding open. */
+/* The backlight, for a board with a panel and no touch to reach. Refused
+ * rather than ignored where there is no panel, so a console that offers the
+ * control is a console whose device has one. */
+static esp_err_t bright_handler(httpd_req_t *req)
+{
+    char value[8];
+    if (!query_param(req, "step", value, sizeof(value))) {
+        return fail(req, "step is required");
+    }
+    if (observore_display_brightness() < 0) {
+        return fail(req, "this build has no screen");
+    }
+    int step = atoi(value);
+    if (step < 0 || step >= OBSERVORE_BRIGHT_STEPS) {
+        return fail(req, "step is out of range");
+    }
+    observore_display_set_brightness(step);
+    return ok(req);
+}
+
 static esp_err_t update_check_handler(httpd_req_t *req)
 {
     observore_update_check_now();
@@ -857,6 +879,21 @@ static esp_err_t dispatch(httpd_req_t *req)
     if (!r->open_route && !observore_auth_ok(req)) {
         return unauthorized(req);
     }
+    /* Taken on the first request of a window rather than when the server
+     * starts, and released when the window closes.
+     *
+     * The server is up for every uplink window whether or not anybody is
+     * looking, and on a board with no PSRAM its scratch is the largest single
+     * block in the heap. Held from the start of the window, it left no
+     * contiguous room for the certificate check behind the daily update
+     * request: 31 KB free, and a 4,437-byte allocation for an RSA signature
+     * failing anyway. A console nobody opens now costs nothing, and a console
+     * somebody is using is worth more than a version check that can wait for
+     * the next window. */
+    if (!scratch_alloc()) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return send_json(req, "{\"ok\":false,\"error\":\"not enough memory right now\"}");
+    }
     return r->fn(req);
 }
 
@@ -887,16 +924,13 @@ esp_err_t observore_web_start(void)
         {"/api/baseline",  HTTP_POST, baseline_handler,   false},
         {"/api/update",    HTTP_POST, update_handler,     false},
         {"/api/update/check", HTTP_POST, update_check_handler, false},
+        {"/api/bright",    HTTP_POST, bright_handler,     false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},
         {"/api/notify",    HTTP_POST, notify_set_handler, false},
     };
-    if (!scratch_alloc()) {
-        return ESP_ERR_NO_MEM;
-    }
-
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
     /* Close with a reset, not a FIN that waits for a reply.
@@ -935,7 +969,6 @@ esp_err_t observore_web_start(void)
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
-        scratch_free();
         return err;
     }
 
@@ -953,7 +986,6 @@ esp_err_t observore_web_start(void)
                      esp_err_to_name(err));
             httpd_stop(s_server);
             s_server = NULL;
-            scratch_free();
             return err;
         }
     }

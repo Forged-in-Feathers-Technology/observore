@@ -253,6 +253,15 @@
   </div>
 </div>
 
+<div class="panel" id="screenpanel" hidden>
+  <h2>Screen</h2>
+  <div class="add">
+    <span class="note">Backlight. A bright panel in a dark room is a beacon;
+      the level is remembered across reboots.</span>
+  </div>
+  <div class="add" id="brightrow"></div>
+</div>
+
 <div class="panel">
   <h2>Firmware <span id="fwinfo" class="dim"></span></h2>
   <div class="add">
@@ -439,11 +448,39 @@ function renderStatus(s) {
     (s.reset_reason && s.reset_reason !== 'power-on' ? ' after ' + s.reset_reason : '') +
     (s.time_valid ? '' : ' \u00b7 clock not set');
   renderRuns(s.runs);
+  renderBright(s);
   renderUpdate(s);
   renderHeap(s.heap);
   // A build without a notifier has nothing to configure. Hide the panel rather
   // than show a form whose Save would only ever say "not supported".
   $('notifypanel').hidden = (s.notifier === false);
+}
+
+// The backlight, for a board with a panel. Hidden entirely where there is no
+// screen to dim -- most boards -- rather than shown as a control that refuses.
+function renderBright(s) {
+  const have = typeof s.bright === 'number' && s.bright >= 0;
+  $('screenpanel').hidden = !have;
+  if (!have || $('brightrow').dataset.built === String(s.bright_steps)) {
+    if (have) {
+      [...$('brightrow').children].forEach((b, i) =>
+        b.classList.toggle('warn', i === s.bright));
+    }
+    return;
+  }
+  const row = $('brightrow');
+  row.textContent = '';
+  const names = ['Full', 'Bright', 'Dim', 'Dimmest'];
+  for (let i = 0; i < s.bright_steps; i++) {
+    const b = document.createElement('button');
+    b.textContent = names[i] || String(i);
+    b.onclick = async () => {
+      await fetch('/api/bright?step=' + i, { method: 'POST' });
+      refreshLive();
+    };
+    row.appendChild(b);
+  }
+  row.dataset.built = String(s.bright_steps);
 }
 
 // The firmware panel: what this is, what is published, and the one action.
@@ -605,7 +642,7 @@ async function refreshLive() {
   renderStatus(await getJSON('/api/status', {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
     version: '', board: '', latest: '', update: false,
-    update_state: 'idle', update_pct: -1, heap: null, runs: [],
+    update_state: 'idle', update_pct: -1, heap: null, runs: [], bright: -1, bright_steps: 0,
     checked_s: -1, checking: false, check_error: '' }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
