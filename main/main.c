@@ -24,6 +24,7 @@
 #include "observore_update.h"
 #include "observore_heapwatch.h"
 #include "observore_runs.h"
+#include "observore_touch.h"
 #include "observore_display.h"
 #include "observore_track.h"
 #include "observore_web.h"
@@ -307,6 +308,7 @@ void app_main(void)
     observore_heapwatch_init();
     observore_runs_init();
     observore_display_init();
+    observore_touch_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.
@@ -347,6 +349,9 @@ void app_main(void)
         int64_t now = esp_timer_get_time();
         observore_track_tick(now);
 
+        if (observore_display_take_baseline_request()) {
+            s_baseline_requested = true;
+        }
         if (s_baseline_requested) {
             s_baseline_requested = false;
             /* Borrowed, not static: a snapshot of every slot is about 23 KB,

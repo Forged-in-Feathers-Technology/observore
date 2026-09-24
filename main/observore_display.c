@@ -24,8 +24,19 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "driver/ledc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
 #include "observore_detect.h"
 #include "observore_font.h"
+#include "esp_heap_caps.h"
+#include "esp_rom_sys.h"
+
+#include "observore_nvs.h"
+#include "observore_runs.h"
+#include "observore_touch.h"
 #include "observore_util.h"
 
 /* Bool options that are off are undefined, not zero, so give the ones read
@@ -46,8 +57,8 @@
 static const char *TAG = "observore.display";
 
 /* Landscape. The panel is 240x320 portrait; swapping axes gives 320 wide. */
-#define DISP_W 320
-#define DISP_H 240
+#define DISP_W OBSERVORE_DISPLAY_W
+#define DISP_H OBSERVORE_DISPLAY_H
 #define COLS   (DISP_W / OBSERVORE_FONT_W)   /* 40 */
 #define ROWS   (DISP_H / OBSERVORE_FONT_H)   /* 15 */
 
@@ -58,6 +69,18 @@ static const char *TAG = "observore.display";
 #define C_GREEN  0x07E0
 #define C_AMBER  0xFD20
 #define C_RED    0xF800
+/* Just off black: enough to read the button bar as a raised strip rather than
+ * as part of the page above it. */
+#define C_DARK   0x2104
+
+/* Rows the pages must leave alone: the bar when there is touch, one footer
+ * row when there is not. */
+#if CONFIG_OBSERVORE_TOUCH
+#define BAR_LAST 2
+#else
+#define BAR_LAST 1
+#endif
+
 
 static esp_lcd_panel_handle_t s_panel;
 /* What is on the glass, so a redraw sends only the lines that changed. */
@@ -119,8 +142,138 @@ static void line(int row, const char *text, uint16_t fg, uint16_t bg)
     s_shown_bg[row] = bg;
 }
 
+/* What the main loop last published, and what the drawing task renders from.
+ *
+ * The two are separated because they run at different rates for different
+ * reasons. The main loop produces a status once per patrol heartbeat and
+ * spends about thirty seconds of every cycle inside a blocking scan; a screen
+ * that only redrew there would ignore a finger for half a minute. The drawing
+ * task redraws on its own clock, from the last thing published. */
+#define UI_POLL_MS   30
+#define UI_STACK     3072
+#define SNAP_MAX     12
+
+static SemaphoreHandle_t s_lock;
+static observore_status_t s_snap_st;
+static observore_event_t  s_snap_top[SNAP_MAX];
+static size_t             s_snap_n;
+static int64_t            s_snap_now_us;
+static bool               s_have_snap;
+static bool               s_dirty;
+
+/* Which page, and which button is showing as pressed. */
+typedef enum { PAGE_WATCH = 0, PAGE_SYSTEM, PAGE_COUNT } page_t;
+static page_t  s_page;
+static int     s_pressed = -1;        /* button index, or -1 */
+static int64_t s_pressed_until_us;
+static bool    s_baseline_request;
+
+/* Backlight, as a duty cycle rather than on/off. A 2.8" panel at full
+ * brightness is a beacon in a dark room, which is the wrong thing for this
+ * device to be; and the level is remembered, because a detector that comes
+ * back from a power cut at full brightness at three in the morning has told
+ * the room something. */
+#define BL_TIMER   LEDC_TIMER_0
+#define BL_CHANNEL LEDC_CHANNEL_0
+#define BL_MODE    LEDC_LOW_SPEED_MODE
+#define BL_BITS    LEDC_TIMER_8_BIT
+#define BL_COUNT 4
+static const uint8_t BL_LEVELS[BL_COUNT] = {255, 160, 80, 24};
+static uint8_t s_bl_level;   /* index into BL_LEVELS */
+
+static void ui_task(void *arg);
+
+static void bl_apply(void)
+{
+    if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
+        return;
+    }
+    ledc_set_duty(BL_MODE, BL_CHANNEL, BL_LEVELS[s_bl_level]);
+    ledc_update_duty(BL_MODE, BL_CHANNEL);
+}
+
+/* Nesting depth of backlight holds; see the header for why they exist. */
+static int s_bl_held;
+
+void observore_display_backlight_hold(void)
+{
+    if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
+        return;
+    }
+    if (s_bl_held++ == 0) {
+        ledc_set_duty(BL_MODE, BL_CHANNEL, 0);
+        ledc_update_duty(BL_MODE, BL_CHANNEL);
+        /* Let the driver stage actually settle before the measurement that
+         * this call exists to protect. */
+        esp_rom_delay_us(200);
+    }
+}
+
+void observore_display_backlight_release(void)
+{
+    if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
+        return;
+    }
+    if (s_bl_held > 0 && --s_bl_held == 0) {
+        bl_apply();
+    }
+}
+
+static void bl_save(void)
+{
+    uint8_t v = s_bl_level;
+    observore_nvs_item_t item = {.key = "bright", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = &v, .len = sizeof(v)};
+    observore_nvs_write(&item, 1);
+}
+
+static void bl_init(void)
+{
+    if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
+        return;
+    }
+
+    uint8_t v = 0;
+    observore_nvs_item_t item = {.key = "bright", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = &v, .len = sizeof(v)};
+    if (observore_nvs_read(&item, 1) == ESP_OK && item.found &&
+        v < BL_COUNT) {
+        s_bl_level = v;
+    }
+
+    ledc_timer_config_t timer = {
+        .speed_mode      = BL_MODE,
+        .duty_resolution = BL_BITS,
+        .timer_num       = BL_TIMER,
+        .freq_hz         = 5000,   /* above hearing, below anything the eye sees */
+        .clk_cfg         = LEDC_AUTO_CLK,
+    };
+    if (ledc_timer_config(&timer) != ESP_OK) {
+        ESP_LOGW(TAG, "backlight timer unavailable; leaving it full on");
+        return;
+    }
+    ledc_channel_config_t ch = {
+        .gpio_num   = CONFIG_OBSERVORE_DISPLAY_BL,
+        .speed_mode = BL_MODE,
+        .channel    = BL_CHANNEL,
+        .timer_sel  = BL_TIMER,
+        .duty       = BL_LEVELS[s_bl_level],
+    };
+    if (ledc_channel_config(&ch) != ESP_OK) {
+        ESP_LOGW(TAG, "backlight channel unavailable; leaving it full on");
+        return;
+    }
+    bl_apply();
+}
+
 void observore_display_init(void)
 {
+    s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) {
+        ESP_LOGE(TAG, "no memory for the display lock");
+        return;
+    }
+
     spi_bus_config_t bus = {
         .mosi_io_num = CONFIG_OBSERVORE_DISPLAY_MOSI,
         .miso_io_num = CONFIG_OBSERVORE_DISPLAY_MISO,
@@ -175,14 +328,6 @@ void observore_display_init(void)
                          CONFIG_OBSERVORE_DISPLAY_MIRROR_Y);
     esp_lcd_panel_disp_on_off(s_panel, true);
 
-    /* Backlight last, so nobody watches the panel initialise. */
-    if (CONFIG_OBSERVORE_DISPLAY_BL >= 0) {
-        gpio_config_t bl = {
-            .pin_bit_mask = 1ULL << CONFIG_OBSERVORE_DISPLAY_BL,
-            .mode = GPIO_MODE_OUTPUT,
-        };
-        gpio_config(&bl);
-    }
 
     memset(s_shown, 0, sizeof(s_shown));
     s_ready = true;
@@ -191,8 +336,11 @@ void observore_display_init(void)
     }
     line(0, "  OBSERVORE", C_BLACK, C_GREY);
     line(1, "  starting", C_BLACK, C_GREY);
-    if (CONFIG_OBSERVORE_DISPLAY_BL >= 0) {
-        gpio_set_level(CONFIG_OBSERVORE_DISPLAY_BL, 1);
+    /* Backlight last, so nobody watches the panel initialise. */
+    bl_init();
+
+    if (xTaskCreate(ui_task, "ui", UI_STACK, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "could not start the drawing task");
     }
     ESP_LOGI(TAG, PANEL_NAME " %dx%d, %d columns", DISP_W, DISP_H, COLS);
 }
@@ -210,13 +358,12 @@ static const char *ago(int64_t us, char *buf, size_t len)
     return buf;
 }
 
-void observore_display_render(const observore_status_t *st,
-                              const observore_event_t *top, size_t n,
-                              int64_t now_us)
+/* The watch page: what the device sees. Unchanged in substance from the
+ * screen this board has had since it gained one. */
+static void draw_watch(const observore_status_t *st,
+                       const observore_event_t *top, size_t n,
+                       int64_t now_us)
 {
-    if (!s_ready || !st) {
-        return;
-    }
     char text[COLS + 1];
 
     /* The band: two rows in the level's colour, level word and score. */
@@ -241,7 +388,7 @@ void observore_display_render(const observore_status_t *st,
 
     /* Findings, most recent first: class, address, signal, and what it was
      * called. Same facts as a digest line, fitted to forty columns. */
-    const int last_row = ROWS - 1;
+    const int last_row = ROWS - BAR_LAST;
     for (size_t i = 0; i < n && row < last_row; i++, row++) {
         char mac[OBSERVORE_MAC_STR_LEN];
         observore_mac_str(top[i].mac, mac);
@@ -260,25 +407,244 @@ void observore_display_render(const observore_status_t *st,
         line(row, "", C_WHITE, C_BLACK);
     }
 
-    char up[16];
+}
+
+/* The system page: what the device is, rather than what it sees. Everything
+ * here is already on the console; the point is that it is legible without
+ * one, which is the whole argument for the screen. */
+static void draw_system(const observore_status_t *st, int64_t now_us)
+{
+    char text[COLS + 1], up[16];
     const esp_app_desc_t *app = esp_app_get_description();
-    /* Truncation of the version is fine and deliberate: "v0.7.0-1-gb59a6d4"
-     * cut short still identifies the build, and the row has forty columns. */
-    snprintf(text, sizeof(text), " up %.10s   %.20s", ago(now_us, up, sizeof(up)),
-             app ? app->version : "");
-    line(last_row, text, C_GREY, C_BLACK);
+
+    line(0, "  OBSERVORE  system", C_BLACK, C_GREY);
+    snprintf(text, sizeof(text), " version  %.28s", app ? app->version : "?");
+    line(1, text, C_WHITE, C_BLACK);
+    snprintf(text, sizeof(text), " board    %.28s", CONFIG_OBSERVORE_BOARD);
+    line(2, text, C_WHITE, C_BLACK);
+    snprintf(text, sizeof(text), " up       %.28s", ago(now_us, up, sizeof(up)));
+    line(3, text, C_WHITE, C_BLACK);
+    snprintf(text, sizeof(text), " seen     %u device%s, %lu sightings",
+             st->device_count, st->device_count == 1 ? "" : "s",
+             (unsigned long)st->total_sightings);
+    line(4, text, C_WHITE, C_BLACK);
+    snprintf(text, sizeof(text), " heap     %u free, %u least",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    line(5, text, C_WHITE, C_BLACK);
+    line(6, "", C_WHITE, C_BLACK);
+    line(7, " previous runs", C_GREY, C_BLACK);
+
+    observore_run_t runs[4];
+    size_t nr = observore_runs_list(runs, 4);
+    int row = 8;
+    for (size_t i = 0; i < nr && row < ROWS - BAR_LAST; i++, row++) {
+        char dur[16];
+        snprintf(dur, sizeof(dur), "%lluh%02llum",
+                 (unsigned long long)(runs[i].up_s / 3600),
+                 (unsigned long long)((runs[i].up_s % 3600) / 60));
+        snprintf(text, sizeof(text), "   %-8.8s ended by %.18s", dur,
+                 observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
+        line(row, text, C_WHITE, C_BLACK);
+    }
+    if (nr == 0) {
+        line(row++, "   none recorded yet", C_GREY, C_BLACK);
+    }
+    for (; row < ROWS - BAR_LAST; row++) {
+        line(row, "", C_WHITE, C_BLACK);
+    }
+}
+
+/* The button bar, on the bottom row. Three targets across forty columns: a
+ * person with a fingertip and a resistive panel needs them wide. */
+#define BUTTONS 3
+static const char *BUTTON_TEXT[BUTTONS] = {"  page", "  baseline", "  light"};
+
+/* The bar is drawn two rows deep and answers to the bottom three.
+ *
+ * A single text row is sixteen pixels, about two millimetres: smaller than a
+ * fingertip, at the edge of the glass where a resistive sheet is least
+ * accurate, and on this board partly under the lip of a case. The margin above
+ * the drawn bar is what makes it hittable without looking. */
+#define BAR_ROWS 2
+#define BAR_TOUCH_ROWS 3
+
+static int button_at(int x, int y)
+{
+    if (y < (ROWS - BAR_TOUCH_ROWS) * OBSERVORE_FONT_H) {
+        return -1;
+    }
+    int col = x / OBSERVORE_FONT_W;
+    if (col < COLS / 3)     return 0;
+    if (col < 2 * COLS / 3) return 1;
+    return 2;
+}
+
+static void draw_buttons(void)
+{
+    char text[COLS + 2];
+    int w = COLS / BUTTONS;
+    int pos = 0;
+    for (int b = 0; b < BUTTONS; b++) {
+        int width = (b == BUTTONS - 1) ? COLS - pos : w;
+        pos += snprintf(text + pos, sizeof(text) - pos, "%-*.*s", width, width,
+                        BUTTON_TEXT[b]);
+    }
+    /* A pressed button is drawn inverted for a moment: on a resistive panel
+     * with no click and no haptics, that flash is the only way to know the
+     * glass heard you. The label sits on the lower of the two rows, so the
+     * upper one reads as part of the same target rather than as a gap. */
+    for (int r = ROWS - BAR_ROWS; r < ROWS; r++) {
+        for (int col = 0; col < COLS; col++) {
+            int b = button_at(col * OBSERVORE_FONT_W, (ROWS - 1) * OBSERVORE_FONT_H);
+            bool hot = (b == s_pressed);
+            char ch = (r == ROWS - 1) ? text[col] : ' ';
+            draw_glyph(col, r, ch, hot ? C_BLACK : C_GREY,
+                       hot ? C_AMBER : C_DARK);
+        }
+        s_shown[r][0] = '\0';
+    }
+}
+
+static void draw_current(void)
+{
+    if (!s_have_snap) {
+        return;
+    }
+    if (s_page == PAGE_SYSTEM) {
+        draw_system(&s_snap_st, s_snap_now_us);
+    } else {
+        draw_watch(&s_snap_st, s_snap_top, s_snap_n, s_snap_now_us);
+    }
+#if CONFIG_OBSERVORE_TOUCH
+    draw_buttons();
+#else
+    {
+        char text[COLS + 1], up[16];
+        const esp_app_desc_t *app = esp_app_get_description();
+        /* Truncation of the version is fine and deliberate: "v0.7.0-1-gb59a6d4"
+         * cut short still identifies the build, and the row has forty columns. */
+        snprintf(text, sizeof(text), " up %.10s   %.20s",
+                 ago(s_snap_now_us, up, sizeof(up)), app ? app->version : "");
+        line(ROWS - 1, text, C_GREY, C_BLACK);
+    }
+#endif
+}
+
+void observore_display_render(const observore_status_t *st,
+                              const observore_event_t *top, size_t n,
+                              int64_t now_us)
+{
+    if (!s_ready || !st) {
+        return;
+    }
+    if (n > SNAP_MAX) {
+        n = SNAP_MAX;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_snap_st = *st;
+    memcpy(s_snap_top, top, n * sizeof(s_snap_top[0]));
+    s_snap_n = n;
+    s_snap_now_us = now_us;
+    s_have_snap = true;
+    s_dirty = true;
+    xSemaphoreGive(s_lock);
+}
+
+#if CONFIG_OBSERVORE_TOUCH
+/* One tap. The bar is the only thing that takes input: the pages above it are
+ * read, not operated, and a stray touch on a reading should do nothing. */
+static void handle_tap(int x, int y)
+{
+    int b = button_at(x, y);
+    if (b < 0) {
+        return;
+    }
+    s_pressed = b;
+    s_pressed_until_us = esp_timer_get_time() + 200 * 1000;
+
+    switch (b) {
+        case 0:
+            s_page = (s_page + 1) % PAGE_COUNT;
+            break;
+        case 1:
+            /* The main loop owns the memory a baseline needs, so this only
+             * asks. It says so on the screen, and says again when it is done. */
+            s_baseline_request = true;
+            snprintf(s_notice, sizeof(s_notice), " baseline requested");
+            s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
+            break;
+        case 2:
+            s_bl_level = (s_bl_level + 1) % BL_COUNT;
+            bl_apply();
+            bl_save();
+            break;
+    }
+    s_dirty = true;
+}
+#endif
+
+/* Draws. Runs on its own clock so the glass answers a finger while the main
+ * loop is inside a thirty-second scan. */
+static void ui_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+#if CONFIG_OBSERVORE_TOUCH
+        /* Asked for before the display lock is taken, never while holding it:
+         * the touch layer takes the display lock itself, and the two orders
+         * together would deadlock. */
+        int x = 0, y = 0;
+        bool tapped = observore_touch_tap(&x, &y);
+#endif
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+#if CONFIG_OBSERVORE_TOUCH
+        if (tapped) {
+            handle_tap(x, y);
+        }
+        if (s_pressed >= 0 && esp_timer_get_time() > s_pressed_until_us) {
+            s_pressed = -1;
+            s_dirty = true;
+        }
+#endif
+        if (s_dirty) {
+            s_dirty = false;
+            draw_current();
+        }
+        xSemaphoreGive(s_lock);
+        vTaskDelay(pdMS_TO_TICKS(UI_POLL_MS));
+    }
+}
+
+bool observore_display_take_baseline_request(void)
+{
+    if (!s_ready) {
+        return false;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool got = s_baseline_request;
+    s_baseline_request = false;
+    xSemaphoreGive(s_lock);
+    return got;
 }
 
 void observore_display_notice(const char *text, int seconds)
 {
+    if (!s_lock) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
     snprintf(s_notice, sizeof(s_notice), " %s", text ? text : "");
     s_notice_until_us = esp_timer_get_time() + (int64_t)seconds * 1000000;
+    s_dirty = true;
+    xSemaphoreGive(s_lock);
 }
 
 #else /* no display on this board */
 
 void observore_display_notice(const char *text, int seconds) { (void)text; (void)seconds; }
 void observore_display_init(void) {}
+bool observore_display_take_baseline_request(void) { return false; }
 void observore_display_render(const observore_status_t *st,
                               const observore_event_t *top, size_t n,
                               int64_t now_us)
