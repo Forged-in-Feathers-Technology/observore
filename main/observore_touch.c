@@ -47,7 +47,8 @@ static const char *TAG = "observore.touch";
  * cycle spends about thirty seconds inside a blocking passive scan, and a
  * screen that ignores a finger for thirty seconds is a screen nobody trusts. */
 #define POLL_MS   20
-#define TASK_STACK 2560
+/* Five SPI transactions and a five-element sort; it does not need more. */
+#define TASK_STACK 1536
 
 static spi_device_handle_t s_dev;
 static bool s_ready;
