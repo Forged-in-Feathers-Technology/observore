@@ -34,8 +34,10 @@
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 
+#include "observore_netcfg.h"
 #include "observore_nvs.h"
 #include "observore_runs.h"
+#include "observore_wifi.h"
 #include "observore_touch.h"
 #include "observore_util.h"
 
@@ -156,7 +158,8 @@ static void line(int row, const char *text, uint16_t fg, uint16_t bg)
  * On the board with a screen there is no PSRAM, and every kilobyte held here
  * is one the TLS handshake behind an update check cannot have -- which is how
  * v0.8.2 shipped a CYD that could no longer check for its own updates. */
-#define UI_STACK     2048
+/* Measured, not chosen: drawing the keyboard leaves 536 bytes spare at 2560. */
+#define UI_STACK     3072
 #define SNAP_MAX     8
 
 static SemaphoreHandle_t s_lock;
@@ -168,11 +171,67 @@ static bool               s_have_snap;
 static bool               s_dirty;
 
 /* Which page, and which button is showing as pressed. */
-typedef enum { PAGE_WATCH = 0, PAGE_SYSTEM, PAGE_COUNT } page_t;
+typedef enum { PAGE_WATCH = 0, PAGE_SYSTEM,
+#if CONFIG_OBSERVORE_TOUCH
+               PAGE_WIFI,
+#endif
+               PAGE_COUNT } page_t;
 static page_t  s_page;
 static int     s_pressed = -1;        /* button index, or -1 */
 static int64_t s_pressed_until_us;
 static bool    s_baseline_request;
+
+#if CONFIG_OBSERVORE_TOUCH
+/* The network page is a small state machine: a list of what the last patrol
+ * scan saw, then a keyboard for the one that was chosen.
+ *
+ * The password is typed blind. The key you press is shown, because a keyboard
+ * that does not say what it registered is unusable on a resistive panel, but
+ * the field itself only ever shows dots. A screen faces a room, and the whole
+ * reason this device has no password on its glass is that someone else may be
+ * in it. Blind entry is the same rule applied to typing. */
+typedef enum { WIFI_LIST = 0, WIFI_TYPING, WIFI_SAVED } wifi_step_t;
+
+#define KEY_ROWS 4
+#define KEY_COLS 13
+/* Four layers, each thirteen keys by four rows; a blank is a gap. Lower and
+ * upper are the same letters because a Wi-Fi password is case-sensitive and a
+ * person needs to be able to type either without hunting. */
+static const char *const KEYS[2][KEY_ROWS] = {
+    {"1234567890   ",
+     "qwertyuiop   ",
+     "asdfghjkl    ",
+     "zxcvbnm      "},
+    {"!@#$%^&*()_-+",
+     "QWERTYUIOP{}",
+     "ASDFGHJKL:;'",
+     "ZXCVBNM,.?/  "},
+};
+
+static wifi_step_t s_wifi_step;
+static observore_scan_entry_t s_aps[10];
+static size_t s_ap_count;
+static int    s_ap_chosen = -1;
+static char   s_pass[OBSERVORE_PASSWORD_LEN];
+static size_t s_pass_len;
+static bool   s_shift;
+/* Reveal is deliberate, momentary and off by default. Blind entry is the rule
+ * -- a screen faces a room -- but a resistive panel and a fingertip make a
+ * wrong key easy and invisible, and a person who cannot check what they typed
+ * will simply get it wrong repeatedly. So the choice is theirs, for a few
+ * seconds at a time, rather than mine forever. */
+static bool    s_reveal;
+static int64_t s_reveal_until_us;
+static char   s_wifi_msg[41];
+
+/* The typing view, laid out against the fact that the button bar owns the
+ * last two rows and answers to the last three. Everything here must sit above
+ * row ROWS - BAR_TOUCH_ROWS or it is drawn over and cannot be pressed --
+ * which is exactly what happened to the first version of this page. */
+#define KB_TOP     3
+#define KB_HEIGHT  2
+#define ACTION_ROW (KB_TOP + KEY_ROWS * KB_HEIGHT)   /* 11 */
+#endif
 
 /* Backlight, as a duty cycle rather than on/off. A 2.8" panel at full
  * brightness is a beacon in a dark room, which is the wrong thing for this
@@ -183,7 +242,9 @@ static bool    s_baseline_request;
 #define BL_CHANNEL LEDC_CHANNEL_0
 #define BL_MODE    LEDC_LOW_SPEED_MODE
 #define BL_BITS    LEDC_TIMER_8_BIT
-#define BL_COUNT 4
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
+#define BL_COUNT OBSERVORE_BRIGHT_STEPS
 static const uint8_t BL_LEVELS[BL_COUNT] = {255, 160, 80, 24};
 static uint8_t s_bl_level;   /* index into BL_LEVELS */
 
@@ -512,11 +573,176 @@ static void draw_buttons(void)
     }
 }
 
+
+#if CONFIG_OBSERVORE_TOUCH
+/* The network page. Three states, drawn above the button bar. */
+static void draw_wifi(void)
+{
+    char text[COLS + 1];
+    char ssid[OBSERVORE_SSID_LEN] = {0};
+    observore_netcfg_ssid(ssid, sizeof(ssid));
+
+    line(0, "  OBSERVORE  network", C_BLACK, C_GREY);
+    snprintf(text, sizeof(text), " joined   %.28s", ssid[0] ? ssid : "nothing yet");
+    line(1, text, C_WHITE, C_BLACK);
+
+    if (s_wifi_step == WIFI_SAVED) {
+        line(2, "", C_WHITE, C_BLACK);
+        line(3, s_wifi_msg, C_BLACK, C_AMBER);
+        line(4, " it joins at the next uplink window.", C_GREY, C_BLACK);
+        for (int r = 5; r < ROWS - BAR_LAST; r++) {
+            line(r, "", C_WHITE, C_BLACK);
+        }
+        return;
+    }
+
+    if (s_wifi_step == WIFI_LIST) {
+        line(2, " nearby, from the last patrol scan:", C_GREY, C_BLACK);
+        int row = 3;
+        for (size_t i = 0; i < s_ap_count && row < ROWS - BAR_LAST; i++, row++) {
+            snprintf(text, sizeof(text), " %-24.24s %4d %s", s_aps[i].ssid,
+                     s_aps[i].rssi, s_aps[i].secure ? "lock" : "open");
+            line(row, text, C_WHITE, C_BLACK);
+        }
+        if (s_ap_count == 0) {
+            line(row++, " none seen yet -- wait for a patrol scan", C_GREY, C_BLACK);
+        }
+        for (; row < ROWS - BAR_LAST; row++) {
+            line(row, "", C_WHITE, C_BLACK);
+        }
+        return;
+    }
+
+    /* Typing. The field shows dots unless the reveal is on. */
+    snprintf(text, sizeof(text), " %.20s", s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "?");
+    line(1, text, C_WHITE, C_BLACK);
+
+    char shown[COLS + 1];
+    bool reveal = s_reveal && esp_timer_get_time() < s_reveal_until_us;
+    if (reveal) {
+        snprintf(shown, sizeof(shown), "%.29s", s_pass);
+    } else {
+        size_t n = s_pass_len < 29 ? s_pass_len : 29;
+        memset(shown, '*', n);
+        shown[n] = '\0';
+    }
+    snprintf(text, sizeof(text), " pass %-29.29s", shown);
+    line(2, text, C_BLACK, reveal ? C_AMBER : C_GREEN);
+
+    /* The keyboard: each key three columns wide and two rows tall, which is
+     * about seven millimetres -- the smallest a fingertip finds reliably. */
+    for (int kr = 0; kr < KEY_ROWS; kr++) {
+        const char *row_keys = KEYS[s_shift ? 1 : 0][kr];
+        char top[COLS + 1], bot[COLS + 1];
+        int pos = 0;
+        for (int kc = 0; kc < KEY_COLS; kc++) {
+            char ch = row_keys[kc] ? row_keys[kc] : ' ';
+            pos += snprintf(bot + pos, sizeof(bot) - pos, " %c ", ch);
+        }
+        bot[pos] = '\0';
+        memset(top, ' ', (size_t)pos); top[pos] = '\0';
+        line(KB_TOP + kr * KB_HEIGHT,     top, C_WHITE, C_DARK);
+        line(KB_TOP + kr * KB_HEIGHT + 1, bot, C_WHITE, C_DARK);
+    }
+
+    /* Four actions across the width, ten columns each. */
+    snprintf(text, sizeof(text), "%-10.10s%-10.10s%-10.10s%-10.10s",
+             s_shift ? "   abc" : "   ABC#", reveal ? "   hide" : "   show",
+             "   del", "   join");
+    line(ACTION_ROW, text, C_BLACK, C_GREY);
+    for (int r = ACTION_ROW + 1; r < ROWS - BAR_LAST; r++) {
+        line(r, "", C_WHITE, C_BLACK);
+    }
+}
+
+/* A tap on the network page, above the button bar. */
+static void wifi_tap(int x, int y)
+{
+    int row = y / OBSERVORE_FONT_H;
+
+    if (s_wifi_step == WIFI_SAVED) {
+        s_wifi_step = WIFI_LIST;
+        return;
+    }
+
+    if (s_wifi_step == WIFI_LIST) {
+        size_t i = (size_t)(row - 3);
+        if (row >= 3 && i < s_ap_count) {
+            s_ap_chosen = (int)i;
+            s_pass_len  = 0;
+            s_pass[0]   = '\0';
+            s_shift     = false;
+            s_reveal    = false;
+            s_wifi_step = s_aps[i].secure ? WIFI_TYPING : WIFI_SAVED;
+            if (!s_aps[i].secure) {
+                /* An open network needs no password and no typing. */
+                if (observore_netcfg_set(s_aps[i].ssid, "") == ESP_OK) {
+                    snprintf(s_wifi_msg, sizeof(s_wifi_msg), " saved %.30s",
+                             s_aps[i].ssid);
+                } else {
+                    snprintf(s_wifi_msg, sizeof(s_wifi_msg), " could not save that network");
+                }
+            }
+        }
+        return;
+    }
+
+    /* Typing. */
+    if (row >= KB_TOP && row < KB_TOP + KEY_ROWS * KB_HEIGHT) {
+        int kr = (row - KB_TOP) / KB_HEIGHT;
+        int kc = (x / OBSERVORE_FONT_W) / 3;
+        if (kr < KEY_ROWS && kc < KEY_COLS) {
+            char ch = KEYS[s_shift ? 1 : 0][kr][kc];
+            if (ch && ch != ' ' && s_pass_len + 1 < sizeof(s_pass)) {
+                s_pass[s_pass_len++] = ch;
+                s_pass[s_pass_len]   = '\0';
+            }
+        }
+        return;
+    }
+    if (row == ACTION_ROW) {
+        int which = (x / OBSERVORE_FONT_W) / 10;
+        if (which == 0) {
+            s_shift = !s_shift;
+        } else if (which == 1) {
+            s_reveal = !s_reveal;
+            /* Times out on its own: a password left legible on a screen in a
+             * room is the thing this page is careful about. */
+            s_reveal_until_us = esp_timer_get_time() + 15 * 1000000;
+        } else if (which == 2) {
+            if (s_pass_len) {
+                s_pass[--s_pass_len] = '\0';
+            }
+        } else {
+            const char *why = NULL;
+            const char *ssid = s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "";
+            if (!observore_netcfg_valid(ssid, s_pass, &why)) {
+                snprintf(s_wifi_msg, sizeof(s_wifi_msg), " %.38s", why ? why : "not valid");
+            } else if (observore_netcfg_set(ssid, s_pass) == ESP_OK) {
+                snprintf(s_wifi_msg, sizeof(s_wifi_msg), " saved %.30s", ssid);
+            } else {
+                snprintf(s_wifi_msg, sizeof(s_wifi_msg), " could not save that network");
+            }
+            /* However it went, the password does not stay in memory. */
+            memset(s_pass, 0, sizeof(s_pass));
+            s_pass_len  = 0;
+            s_reveal    = false;
+            s_wifi_step = WIFI_SAVED;
+        }
+    }
+}
+#endif
+
 static void draw_current(void)
 {
     if (!s_have_snap) {
         return;
     }
+#if CONFIG_OBSERVORE_TOUCH
+    if (s_page == PAGE_WIFI) {
+        draw_wifi();
+    } else
+#endif
     if (s_page == PAGE_SYSTEM) {
         draw_system(&s_snap_st, s_snap_now_us);
     } else {
@@ -564,6 +790,13 @@ static void handle_tap(int x, int y)
 {
     int b = button_at(x, y);
     if (b < 0) {
+        /* Above the bar. Only the network page takes input there; the others
+         * are read, not operated, and a stray touch on a reading does
+         * nothing. */
+        if (s_page == PAGE_WIFI) {
+            wifi_tap(x, y);
+            s_dirty = true;
+        }
         return;
     }
     s_pressed = b;
@@ -572,6 +805,16 @@ static void handle_tap(int x, int y)
     switch (b) {
         case 0:
             s_page = (s_page + 1) % PAGE_COUNT;
+            if (s_page == PAGE_WIFI) {
+                /* Whatever the last patrol scan saw. Nothing is started here:
+                 * the chip has one radio and a scan on demand would fight the
+                 * sweep for it. */
+                s_ap_count  = observore_wifi_last_scan(s_aps, ARRAY_SIZE(s_aps));
+                s_wifi_step = WIFI_LIST;
+                s_ap_chosen = -1;
+                memset(s_pass, 0, sizeof(s_pass));
+                s_pass_len  = 0;
+            }
             break;
         case 1:
             /* The main loop owns the memory a baseline needs, so this only
@@ -595,7 +838,20 @@ static void handle_tap(int x, int y)
 static void ui_task(void *arg)
 {
     (void)arg;
+    /* As with the touch task: the drawing path formats a page of lines, and
+     * the only honest way to size the stack is to read the headroom back. */
+    /* Follows the mark down rather than saying it once, the way the heap
+     * watch does: the expensive path here is formatting a log line, which
+     * only happens when someone is actually touching the panel. Saying it
+     * once, before that, is how a stack gets sized wrongly. */
+    size_t reported = SIZE_MAX;
     for (;;) {
+        size_t spare = uxTaskGetStackHighWaterMark(NULL);
+        if (spare + 64 < reported) {
+            reported = spare;
+            ESP_LOGI(TAG, "%s: %u bytes of %d", "drawing stack headroom",
+                     (unsigned)spare, UI_STACK);
+        }
 #if CONFIG_OBSERVORE_TOUCH
         /* Asked for before the display lock is taken, never while holding it:
          * the touch layer takes the display lock itself, and the two orders
@@ -620,6 +876,21 @@ static void ui_task(void *arg)
         xSemaphoreGive(s_lock);
         vTaskDelay(pdMS_TO_TICKS(UI_POLL_MS));
     }
+}
+
+int observore_display_brightness(void)
+{
+    return s_bl_level;
+}
+
+void observore_display_set_brightness(int step)
+{
+    if (!s_ready || step < 0 || step >= BL_COUNT) {
+        return;
+    }
+    s_bl_level = (uint8_t)step;
+    bl_apply();
+    bl_save();
 }
 
 bool observore_display_take_baseline_request(void)
@@ -650,6 +921,13 @@ void observore_display_notice(const char *text, int seconds)
 
 void observore_display_notice(const char *text, int seconds) { (void)text; (void)seconds; }
 void observore_display_init(void) {}
+/* No panel: the console hides the control rather than offering one that
+ * refuses, which is what a negative level tells it. */
+int  observore_display_brightness(void) { return -1; }
+void observore_display_set_brightness(int step) { (void)step; }
+void observore_display_backlight_hold(void) {}
+void observore_display_backlight_release(void) {}
+
 bool observore_display_take_baseline_request(void) { return false; }
 void observore_display_render(const observore_status_t *st,
                               const observore_event_t *top, size_t n,

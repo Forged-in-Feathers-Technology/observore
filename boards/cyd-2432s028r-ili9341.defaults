@@ -24,17 +24,18 @@ CONFIG_OBSERVORE_DISPLAY_ILI9341=y
 # above. The calibration bounds live in Kconfig and are per-panel.
 CONFIG_OBSERVORE_TOUCH=y
 
-# Touch calibration, measured on the bench 2026-09-24. The sheet's axes are
-# CROSSED relative to the landscape display: raw Y is the screen's horizontal
-# and raw X its vertical, which a press to the left and then to the right
-# settles in one move -- raw Y swings the width of its range while raw X barely
-# stirs. Bounds are per-panel and vary by tens of counts between boards; the
-# targets on this screen are a third of its width, so a few pixels do not
-# matter. Build with CONFIG_OBSERVORE_TOUCH_LOG_RAW=y to measure another.
-CONFIG_OBSERVORE_TOUCH_RAW_MIN_X=400
-CONFIG_OBSERVORE_TOUCH_RAW_MAX_X=3700
-CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y=350
-CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y=3500
+# Touch calibration, measured on the bench unit 2026-09-24 by pressing each
+# edge with CONFIG_OBSERVORE_TOUCH_LOG_RAW=y: top ~540, bottom 3863, left 244,
+# right 3621. The sheet's axes are CROSSED relative to the landscape display --
+# raw Y is the screen's horizontal, raw X its vertical -- which a press to the
+# left and then to the right at the same height settles in one move. Bounds are
+# a property of one panel: the first values here were carried over from another
+# board and put every target a row low, which reads as a screen that ignores
+# the button you pressed and activates its neighbour.
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_X=540
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_X=3863
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y=244
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y=3621
 CONFIG_OBSERVORE_TOUCH_SWAP_XY=y
 # CONFIG_OBSERVORE_TOUCH_FLIP_X is not set
 # CONFIG_OBSERVORE_TOUCH_FLIP_Y is not set

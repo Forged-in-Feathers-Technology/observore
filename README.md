@@ -936,6 +936,16 @@ four levels and remembers the choice, because a 2.8" panel at full brightness
 is a beacon in a dark room and a detector that comes back from a power cut at
 full brightness at three in the morning has told the room something.
 
+**Stacks are a budget too, and the only way to size one is to read it back.**
+Both the drawing task and the touch task report their remaining stack whenever
+the mark moves, the way the heap watch does. That exists because the touch
+task was trimmed to 1,536 bytes by eye during a memory fix and overflowed the
+moment `CONFIG_OBSERVORE_TOUCH_LOG_RAW` was switched on — formatting one log
+line costs about a kilobyte of stack — so the procedure documented above for
+calibrating a panel panicked the device on every touch. Measured, drawing a
+page of keyboard leaves about a kilobyte spare at 3,072 bytes and a logged
+touch about 1,200.
+
 **Memory is the budget that governs this board.** It has no PSRAM, and during
 an uplink window the console's scratch, the screen's buffers and the TLS
 handshake behind an update check all want internal RAM at once. v0.8.2 shipped
@@ -950,10 +960,46 @@ cause. Anything added to a display build should be measured against the free
 heap reported during an uplink window, not during patrol, where there is
 twenty kilobytes more of it and nothing looks wrong.
 
+Free heap is not the whole story either. A later build had 31 KB free and
+still could not check for updates, because the certificate check wanted a
+single contiguous block of 4,437 bytes for an RSA signature and the heap was
+too broken up to offer one. The device says so plainly — `Dynamic Impl:
+alloc(4437 bytes) failed`, then `mbedtls_ssl_handshake returned -0x3000` — and
+the answer was to stop holding the largest block for windows nobody uses: the
+console's scratch is now taken on the first request of a window rather than
+when the server starts. A console nobody opens costs nothing. A check that
+falls due while somebody is reading the console may fail and retry in a later
+window, which is the right way round.
+
 Drawing moved to a task of its own when touch arrived. The main loop spends
 about thirty seconds of every patrol cycle inside a blocking scan, and a
 screen that only redrew there would ignore a finger for half a minute; now the
 loop publishes a status and the drawing task renders it on its own clock.
+
+### Joining a network from the screen
+
+The network page lists what the last patrol scan saw — no scan is started for
+it, because the chip has one radio and a scan on demand fights the sweep — and
+tapping one opens a keyboard.
+
+**The password is typed blind.** The key you press is shown, because a
+keyboard that does not say what it registered is unusable on a resistive
+panel, but the field itself shows dots. A **show** button reveals what has
+been typed for fifteen seconds and then hides it again, turning the field
+amber while it is legible. That is the same rule as everywhere else on this
+screen: it faces a room, so what appears on it is a deliberate choice rather
+than a default. The password is wiped from memory as soon as it is saved or
+abandoned.
+
+An open network needs no keyboard at all, and joining takes effect at the next
+uplink window.
+
+### Brightness without touch
+
+The backlight level is also on the console, under **Screen**, for a board that
+has a panel but no touch — otherwise there would be no way to dim it. The
+panel is hidden entirely where there is no screen rather than shown as a
+control that refuses.
 
 **Calibrating another panel.** Three things vary between assemblies and all
 three are build options: the bounds of the resistive sheet, whether its axes

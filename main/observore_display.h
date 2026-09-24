@@ -53,6 +53,15 @@ void observore_display_notice(const char *text, int seconds);
 void observore_display_backlight_hold(void);
 void observore_display_backlight_release(void);
 
+/* The backlight level, as a step from 0 (brightest) to the count below.
+ *
+ * Reachable from the console as well as from the screen, because a board can
+ * have a panel and no touch -- and then there is no other way to dim it. The
+ * level is remembered across reboots. */
+#define OBSERVORE_BRIGHT_STEPS 4
+int  observore_display_brightness(void);
+void observore_display_set_brightness(int step);
+
 /* True once when the screen's Baseline button has been pressed. Polled by the
  * main loop, which owns the memory a baseline needs; the same request the
  * physical button makes. */

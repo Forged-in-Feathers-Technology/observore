@@ -4,6 +4,7 @@
 
 #if CONFIG_OBSERVORE_TOUCH
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "driver/gpio.h"
@@ -47,11 +48,19 @@ static const char *TAG = "observore.touch";
  * cycle spends about thirty seconds inside a blocking passive scan, and a
  * screen that ignores a finger for thirty seconds is a screen nobody trusts. */
 #define POLL_MS   20
-/* Five SPI transactions and a five-element sort; it does not need more. */
-#define TASK_STACK 1536
+/* Five SPI transactions and a five-element sort need very little -- but this
+ * task also logs, and formatting one line costs about a kilobyte of stack on
+ * this chip. Cut to 1536 by eye during a heap fix, it survived the shipping
+ * build and overflowed the moment CONFIG_OBSERVORE_TOUCH_LOG_RAW was turned
+ * on, which is the procedure the README tells people to follow to calibrate a
+ * panel: every touch panicked the device. Sized from the high-water mark the
+ * task now reports rather than guessed again: 2560 left only 476 bytes spare
+ * once a touch had been logged, which is a margin in name only. */
+#define TASK_STACK 3072
 
 static spi_device_handle_t s_dev;
 static bool s_ready;
+static int64_t s_task_started_us;
 
 /* Press state, owned by the poll task and read under the lock. */
 static SemaphoreHandle_t s_lock;
@@ -150,6 +159,7 @@ void observore_touch_init(void)
         return;
     }
     ESP_LOGI(TAG, "XPT2046 ready on SPI3 (irq %d)", CONFIG_OBSERVORE_TOUCH_IRQ);
+    s_task_started_us = esp_timer_get_time();
 }
 
 /* Raw ADC counts to screen pixels.
@@ -235,7 +245,22 @@ static bool sample(int *x, int *y)
 static void touch_task(void *arg)
 {
     (void)arg;
+    /* Said once, half a minute in, by which time a panel has usually been
+     * touched and the logging path exercised. Stack headroom is as much a
+     * budget as free heap on this board, and the only way to size it is to
+     * read it back. */
+    /* Follows the mark down rather than saying it once, the way the heap
+     * watch does: the expensive path here is formatting a log line, which
+     * only happens when someone is actually touching the panel. Saying it
+     * once, before that, is how a stack gets sized wrongly. */
+    size_t reported = SIZE_MAX;
     for (;;) {
+        size_t spare = uxTaskGetStackHighWaterMark(NULL);
+        if (spare + 64 < reported) {
+            reported = spare;
+            ESP_LOGI(TAG, "%s: %u bytes of %d", "stack headroom",
+                     (unsigned)spare, TASK_STACK);
+        }
         int sx = 0, sy = 0;
         bool down = sample(&sx, &sy);
         int64_t now = esp_timer_get_time();
