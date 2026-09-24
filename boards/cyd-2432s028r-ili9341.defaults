@@ -19,6 +19,25 @@
 
 CONFIG_OBSERVORE_DISPLAY=y
 CONFIG_OBSERVORE_DISPLAY_ILI9341=y
+
+# The XPT2046 touch controller on its own SPI pins, defaults as documented
+# above. The calibration bounds live in Kconfig and are per-panel.
+CONFIG_OBSERVORE_TOUCH=y
+
+# Touch calibration, measured on the bench 2026-09-24. The sheet's axes are
+# CROSSED relative to the landscape display: raw Y is the screen's horizontal
+# and raw X its vertical, which a press to the left and then to the right
+# settles in one move -- raw Y swings the width of its range while raw X barely
+# stirs. Bounds are per-panel and vary by tens of counts between boards; the
+# targets on this screen are a third of its width, so a few pixels do not
+# matter. Build with CONFIG_OBSERVORE_TOUCH_LOG_RAW=y to measure another.
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_X=400
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_X=3700
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y=350
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y=3500
+CONFIG_OBSERVORE_TOUCH_SWAP_XY=y
+# CONFIG_OBSERVORE_TOUCH_FLIP_X is not set
+# CONFIG_OBSERVORE_TOUCH_FLIP_Y is not set
 CONFIG_OBSERVORE_DISPLAY_BGR=y
 # CONFIG_OBSERVORE_DISPLAY_INVERT is not set
 CONFIG_OBSERVORE_DISPLAY_MIRROR_X=y

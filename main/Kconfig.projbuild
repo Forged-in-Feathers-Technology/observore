@@ -220,6 +220,75 @@ config OBSERVORE_DISPLAY_MIRROR_Y
     bool "Mirror Y"
     default n
 
+config OBSERVORE_TOUCH
+    bool "Resistive touch panel (XPT2046)"
+    default n
+    help
+        The touch controller carried by the Cheap Yellow Display, on its own
+        SPI pins. Off by default: a panel without touch, or with a controller
+        that is not an XPT2046, would only poll a line that never answers.
+
+if OBSERVORE_TOUCH
+
+config OBSERVORE_TOUCH_MOSI
+    int "Touch MOSI GPIO"
+    default 32
+config OBSERVORE_TOUCH_MISO
+    int "Touch MISO GPIO"
+    default 39
+config OBSERVORE_TOUCH_SCLK
+    int "Touch SCLK GPIO"
+    default 25
+config OBSERVORE_TOUCH_CS
+    int "Touch CS GPIO"
+    default 33
+config OBSERVORE_TOUCH_IRQ
+    int "Touch PENIRQ GPIO"
+    default 36
+
+config OBSERVORE_TOUCH_RAW_MIN_X
+    int "Raw X at the low edge"
+    default 200
+config OBSERVORE_TOUCH_RAW_MAX_X
+    int "Raw X at the high edge"
+    default 3900
+config OBSERVORE_TOUCH_RAW_MIN_Y
+    int "Raw Y at the low edge"
+    default 200
+config OBSERVORE_TOUCH_RAW_MAX_Y
+    int "Raw Y at the high edge"
+    default 3900
+    help
+        The four bounds are a property of one piece of glass, not of the
+        product: boards off the same reel differ by tens of counts. Build with
+        OBSERVORE_TOUCH_LOG_RAW, touch each corner, and read them off the log.
+
+config OBSERVORE_TOUCH_SWAP_XY
+    bool "Touch axes are crossed relative to the display"
+    default n
+    help
+        Wrong sends the finger along the wrong edge: dragging across the
+        screen moves the mark up and down.
+
+config OBSERVORE_TOUCH_FLIP_X
+    bool "Flip touch X"
+    default n
+config OBSERVORE_TOUCH_FLIP_Y
+    bool "Flip touch Y"
+    default n
+    help
+        Wrong flips are unmistakable: the cursor goes the other way from the
+        finger, in one axis or both.
+
+config OBSERVORE_TOUCH_LOG_RAW
+    bool "Log raw touch values"
+    default n
+    help
+        Prints every accepted reading to the console. For calibration only --
+        it is one line per poll while a finger is down.
+
+endif
+
 endif
 
 endmenu

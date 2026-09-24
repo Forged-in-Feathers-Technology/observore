@@ -918,6 +918,43 @@ desk is a personal display and the authentication belongs to the network-facing
 console, not to the thing in the room with you. And the console password is
 never drawn on it, for the same reason in reverse — a screen faces a room, and
 the device already prints the password to serial for whoever is setting it up.
+Touch does not change either rule. Someone who can press the glass is already
+standing in front of it.
+
+### Touch
+
+The board carries an XPT2046 resistive controller on its own SPI pins, and
+with `CONFIG_OBSERVORE_TOUCH` the bottom of the screen becomes a bar of three
+buttons: **page**, **baseline** and **light**.
+
+**page** moves between the watch page above and a system page — version,
+board, uptime, what has been seen, free memory, and how long the previous runs
+lasted with how each one ended. **baseline** does what holding the button
+does, and says so on the screen; the work happens in the main loop, which can
+be most of a minute away inside a scan. **light** steps the backlight through
+four levels and remembers the choice, because a 2.8" panel at full brightness
+is a beacon in a dark room and a detector that comes back from a power cut at
+full brightness at three in the morning has told the room something.
+
+Drawing moved to a task of its own when touch arrived. The main loop spends
+about thirty seconds of every patrol cycle inside a blocking scan, and a
+screen that only redrew there would ignore a finger for half a minute; now the
+loop publishes a status and the drawing task renders it on its own clock.
+
+**Calibrating another panel.** Three things vary between assemblies and all
+three are build options: the bounds of the resistive sheet, whether its axes
+are crossed relative to the landscape display, and which way each one runs.
+Build with `CONFIG_OBSERVORE_TOUCH_LOG_RAW=y`, press the screen, and read the
+values off the log.
+
+Check the crossing first, and check it with a press to the left and then a
+press to the right at the same height. On the panels here that single move
+swings raw Y across its whole range while raw X barely stirs, which is what
+`CONFIG_OBSERVORE_TOUCH_SWAP_XY` exists for. Corner presses will not tell you
+this: a corner moves both axes at once, and two corners that share an edge
+look exactly like a dead axis — which is what they were read as here, through
+a board swap and a hunt for a fault that did not exist, before one deliberate
+left-right press settled it in ten seconds.
 
 That board does not send notifications. It cannot: the notifier is a build
 option (`CONFIG_OBSERVORE_NOTIFIER`) and the CYD profile leaves it out, which
