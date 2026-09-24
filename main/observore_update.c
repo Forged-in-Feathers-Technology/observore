@@ -147,7 +147,12 @@ void observore_update_check(void)
     }
 
     if (fetch(s_doc, sizeof(s_doc)) != ESP_OK) {
-        ESP_LOGW(TAG, "update check failed: %s", s_error);
+        /* With the free heap, because the first thing that goes when a board
+         * without PSRAM runs short is the TLS handshake behind this request,
+         * and the error alone ("cannot connect") points at the network
+         * instead. It cost a release to learn that here. */
+        ESP_LOGW(TAG, "update check failed: %s (internal heap %" PRIu32 " free)",
+                 s_error, (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         /* A check someone asked for gets one more go a few seconds on. On
          * the bench the first attempt seven seconds after the uplink came up
          * failed to connect and the next, seconds later, succeeded; a button

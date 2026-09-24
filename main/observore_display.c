@@ -150,8 +150,14 @@ static void line(int row, const char *text, uint16_t fg, uint16_t bg)
  * that only redrew there would ignore a finger for half a minute. The drawing
  * task redraws on its own clock, from the last thing published. */
 #define UI_POLL_MS   30
-#define UI_STACK     3072
-#define SNAP_MAX     12
+/* Both of these were set generously and then measured. The drawing task
+ * formats one forty-column line at a time and calls into the panel driver;
+ * the snapshot only has to hold what a page can show, which is eleven rows.
+ * On the board with a screen there is no PSRAM, and every kilobyte held here
+ * is one the TLS handshake behind an update check cannot have -- which is how
+ * v0.8.2 shipped a CYD that could no longer check for its own updates. */
+#define UI_STACK     2048
+#define SNAP_MAX     8
 
 static SemaphoreHandle_t s_lock;
 static observore_status_t s_snap_st;

@@ -936,6 +936,20 @@ four levels and remembers the choice, because a 2.8" panel at full brightness
 is a beacon in a dark room and a detector that comes back from a power cut at
 full brightness at three in the morning has told the room something.
 
+**Memory is the budget that governs this board.** It has no PSRAM, and during
+an uplink window the console's scratch, the screen's buffers and the TLS
+handshake behind an update check all want internal RAM at once. v0.8.2 shipped
+with about twelve kilobytes less of it than v0.8.1 and the CYD could no longer
+check for its own updates: the handshake failed, the check reported that it
+could not connect, and since installing requires a successful check first, a
+device in that state could not be updated over the air at all. v0.8.3 gave the
+memory back — smaller task stacks, a shorter screen snapshot, and half the
+console scratch — and the failure log now carries the free heap, because
+"cannot connect" on its own points at the network rather than at the real
+cause. Anything added to a display build should be measured against the free
+heap reported during an uplink window, not during patrol, where there is
+twenty kilobytes more of it and nothing looks wrong.
+
 Drawing moved to a task of its own when touch arrived. The main loop spends
 about thirty seconds of every patrol cycle inside a blocking scan, and a
 screen that only redrew there would ignore a finger for half a minute; now the

@@ -55,9 +55,14 @@ extern const uint8_t index_html_end[]   asm("_binary_index_html_gz_end");
  * The buffers are shared between handlers, which is safe because
  * esp_http_server dispatches requests from a single task. */
 #define JSON_BUF_PSRAM    (32 * 1024)
-#define JSON_BUF_INTERNAL (8 * 1024)
+/* Half of what this was, because on a board with no PSRAM it is held for the
+ * whole uplink window and competes with the TLS handshake behind the update
+ * check -- which on the CYD it beat, leaving the device unable to see a new
+ * release at all. The console pages itself anyway; a shorter list per request
+ * is a smaller cost than a device that cannot update. */
+#define JSON_BUF_INTERNAL (4 * 1024)
 /* Enough for the nearby list in full, and a useful slice of the device list. */
-#define SNAP_INTERNAL     48
+#define SNAP_INTERNAL     24
 
 static observore_event_t *s_snap;
 static size_t             s_snap_cap;
