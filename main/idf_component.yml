@@ -10,8 +10,19 @@ dependencies:
   # for every target for the same reason as the LED strip: the panel is a
   # Kconfig choice, and a component that is not selected costs a build
   # nothing beyond the download.
-  espressif/esp_lcd_ili9341: "^1.2.0"
-  # And the 3.5" boards' controller, for the same reason.
-  espressif/esp_lcd_st7796: "^1.2.0"
+  #
+  # Both are pulled in only for the chip that carries a panel here, because
+  # their own manifests name the targets they support and the 3.5" board's
+  # driver does not list the C5 or the C6: asking for it there fails dependency
+  # solving before a line is compiled. Locally that hid behind a cached
+  # component and only CI, which resolves from scratch, saw it.
+  espressif/esp_lcd_ili9341:
+    version: "^1.2.0"
+    rules:
+      - if: "target == esp32"
+  espressif/esp_lcd_st7796:
+    version: "^1.2.0"
+    rules:
+      - if: "target == esp32"
   idf:
     version: ">=5.0"
