@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sdkconfig.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -22,9 +24,13 @@
  * Compiled only for boards that have a panel; elsewhere the calls are empty. */
 
 /* The panel in landscape, in pixels. Shared because the touch layer has to
- * land in the same coordinate space the display draws in. */
-#define OBSERVORE_DISPLAY_W 320
-#define OBSERVORE_DISPLAY_H 240
+ * land in the same coordinate space the display draws in.
+ *
+ * A build option rather than a constant since the 3.5" boards arrived: they
+ * are 480x320 where the 2.8" is 320x240, which changes the text grid and every
+ * layout derived from it. */
+#define OBSERVORE_DISPLAY_W CONFIG_OBSERVORE_DISPLAY_WIDTH
+#define OBSERVORE_DISPLAY_H CONFIG_OBSERVORE_DISPLAY_HEIGHT
 
 void observore_display_init(void);
 

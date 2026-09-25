@@ -1,0 +1,69 @@
+# ESP32-3248S035R, the 3.5" "Cheap Yellow Display", resistive touch.
+#
+# 480x320 in landscape against the 2.8" board's 320x240, which is why the panel
+# geometry is a build option: the text grid, the pages and the keyboard are all
+# derived from it. Sixty columns by twenty rows here, against forty by fifteen.
+#
+# Not yet verified on a bench. The panel controller, the geometry and the pin
+# map below are what this board is documented to use; each is a build option,
+# and the failure each one causes is distinct and visible:
+#
+#   nothing at all            -> wrong controller, or backlight on another pin
+#   a negative                -> CONFIG_OBSERVORE_DISPLAY_INVERT
+#   red and blue swapped      -> CONFIG_OBSERVORE_DISPLAY_BGR
+#   upside down or mirrored   -> MIRROR_X / MIRROR_Y
+#   touch along the wrong axis-> CONFIG_OBSERVORE_TOUCH_SWAP_XY
+#
+#   ST7796   HSPI  MOSI 13  MISO 12  SCLK 14  CS 15  DC 2  backlight 27
+#   XPT2046        shares the panel's bus, CS 33  IRQ 36
+#   RGB LED        R 4  G 16  B 17  (active low)
+#   BOOT           GPIO 0
+
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_ST7796=y
+CONFIG_OBSERVORE_DISPLAY_WIDTH=480
+CONFIG_OBSERVORE_DISPLAY_HEIGHT=320
+CONFIG_OBSERVORE_DISPLAY_BL=27
+CONFIG_OBSERVORE_DISPLAY_BGR=y
+# CONFIG_OBSERVORE_DISPLAY_INVERT is not set
+# Both axes, where the 2.8" boards mirror only X: with X alone this panel came
+# up rotated half a turn, and with Y alone it read right way up but mirrored
+# left to right.
+CONFIG_OBSERVORE_DISPLAY_MIRROR_X=y
+CONFIG_OBSERVORE_DISPLAY_MIRROR_Y=y
+
+# The touch controller hangs off the panel's bus here rather than its own.
+CONFIG_OBSERVORE_TOUCH=y
+CONFIG_OBSERVORE_TOUCH_SHARED_BUS=y
+CONFIG_OBSERVORE_TOUCH_CS=33
+CONFIG_OBSERVORE_TOUCH_IRQ=36
+# Measured on the bench unit 2026-09-24 with CONFIG_OBSERVORE_TOUCH_LOG_RAW=y:
+# left 273, right 3823, top 3750, bottom 307. The first pass guessed the
+# bottom at 370 and took the top from a press short of the edge, and the few
+# percent that cost clamped the lowest rows together: the keyboard's bottom
+# row, the action row and the button bar all answered as one. The axes are crossed as on the
+# 2.8" boards -- a press left then right at the same height swings raw Y across
+# its range while raw X barely moves -- but the vertical runs the other way
+# here, which is why nothing near the bottom of the screen appeared to work: it
+# was landing at the top. A press three-quarters of the way down, away from any
+# edge, is what settles the direction; the edges themselves sit under the frame
+# on this board and a press there often does not register at all.
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_X=307
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_X=3750
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y=273
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y=3823
+CONFIG_OBSERVORE_TOUCH_SWAP_XY=y
+# CONFIG_OBSERVORE_TOUCH_FLIP_X is not set
+CONFIG_OBSERVORE_TOUCH_FLIP_Y=y
+
+# The green element of the RGB LED, as a plain active-low LED.
+CONFIG_OBSERVORE_LED_MONO=y
+CONFIG_OBSERVORE_LED_GPIO=16
+CONFIG_OBSERVORE_LED_ACTIVE_LOW=y
+CONFIG_OBSERVORE_BUTTON_GPIO=0
+
+# A device with a display does not need to push notifications, and the classic
+# ESP32 with no PSRAM is the board least able to afford the TLS behind them.
+# CONFIG_OBSERVORE_NOTIFIER is not set
+
+CONFIG_OBSERVORE_BOARD="cyd-3248s035r-st7796"

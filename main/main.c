@@ -354,12 +354,16 @@ void app_main(void)
         }
         if (s_baseline_requested) {
             s_baseline_requested = false;
-            /* Borrowed, not static: a snapshot of every slot is about 23 KB,
-             * which this board can spare for a moment and not for good. */
-            observore_event_t *snap = malloc(sizeof(*snap) * OBSERVORE_MAX_DEVICES);
+            /* A few-KB scratch, not a snapshot of every slot: observore_mute_baseline
+             * walks the table in chunks of this many, so it no longer needs a ~23 KB
+             * block -- which a board with no PSRAM has none of once the heap is a
+             * little fragmented, and whose malloc failing is what used to put
+             * "baseline failed: out of memory" on the 3.5" CYD's screen. */
+            const size_t chunk = 32;
+            observore_event_t *snap = malloc(sizeof(*snap) * chunk);
             if (snap) {
                 observore_baseline_t b;
-                observore_mute_baseline(snap, OBSERVORE_MAX_DEVICES, &b);
+                observore_mute_baseline(snap, chunk, &b);
                 free(snap);
                 char msg[48];
                 snprintf(msg, sizeof(msg), "baseline set: %zu now ignored", b.added);

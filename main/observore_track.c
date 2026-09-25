@@ -486,6 +486,24 @@ size_t observore_track_all(observore_event_t *out, size_t max)
     return collect(out, max, -1, BY_NOTHING);
 }
 
+size_t observore_track_all_from(observore_event_t *out, size_t max, size_t *cursor)
+{
+    if (!out || max == 0 || !cursor) {
+        return 0;
+    }
+    size_t n = 0;
+    OBSERVORE_LOCK();
+    size_t i = *cursor;
+    for (; i < OBSERVORE_MAX_DEVICES && n < max; i++) {
+        if (s_devices[i].in_use) {
+            out[n++] = s_devices[i].ev;
+        }
+    }
+    *cursor = i;
+    OBSERVORE_UNLOCK();
+    return n;
+}
+
 size_t observore_track_drain_new(observore_event_t *out, size_t max)
 {
     if (!out || max == 0) {

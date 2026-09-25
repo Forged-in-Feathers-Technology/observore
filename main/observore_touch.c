@@ -25,17 +25,40 @@ static const char *TAG = "observore.touch";
  * the IOMUX, so there is nothing to gain from pushing it. */
 #define TOUCH_HZ (2 * 1000 * 1000)
 
+/* Bool options that are off are undefined, not zero, so give the one read as a
+ * value a definite one. */
+#ifndef CONFIG_OBSERVORE_TOUCH_SHARED_BUS
+#define CONFIG_OBSERVORE_TOUCH_SHARED_BUS 0
+#endif
+
+/* Its own bus where the board gives it one, the panel's where it does not. */
+#if CONFIG_OBSERVORE_TOUCH_SHARED_BUS
+#define TOUCH_HOST SPI2_HOST
+#else
+#define TOUCH_HOST SPI3_HOST
+#endif
+
 /* Control bytes: start, channel, 12-bit, differential, power-down between
  * conversions. Y and X are the two position channels; Z1 is what tells us a
  * finger is actually on the glass rather than the line merely floating. */
 #define CMD_Y  0x90
 #define CMD_X  0xD0
 #define CMD_Z1 0xB0
+#define CMD_Z2 0xC0
 
-/* Below this the press is too light to trust a position from. Measured on the
- * bench: a firm touch reads in the thousands, a lifted finger under a hundred,
- * and the band between is where a wrong coordinate comes from. */
-#define Z_THRESHOLD 300
+/* How hard the glass is being pressed, from both Z channels rather than one.
+ *
+ * Z1 alone scales with where on the sheet the touch is, so a single threshold
+ * against it is really a threshold against position: on the 3.5" board the
+ * button bar sits at the end where Z1 reads small, and firm presses there
+ * measured about 130 against a limit of 300 -- every one of them discarded
+ * before it could become a tap, on a panel that was working perfectly.
+ *
+ * Z1 rises and Z2 falls under a finger, so their combination is a far flatter
+ * measure across the sheet. Untouched it sits near zero; a deliberate press is
+ * in the hundreds. */
+#define Z_THRESHOLD CONFIG_OBSERVORE_TOUCH_Z_MIN
+
 
 /* Samples per axis per read. Resistive panels are noisy and a median throws
  * away the outlier that a mean would average into the answer. */
@@ -111,6 +134,18 @@ static int median_channel(uint8_t cmd)
     return v[SAMPLES / 2];
 }
 
+/* How hard the glass is being pressed. See Z_THRESHOLD above for why both
+ * channels are read rather than just the first. */
+static int pressure(void)
+{
+    int z1 = median_channel(CMD_Z1);
+    int z2 = median_channel(CMD_Z2);
+    if (z1 < 0 || z2 < 0) {
+        return -1;
+    }
+    return z1 + 4095 - z2;
+}
+
 void observore_touch_init(void)
 {
     /* PENIRQ: low while the panel is touched. Polling this costs one register
@@ -121,6 +156,13 @@ void observore_touch_init(void)
     };
     gpio_config(&irq);
 
+    /* Some boards give the controller its own pins and some hang it off the
+     * panel's bus with a second chip select. Sharing is not merely allowed --
+     * the driver serialises devices on one bus, so a measurement can never
+     * land in the middle of a screen update. */
+    const spi_host_device_t host = TOUCH_HOST;
+    esp_err_t err;
+#if !CONFIG_OBSERVORE_TOUCH_SHARED_BUS
     spi_bus_config_t bus = {
         .mosi_io_num     = CONFIG_OBSERVORE_TOUCH_MOSI,
         .miso_io_num     = CONFIG_OBSERVORE_TOUCH_MISO,
@@ -129,11 +171,12 @@ void observore_touch_init(void)
         .quadhd_io_num   = -1,
         .max_transfer_sz = 32,
     };
-    esp_err_t err = spi_bus_initialize(SPI3_HOST, &bus, SPI_DMA_DISABLED);
+    err = spi_bus_initialize(host, &bus, SPI_DMA_DISABLED);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI bus: %s", esp_err_to_name(err));
         return;
     }
+#endif
 
     spi_device_interface_config_t dev = {
         .clock_speed_hz = TOUCH_HZ,
@@ -141,7 +184,7 @@ void observore_touch_init(void)
         .spics_io_num   = CONFIG_OBSERVORE_TOUCH_CS,
         .queue_size     = 1,
     };
-    err = spi_bus_add_device(SPI3_HOST, &dev, &s_dev);
+    err = spi_bus_add_device(host, &dev, &s_dev);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI device: %s", esp_err_to_name(err));
         return;
@@ -158,7 +201,9 @@ void observore_touch_init(void)
         s_ready = false;
         return;
     }
-    ESP_LOGI(TAG, "XPT2046 ready on SPI3 (irq %d)", CONFIG_OBSERVORE_TOUCH_IRQ);
+    ESP_LOGI(TAG, "XPT2046 ready on SPI%d (irq %d)%s", TOUCH_HOST + 1,
+             CONFIG_OBSERVORE_TOUCH_IRQ,
+             CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
     s_task_started_us = esp_timer_get_time();
 }
 
@@ -211,6 +256,23 @@ static void to_screen(int raw_x, int raw_y, int *x, int *y)
  * other's reply. */
 static bool sample(int *x, int *y)
 {
+#if CONFIG_OBSERVORE_TOUCH_LOG_RAW
+    /* Bring-up: say what the interrupt line is doing and what the controller
+     * answers even when the gate says nobody is touching. A panel that never
+     * reports could be a wrong interrupt pin, a controller that is not
+     * answering at all, or a pressure threshold set too high, and those look
+     * identical from outside. */
+    static int64_t s_last_probe_us;
+    int64_t now_probe = esp_timer_get_time();
+    if (now_probe - s_last_probe_us > 500 * 1000) {
+        s_last_probe_us = now_probe;
+        int lvl = gpio_get_level(CONFIG_OBSERVORE_TOUCH_IRQ);
+        int z   = s_ready ? pressure() : -1;
+        int rx  = s_ready ? median_channel(CMD_X)  : -1;
+        int ry  = s_ready ? median_channel(CMD_Y)  : -1;
+        ESP_LOGI(TAG, "probe irq=%d z=%4d x=%4d y=%4d", lvl, z, rx, ry);
+    }
+#endif
     if (!s_ready || gpio_get_level(CONFIG_OBSERVORE_TOUCH_IRQ) != 0) {
         return false;
     }
@@ -225,7 +287,7 @@ static bool sample(int *x, int *y)
      * about a millisecond, inside the interrupt gate, so it only ever happens
      * with a finger already on the glass. */
     observore_display_backlight_hold();
-    int z = median_channel(CMD_Z1);
+    int z = pressure();
     int raw_x = z >= Z_THRESHOLD ? median_channel(CMD_X) : -1;
     int raw_y = z >= Z_THRESHOLD ? median_channel(CMD_Y) : -1;
     observore_display_backlight_release();

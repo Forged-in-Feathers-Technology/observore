@@ -105,6 +105,14 @@ size_t observore_track_nearby(observore_event_t *out, size_t max);
  * baseline: mark everything in range as known. */
 size_t observore_track_all(observore_event_t *out, size_t max);
 
+/* The same walk in bounded chunks, so a caller can process every tracked
+ * device without a buffer big enough to hold them all at once. Copies up to
+ * `max` in-use devices from slot `*cursor` onward, advances `*cursor` past the
+ * last slot examined, and returns how many were copied. Start with *cursor = 0
+ * and call until it returns fewer than `max`. Lets a board with no PSRAM take a
+ * full baseline from a few-KB buffer instead of a ~23 KB one. */
+size_t observore_track_all_from(observore_event_t *out, size_t max, size_t *cursor);
+
 /* Collect devices classified since the last call and mark them reported.
  * This is the serial event log: each detection is reported once, when it is
  * first identified, rather than on every repeat sighting. */
