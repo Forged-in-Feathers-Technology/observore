@@ -156,14 +156,15 @@ static void line(int row, const char *text, uint16_t fg, uint16_t bg)
  * that only redrew there would ignore a finger for half a minute. The drawing
  * task redraws on its own clock, from the last thing published. */
 #define UI_POLL_MS   30
-/* Both of these were set generously and then measured. The drawing task
- * formats one forty-column line at a time and calls into the panel driver;
- * the snapshot only has to hold what a page can show, which is eleven rows.
- * On the board with a screen there is no PSRAM, and every kilobyte held here
- * is one the TLS handshake behind an update check cannot have -- which is how
- * v0.8.2 shipped a CYD that could no longer check for its own updates. */
-/* Measured, not chosen: drawing the keyboard leaves 536 bytes spare at 2560. */
+/* The drawing task's stack. v0.8.3 trimmed it to 2 KB, because a board with no
+ * PSRAM needs every spare kilobyte for the TLS handshake behind its update check
+ * -- a too-generous stack here is what left v0.8.2 unable to see its own updates.
+ * But the on-screen keyboard added since draws deeper than the plain status
+ * lines: 2560 was measured to leave only 536 bytes spare, so it is back at 3 KB.
+ * The extra ~1 KB is affordable -- the CYD's uplink low-water still sits near
+ * 27 KB, well clear of the handshake. */
 #define UI_STACK     3072
+/* How many devices one page of the snapshot holds. */
 #define SNAP_MAX     8
 
 static SemaphoreHandle_t s_lock;
