@@ -1241,7 +1241,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.8.3 && git push origin v0.8.3
+git tag v0.9.0 && git push origin v0.9.0
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
@@ -1375,6 +1375,20 @@ was gone. Now a run that ended in `power-on` or `brownout` on a device that
 was on battery is the battery's life, to within five minutes, and the runs
 before it say whether that is getting worse. The same list is on `/api/status`
 under `runs`, newest first.
+
+**Measured: 25.1 hours.** An ESP32-C5 devkit on a 2,000 mAh cell, running
+v0.8.3 untouched from a full charge until the cell's protection cut off —
+`90311 s, ended by power-on`. That is with the radio at full duty: no light
+sleep, a passive dual-band scan and a channel sweep every two minutes, and the
+Bluetooth scanner running the whole time. Roughly 80 mA average, so a pack's
+capacity in milliamp-hours divided by eighty is a fair first guess at hours for
+any other cell.
+
+The number took three attempts to get honestly. The first two runs ended
+because the firmware was reflashed mid-run, and a third gave six hours because
+the build had a debug task sampling the heap a hundred times a second, which
+never let the chip idle — visible in the record as a six-hour run among
+twenty-five-hour ones, which is exactly what the record is for.
 
 The flash cost is stated because it was checked: about three NVS entries per
 write fills a page every few hours, which is a sector erase every day or so per
