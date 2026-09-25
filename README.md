@@ -936,8 +936,14 @@ with `CONFIG_OBSERVORE_TOUCH` the bottom of the screen becomes a bar of three
 buttons: **page**, **baseline** and **light**.
 
 **page** moves between the watch page above and a system page — version,
-board, uptime, what has been seen, free memory, and how long the previous runs
-lasted with how each one ended. **baseline** does what holding the button
+board, uptime, what has been seen, free memory, the console's address, what
+the last version check found, and how long the previous runs lasted with how
+each one ended.
+
+The address is there because on a board like this there is nowhere else to
+read it: the device prints it to serial at boot and nothing else shows it, so
+a console you cannot find is a console you do not have. The password is a
+different matter and is still never drawn. **baseline** does what holding the button
 does, and says so on the screen; the work happens in the main loop, which can
 be most of a minute away inside a scan. **light** steps the backlight through
 four levels and remembers the choice, because a 2.8" panel at full brightness
@@ -1001,6 +1007,26 @@ abandoned.
 
 An open network needs no keyboard at all, and joining takes effect at the next
 uplink window.
+
+### Acting on what the screen shows
+
+Two actions at the foot of the system page: **check for updates**, which asks
+straight away rather than waiting for the daily check, and **install**, which
+appears only when a check has found something. Install asks a second time
+before it starts, because it stops the detector for minutes and then reboots
+it — the same confirmation the console's button uses, for the same reason.
+
+On the watch page, **touching a finding offers to ignore it**. The row turns
+amber and asks; a second tap writes the rule. It is the device's broadcast
+name where it has one and its address otherwise — deliberately not its advert
+fingerprint, which identifies a kind of device rather than an individual, so
+muting your own tracker that way would silence a stranger's. A baseline is
+allowed that trade for a follower on a rotating address because it is a
+statement about a whole room; one tap on one row is not.
+
+Both confirmations lapse after five seconds and are cancelled by leaving the
+page, so a press nobody meant — a resistive panel under a sleeve, a board
+face-down on a desk — does nothing.
 
 ### Brightness without touch
 

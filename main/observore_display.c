@@ -38,11 +38,13 @@
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 
+#include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
 #include "observore_runs.h"
 #include "observore_wifi.h"
 #include "observore_touch.h"
+#include "observore_update.h"
 #include "observore_util.h"
 
 /* Bool options that are off are undefined, not zero, so give the ones read
@@ -86,6 +88,15 @@ static const char *TAG = "observore.display";
 #else
 #define BAR_LAST 1
 #endif
+
+/* The bar is drawn two rows deep and answers to the bottom three.
+ *
+ * A single text row is sixteen pixels, about two millimetres: smaller than a
+ * fingertip, at the edge of the glass where a resistive sheet is least
+ * accurate, and on this board partly under the lip of a case. The margin above
+ * the drawn bar is what makes it hittable without looking. */
+#define BAR_ROWS 2
+#define BAR_TOUCH_ROWS 3
 
 
 static esp_lcd_panel_handle_t s_panel;
@@ -187,6 +198,18 @@ static int64_t s_pressed_until_us;
 static bool    s_baseline_request;
 
 #if CONFIG_OBSERVORE_TOUCH
+/* Actions that change something get a second tap to confirm, the way the
+ * console's install and baseline buttons do: a resistive panel in a pocket or
+ * under a sleeve can register a press nobody meant. The arming lapses on its
+ * own, so a forgotten half-press does nothing. */
+#define ARM_TIMEOUT_US (5 * 1000000)
+static int     s_armed_row = -1;      /* watch page: the finding being ignored */
+static int64_t s_armed_until_us;
+static bool    s_install_armed;
+static int64_t s_install_armed_until_us;
+#endif
+
+#if CONFIG_OBSERVORE_TOUCH
 /* The network page is a small state machine: a list of what the last patrol
  * scan saw, then a keyboard for the one that was chosen.
  *
@@ -212,6 +235,9 @@ static const char *const KEYS[2][KEY_ROWS] = {
      "ASDFGHJKL:;'",
      "ZXCVBNM,.?/  "},
 };
+
+/* Which finding each screen row is showing, for tap-to-ignore. */
+static int s_row_finding[ROWS];
 
 static wifi_step_t s_wifi_step;
 static observore_scan_entry_t s_aps[10];
@@ -476,6 +502,11 @@ static void draw_watch(const observore_status_t *st,
     /* Findings, most recent first: class, address, signal, and what it was
      * called. Same facts as a digest line, fitted to forty columns. */
     const int last_row = ROWS - BAR_LAST;
+#if CONFIG_OBSERVORE_TOUCH
+    for (size_t r = 0; r < ROWS; r++) {
+        s_row_finding[r] = -1;
+    }
+#endif
     for (size_t i = 0; i < n && row < last_row; i++, row++) {
         char mac[OBSERVORE_MAC_STR_LEN];
         observore_mac_str(top[i].mac, mac);
@@ -485,6 +516,21 @@ static void draw_watch(const observore_status_t *st,
         snprintf(text, sizeof(text), "%-8.8s %s %4d %.8s",
                  observore_class_name(top[i].cls), mac, top[i].rssi, who);
         uint16_t fg = top[i].cls == OBSERVORE_CLASS_FOLLOWER ? C_WHITE : C_AMBER;
+#if CONFIG_OBSERVORE_TOUCH
+        /* Which finding is on which row, so a tap can name the thing under the
+         * finger rather than an index into a list that has since moved. */
+        s_row_finding[row] = (int)i;
+        if (row == s_armed_row && now_us < s_armed_until_us) {
+            /* The row keeps showing what it is about, cut to whatever the
+             * question leaves: forty columns on the 2.8" boards is not much. */
+            char ask[COLS + 1];
+            /* A fixed slice of the row, not the whole of it: the buffer is
+             * the screen's width and forty columns does not stretch. */
+            snprintf(ask, sizeof(ask), " ignore? tap again  %.17s", text);
+            line(row, ask, C_BLACK, C_AMBER);
+            continue;
+        }
+#endif
         line(row, text, fg, C_BLACK);
     }
     if (n == 0) {
@@ -519,12 +565,39 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     line(5, text, C_WHITE, C_BLACK);
-    line(6, "", C_WHITE, C_BLACK);
-    line(7, " previous runs", C_GREY, C_BLACK);
+
+    /* The address, which is the one fact on this page a person has to take
+     * somewhere else -- and on a board like this there is nowhere else to read
+     * it. The password is a different matter and is still never drawn: a
+     * screen faces a room, and the device prints that to serial for whoever is
+     * setting it up. Only true while the uplink is up, so it says so when it
+     * is not. */
+    const char *ip = observore_wifi_uplink_ip();
+    snprintf(text, sizeof(text), " console  %.28s",
+             ip && ip[0] ? ip : "only during an uplink window");
+    line(6, text, C_WHITE, C_BLACK);
+
+    /* What the last version check found, since this page is where somebody
+     * would look after pressing "update" below. */
+    const char *latest = observore_update_latest_version();
+    if (observore_update_available()) {
+        snprintf(text, sizeof(text), " update   %.12s is available", latest);
+        line(7, text, C_BLACK, C_AMBER);
+    } else if (observore_update_check_pending()) {
+        line(7, " update   checking...", C_GREY, C_BLACK);
+    } else if (latest && latest[0]) {
+        snprintf(text, sizeof(text), " update   up to date (%.10s)", latest);
+        line(7, text, C_GREY, C_BLACK);
+    } else {
+        line(7, " update   not checked yet", C_GREY, C_BLACK);
+    }
+
+    line(8, "", C_WHITE, C_BLACK);
+    line(9, " previous runs", C_GREY, C_BLACK);
 
     observore_run_t runs[4];
     size_t nr = observore_runs_list(runs, 4);
-    int row = 8;
+    int row = 10;
     for (size_t i = 0; i < nr && row < ROWS - BAR_LAST; i++, row++) {
         char dur[16];
         snprintf(dur, sizeof(dur), "%lluh%02llum",
@@ -537,6 +610,32 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
     if (nr == 0) {
         line(row++, "   none recorded yet", C_GREY, C_BLACK);
     }
+#if CONFIG_OBSERVORE_TOUCH
+    for (; row < ACTION_TOP; row++) {
+        line(row, "", C_WHITE, C_BLACK);
+    }
+    /* Two actions, half the width each. Install only offers itself when there
+     * is something to install, and says so while it waits for the second tap:
+     * it stops the detector for minutes and then reboots it. */
+    char left[COLS], right[COLS];
+    snprintf(left, sizeof(left), "  check for updates");
+    if (!observore_update_available()) {
+        snprintf(right, sizeof(right), "%s", "");
+    } else if (s_install_armed && esp_timer_get_time() < s_install_armed_until_us) {
+        snprintf(right, sizeof(right), "  install? tap again");
+    } else {
+        snprintf(right, sizeof(right), "  install %.12s",
+                 observore_update_latest_version());
+    }
+    const int half = COLS / 2;
+    snprintf(text, sizeof(text), "%-*.*s%-*.*s", half, half, left,
+             COLS - half, COLS - half, right);
+    for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
+        line(r, "", C_BLACK, C_GREY);
+    }
+    line(ACTION_ROW, text, C_BLACK, C_GREY);
+    row = ACTION_ROW + 1;
+#endif
     for (; row < ROWS - BAR_LAST; row++) {
         line(row, "", C_WHITE, C_BLACK);
     }
@@ -546,15 +645,6 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
  * person with a fingertip and a resistive panel needs them wide. */
 #define BUTTONS 3
 static const char *BUTTON_TEXT[BUTTONS] = {"  page", "  baseline", "  light"};
-
-/* The bar is drawn two rows deep and answers to the bottom three.
- *
- * A single text row is sixteen pixels, about two millimetres: smaller than a
- * fingertip, at the edge of the glass where a resistive sheet is least
- * accurate, and on this board partly under the lip of a case. The margin above
- * the drawn bar is what makes it hittable without looking. */
-#define BAR_ROWS 2
-#define BAR_TOUCH_ROWS 3
 
 static int button_at(int x, int y)
 {
@@ -812,19 +902,106 @@ void observore_display_render(const observore_status_t *st,
 }
 
 #if CONFIG_OBSERVORE_TOUCH
-/* One tap. The bar is the only thing that takes input: the pages above it are
- * read, not operated, and a stray touch on a reading should do nothing. */
+
+/* A tap on the watch page: the row under the finger is a finding, and two taps
+ * ignore it.
+ *
+ * The rule is the one the console writes for a single device -- its name if it
+ * broadcasts one, otherwise its address. Not its advert fingerprint: that
+ * identifies a kind of device rather than an individual, and muting your own
+ * tracker that way would silence a stranger's. (A baseline is allowed that
+ * trade for a follower on a rotating address, because a baseline is a
+ * statement about a whole room. One tap on one row is not.) */
+static void watch_tap(int y)
+{
+    int row = y / OBSERVORE_FONT_H;
+    if (row < 0 || row >= ROWS || s_row_finding[row] < 0) {
+        return;
+    }
+    size_t i = (size_t)s_row_finding[row];
+    if (i >= s_snap_n) {
+        return;
+    }
+
+    if (s_armed_row != row || esp_timer_get_time() >= s_armed_until_us) {
+        s_armed_row      = row;
+        s_armed_until_us = esp_timer_get_time() + ARM_TIMEOUT_US;
+        return;
+    }
+    s_armed_row = -1;
+
+    const observore_event_t *e = &s_snap_top[i];
+    observore_mute_rule_t rule;
+    memset(&rule, 0, sizeof(rule));
+    if (e->detail[0] != '\0') {
+        rule.kind = OBSERVORE_MUTE_NAME;
+        snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
+    } else {
+        rule.kind = OBSERVORE_MUTE_MAC;
+        memcpy(rule.mac, e->mac, OBSERVORE_MAC_LEN);
+    }
+
+    char what[OBSERVORE_MAC_STR_LEN > 21 ? OBSERVORE_MAC_STR_LEN : 21];
+    if (rule.kind == OBSERVORE_MUTE_NAME) {
+        snprintf(what, sizeof(what), "%.20s", rule.ssid);
+    } else {
+        observore_mac_str(e->mac, what);
+    }
+    if (observore_mute_add(&rule, NULL) == ESP_OK) {
+        snprintf(s_notice, sizeof(s_notice), " ignoring %.20s", what);
+    } else {
+        snprintf(s_notice, sizeof(s_notice), " could not ignore %.20s", what);
+    }
+    s_notice_until_us = esp_timer_get_time() + 6 * 1000000;
+}
+
+/* A tap on the system page's action strip: ask for a version check, or install
+ * what a check found. Installing stops detection for minutes and reboots, so
+ * it asks twice, like the same button in the console. */
+static void system_tap(int x, int y)
+{
+    int row = y / OBSERVORE_FONT_H;
+    if (row < ACTION_TOP || row > ACTION_ROW) {
+        return;
+    }
+    bool right = (x / OBSERVORE_FONT_W) >= COLS / 2;
+    if (!right) {
+        observore_update_check_now();
+        snprintf(s_notice, sizeof(s_notice), " asking for a version check");
+        s_notice_until_us = esp_timer_get_time() + 6 * 1000000;
+        s_install_armed = false;
+        return;
+    }
+    if (!observore_update_available()) {
+        return;
+    }
+    if (!s_install_armed || esp_timer_get_time() >= s_install_armed_until_us) {
+        s_install_armed          = true;
+        s_install_armed_until_us = esp_timer_get_time() + ARM_TIMEOUT_US;
+        return;
+    }
+    s_install_armed = false;
+    esp_err_t err = observore_update_install();
+    snprintf(s_notice, sizeof(s_notice), err == ESP_OK
+             ? " installing -- it restarts when done"
+             : " could not start the update");
+    s_notice_until_us = esp_timer_get_time() + 10 * 1000000;
+}
+
+/* One tap, routed by page. */
 static void handle_tap(int x, int y)
 {
     int b = button_at(x, y);
     if (b < 0) {
-        /* Above the bar. Only the network page takes input there; the others
-         * are read, not operated, and a stray touch on a reading does
-         * nothing. */
+        /* Above the bar, each page decides for itself. */
         if (s_page == PAGE_WIFI) {
             wifi_tap(x, y);
-            s_dirty = true;
+        } else if (s_page == PAGE_SYSTEM) {
+            system_tap(x, y);
+        } else {
+            watch_tap(y);
         }
+        s_dirty = true;
         return;
     }
     s_pressed = b;
@@ -833,6 +1010,8 @@ static void handle_tap(int x, int y)
     switch (b) {
         case 0:
             s_page = (s_page + 1) % PAGE_COUNT;
+            s_armed_row     = -1;
+            s_install_armed = false;
             if (s_page == PAGE_WIFI) {
                 /* Whatever the last patrol scan saw. Nothing is started here:
                  * the chip has one radio and a scan on demand would fight the
