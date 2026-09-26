@@ -3,24 +3,58 @@
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
-A passive counter-surveillance detector for the [Seeed Studio XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
-and the dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5),
-built by [Forged in Feathers Technology](https://www.forgedinfeatherstechnology.com).
+A passive counter-surveillance detector for seven ESP32 boards, in two
+families: headless sensors — the [Seeed Studio XIAO
+ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/), the
+dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5) and
+the C6 — and the **"Cheap Yellow Display"** boards, which have a screen and a
+touch panel. Built by [Forged in Feathers
+Technology](https://www.forgedinfeatherstechnology.com).
 
 It tells you what is watching you. Built to sit in one place and watch that
 place: it learns what is normally there, then reports what is new. It listens
 for the radio signatures of body cameras, licence-plate readers, IP cameras,
-Bluetooth trackers, smart glasses and Remote ID drones, scores what it finds,
-pushes notifications, and serves the log on your network.
+Bluetooth trackers, smart glasses and Remote ID drones — and for the equipment
+that transmits rather than watches: a Flipper, a pwnagotchi, a Pineapple, a
+flood of deauthentication frames knocking devices off a network. It scores what
+it finds and either pushes notifications and serves the log on your network, or
+shows it on its own screen, depending on the board.
 
 Observer and omnivore: it eats surveillance signals.
 
+### Which board
+
+The choice is not about speed or memory. It is whether the device reports to
+you over the network or to your hand.
+
+A **headless board** — the S3, either C5, the C6 — pushes notifications to
+Gotify, ntfy, Pushover, a webhook or Telegram, and serves its log on your
+network. It is the one to leave somewhere and read from elsewhere.
+
+A **Cheap Yellow Display** shows what it sees on its own screen, and with touch
+you can set a baseline, dismiss a finding, join a network by typing the password
+on the glass, and read the console's address without a serial cable. It sends no
+notifications at all — the notifier is left out of the build, which is what
+makes it fit on a chip with no PSRAM, and every memory problem this project has
+had was the TLS handshake behind a notification. A screen is a personal display,
+so the trade is a fair one.
+
+Three of the seven are these displays: the 2.8" board in its two panel
+revisions, and the 3.5". See [the screen](#the-screen) for what they
+can do and [boards, which are not the same as
+chips](#boards-which-are-not-the-same-as-chips) for the profiles.
+
 ## Getting started
 
-You need a XIAO ESP32S3 or an ESP32-C5 board and a USB-C cable. The whole first
-run takes about ten minutes, most of it waiting. The browser flasher reads which
-chip you plugged in and installs the matching build, so there is nothing to
-choose.
+You need one of the seven supported boards and a USB cable. The whole first run
+takes about ten minutes, most of it waiting.
+
+The browser flasher detects the chip and offers the builds that fit it. There is
+usually one, and sometimes a choice: two of the boards are ESP32-C5s whose
+images are not interchangeable, and the 2.8" and 3.5" displays are both plain
+ESP32s with different panels. The flasher says which is which, and the wrong
+choice is recoverable — a mismatched display build shows a blank or garbled
+screen and is fixed by flashing the other one.
 
 The console page is served gzipped, so a command-line client needs
 `curl --compressed` (a browser needs nothing).
