@@ -21,6 +21,8 @@ typedef enum {
     OBSERVORE_CLASS_BODYCAM,
     OBSERVORE_CLASS_FOLLOWER,         /* unidentified but persistently nearby */
     OBSERVORE_CLASS_PEER_DETECTOR,    /* another detector announcing itself */
+    OBSERVORE_CLASS_DEAUTH,           /* someone knocking devices off a network */
+    OBSERVORE_CLASS_HUNTER,           /* gear that transmits at other radios */
     OBSERVORE_CLASS_MAX
 } observore_class_t;
 
@@ -42,6 +44,7 @@ typedef enum {
     OBSERVORE_EVIDENCE_MFG_DATA,
     OBSERVORE_EVIDENCE_SERVICE_UUID,
     OBSERVORE_EVIDENCE_PERSISTENCE,
+    OBSERVORE_EVIDENCE_BEHAVIOUR,     /* what it did, not what it claims to be */
     OBSERVORE_EVIDENCE_MAX
 } observore_evidence_t;
 

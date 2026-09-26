@@ -38,6 +38,13 @@ typedef struct {
      * has already parsed the IEs, so it reports the fact rather than making
      * the classifier re-walk the frame. */
     bool            remote_id;
+    /* A flood of deauthentication or disassociation frames naming this
+     * address. Set by the sniffer, which is the only place with the history
+     * to judge a flood from a single frame. */
+    bool            deauth_flood;
+    /* A pwnagotchi's own beacon: it volunteers a JSON blob in a vendor
+     * element, and this says the marker was found in it. */
+    bool            pwnagotchi;
 } observore_observation_t;
 
 /* Classify one sighting.  Returns true and fills *out when the observation

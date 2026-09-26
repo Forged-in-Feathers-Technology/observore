@@ -142,7 +142,10 @@ which one fired so you can judge a hit rather than just trust it:
 - **Payload signatures** — Apple Find My (`0x004C`/type `0x12`), Samsung,
   Tile (`0xFEED`), Galaxy SmartTag (`0xFD5A`), Google Fast Pair (`0xFE2C`),
   ASTM F3411 Remote ID over BLE (`0xFFFA`/`0x0D`) and over Wi-Fi
-  (vendor IE `FA:0B:BC`/`0x0D`), and SquachMesh (`0xFFFF` + `SQM1`).
+  (vendor IE `FA:0B:BC`/`0x0D`), SquachMesh (`0xFFFF` + `SQM1`), and Flipper
+  Zero (company `0x0E29`, service UUIDs `0x3081`–`0x3083`).
+- **Behaviour** — what something did rather than what it claims to be: a flood
+  of deauthentication frames, or a pwnagotchi's own beacon.
 - **Name and SSID keywords:** for hardware that announces itself.
 - **Vendor labelling** — 10,348 benign vendor prefixes across 43 common
   manufacturers (Apple, Samsung, Ubiquiti, Espressif, Google, …), also
@@ -190,8 +193,8 @@ console.
 
 ### Scoring
 
-Each hit adds points by class (bodycam and ALPR 5, follower 4, tracker/drone/
-glasses 3, telematics 2, camera 1, peer-detector 0). The score decays one point
+Each hit adds points by class (bodycam, ALPR and deauth-flood 5, follower 4,
+tracker/drone/glasses/hunter 3, telematics 2, camera 1, peer-detector 0). The score decays one point
 per minute and each device can only re-score every 120 seconds, so one loud
 beacon cannot run it away while sustained presence keeps it lit.
 
@@ -835,6 +838,38 @@ four levels of breadth:
 minutes to an hour, so a `mac` rule silences a device only until it rotates.
 Measured here, all fourteen nearby BLE devices used rotating addresses. A
 MAC-based baseline would have been worthless within the hour.
+
+### Equipment that transmits at other radios
+
+Everything else here is equipment that watches. This is the other kind, and it
+is worth separating.
+
+**A deauthentication flood** is the most actionable thing on Wi-Fi this device
+can see. One deauth is ordinary — access points dismiss clients all day — but a
+burst of them is how a handshake is forced into the air to be captured, and how
+a camera is taken offline shortly before something happens in front of it. No
+vendor prefix can hide it, because the tell is behaviour rather than hardware:
+eight or more such frames naming one address inside ten seconds, reported once
+a minute at most.
+
+It names a victim, not a culprit. An attacker spoofs the access point's
+address, so what is reported is the address the flood was sent as. Claiming
+otherwise would be inventing an attribution the air does not carry. And the
+sniffer sits on one channel for a few seconds at a time, so a flood elsewhere
+in the band is simply missed — this finds what passes under the aerial and
+says nothing about what does not.
+
+**Hunter gear** — a Flipper Zero, a pwnagotchi, a WiFi Pineapple — scores
+three rather than five: the presence of a tool is capability, where a flood is
+an act.
+
+Two of those signatures are worth their footnotes. Flipper's Bluetooth company
+ID is `0x0E29`; the widely copied `0x0FBA` belongs to Cosonic, who make
+headsets, so every project carrying that constant reports their customers as
+hacking tools. And a pwnagotchi volunteers everything — it puts a plain-ASCII
+JSON blob in a vendor element of its own beacons so other pwnagotchis can find
+it — so the signature is one byte scan for `pwnd_tot`, with no JSON parser
+anywhere near the promiscuous callback.
 
 ### Other detectors
 

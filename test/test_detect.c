@@ -826,6 +826,75 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_hunter_gear(void)
+{
+    banner("gear that transmits at other radios");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* Flipper Zero by company ID. 0x0E29 is Flipper Devices in the SIG list;
+     * the widespread 0x0FBA is Cosonic, who make headsets, and every project
+     * that copied Marauder's constant flags their customers as hacking
+     * tools. */
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x01, 0x02};
+    const uint8_t mac[6] = {0x0C, 0xFA, 0x22, 0x01, 0x02, 0x03};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = sizeof(flip)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "a Flipper advert classifies");
+    CHECK(ev.cls == OBSERVORE_CLASS_HUNTER, "as hunter gear");
+    CHECK(strcmp(ev.label, "Flipper Zero") == 0, "named (got \"%s\")", ev.label);
+
+    /* The company ID everybody copied must NOT be treated as a Flipper. */
+    uint8_t cosonic[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0xBA, 0x0F, 0x01, 0x02};
+    observore_observation_t oc = o; oc.adv = cosonic; oc.adv_len = sizeof(cosonic);
+    observore_event_t ev2;
+    bool got = observore_classify(&oc, &ev2);
+    CHECK(!got || ev2.cls != OBSERVORE_CLASS_HUNTER,
+          "a headset maker's company ID is not a Flipper");
+
+    /* And by service UUID, one per hardware colour. */
+    uint8_t uuid[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x82, 0x30};
+    observore_observation_t ou = o; ou.adv = uuid; ou.adv_len = sizeof(uuid);
+    observore_event_t ev3;
+    CHECK(observore_classify(&ou, &ev3) && ev3.cls == OBSERVORE_CLASS_HUNTER,
+          "a Flipper service UUID classifies too");
+
+    /* A pwnagotchi volunteers the marker in its own beacon. */
+    observore_observation_t op = {.mac = mac, .src = OBSERVORE_SRC_WIFI_SNIFF,
+                                  .rssi = -60, .pwnagotchi = true, .ssid = "throwaway"};
+    observore_event_t ev4;
+    CHECK(observore_classify(&op, &ev4), "a pwnagotchi beacon classifies");
+    CHECK(ev4.cls == OBSERVORE_CLASS_HUNTER && strcmp(ev4.label, "pwnagotchi") == 0,
+          "as hunter gear, named (got \"%s\")", ev4.label);
+
+    /* A Pineapple's management AP, and not somebody's fruit-themed network. */
+    observore_observation_t opi = {.mac = mac, .src = OBSERVORE_SRC_WIFI_SCAN,
+                                   .rssi = -60, .ssid = "Pineapple_A1B2"};
+    observore_event_t ev5;
+    CHECK(observore_classify(&opi, &ev5) && ev5.cls == OBSERVORE_CLASS_HUNTER,
+          "Pineapple_XXXX is the documented default");
+    observore_observation_t okitchen = opi; okitchen.ssid = "Pineapple Villa";
+    observore_event_t ev6;
+    got = observore_classify(&okitchen, &ev6);
+    CHECK(!got || ev6.cls != OBSERVORE_CLASS_HUNTER,
+          "but a home network merely called Pineapple is not one");
+
+    /* A flood is an act rather than a device, and outranks any label. */
+    observore_observation_t od = {.mac = mac, .src = OBSERVORE_SRC_WIFI_SNIFF,
+                                  .rssi = -40, .deauth_flood = true};
+    observore_event_t ev7;
+    CHECK(observore_classify(&od, &ev7), "a deauth flood classifies");
+    CHECK(ev7.cls == OBSERVORE_CLASS_DEAUTH, "as its own thing");
+    CHECK(observore_class_points(OBSERVORE_CLASS_DEAUTH) >
+          observore_class_points(OBSERVORE_CLASS_HUNTER),
+          "and scores above the mere presence of a tool");
+
+    observore_mute_clear();
+}
+
 static void test_squachmesh(void)
 {
     banner("SquachMesh: another detector announcing itself");
@@ -2017,6 +2086,7 @@ int main(void)
     test_fingerprint();
     test_fingerprint_safety();
     test_baseline_follower();
+    test_hunter_gear();
     test_squachmesh();
     test_baseline_does_not_blind();
     test_mute_rule_retires_when_it_covers_a_population();
