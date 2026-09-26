@@ -20,6 +20,7 @@ typedef enum {
     OBSERVORE_CLASS_ALPR,             /* automated licence-plate readers */
     OBSERVORE_CLASS_BODYCAM,
     OBSERVORE_CLASS_FOLLOWER,         /* unidentified but persistently nearby */
+    OBSERVORE_CLASS_PEER_DETECTOR,    /* another detector announcing itself */
     OBSERVORE_CLASS_MAX
 } observore_class_t;
 

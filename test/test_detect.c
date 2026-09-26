@@ -826,6 +826,80 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_squachmesh(void)
+{
+    banner("SquachMesh: another detector announcing itself");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* Company 0xFFFF, "SQM1", version 1, appearance word, reserved flags.
+     * Read off their source, not guessed from the air. */
+    uint8_t adv[] = {0x02, 0x01, 0x06,
+                     0x0B, 0xFF, 0xFF, 0xFF, 'S', 'Q', 'M', '1', 0x01,
+                     0x34, 0x12, 0x00};
+    const uint8_t mac[6] = {0x24, 0x6F, 0x28, 0x11, 0x22, 0x33};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                 .addr_random = false, .adv = adv, .adv_len = sizeof(adv)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "a SquachMesh advert is classified");
+    CHECK(ev.cls == OBSERVORE_CLASS_PEER_DETECTOR, "as a peer detector, not a threat");
+    CHECK(strcmp(ev.label, "SquachWatch") == 0, "named plainly (got \"%s\")", ev.label);
+
+    /* It must not move the score. Another detector in the room is a fact
+     * about the room; a class that raised the level would make a meetup read
+     * as an incident. */
+    CHECK(observore_class_points(OBSERVORE_CLASS_PEER_DETECTOR) == 0,
+          "and worth no points");
+
+    /* The company ID alone means nothing -- it is the SIG's reserved
+     * non-production ID, shared with every other hobby project. Same company,
+     * different magic, must not be claimed as one of theirs. */
+    uint8_t other[] = {0x02, 0x01, 0x06,
+                       0x0B, 0xFF, 0xFF, 0xFF, 'N', 'O', 'P', 'E', 0x01,
+                       0x34, 0x12, 0x00};
+    observore_observation_t oo = o; oo.adv = other; oo.adv_len = sizeof(other);
+    observore_event_t ev2;
+    bool got = observore_classify(&oo, &ev2);
+    CHECK(!got || ev2.cls != OBSERVORE_CLASS_PEER_DETECTOR,
+          "somebody else's 0xFFFF payload is not a SquachWatch");
+
+    /* Too short to carry the header is not a match either. */
+    uint8_t stub[] = {0x02, 0x01, 0x06, 0x06, 0xFF, 0xFF, 0xFF, 'S', 'Q', 'M'};
+    observore_observation_t os = o; os.adv = stub; os.adv_len = sizeof(stub);
+    observore_event_t ev3;
+    got = observore_classify(&os, &ev3);
+    CHECK(!got || ev3.cls != OBSERVORE_CLASS_PEER_DETECTOR,
+          "a truncated header is refused rather than half-read");
+
+    /* A typed name is twelve bytes of somebody else's choosing, landing in a
+     * string this device draws. It is repeated only while it stays printable. */
+    uint8_t named[] = {0x02, 0x01, 0x06,
+                       0x17, 0xFF, 0xFF, 0xFF, 'S', 'Q', 'M', '1', 0x01,
+                       0x34, 0x12, 0x00,
+                       'R', 'o', 'l', 'a', 'n', 'd', 0, 0, 0, 0, 0, 0};
+    observore_observation_t on = o; on.adv = named; on.adv_len = sizeof(named);
+    observore_event_t ev4;
+    CHECK(observore_classify(&on, &ev4), "a named SquachWatch classifies");
+    CHECK(strcmp(ev4.detail, "Roland") == 0, "carries the typed name (got \"%s\")", ev4.detail);
+    CHECK(strcmp(ev4.label, "SquachWatch") == 0, "and still says what it is");
+
+    uint8_t nasty[] = {0x02, 0x01, 0x06,
+                       0x17, 0xFF, 0xFF, 0xFF, 'S', 'Q', 'M', '1', 0x01,
+                       0x34, 0x12, 0x00,
+                       'a', 0x1B, '[', '2', 'J', 0, 0, 0, 0, 0, 0, 0};
+    observore_observation_t oz = o; oz.adv = nasty; oz.adv_len = sizeof(nasty);
+    observore_event_t ev5;
+    CHECK(observore_classify(&oz, &ev5), "a hostile name still classifies");
+    CHECK(ev5.detail[0] == '\0',
+          "but an escape sequence is not repeated to the screen (got \"%s\")",
+          ev5.detail);
+    CHECK(strcmp(ev5.label, "SquachWatch") == 0, "while the class is unaffected");
+
+    observore_mute_clear();
+}
+
 static void test_baseline_does_not_blind(void)
 {
     banner("a baseline must not silence a whole population of devices");
@@ -1943,6 +2017,7 @@ int main(void)
     test_fingerprint();
     test_fingerprint_safety();
     test_baseline_follower();
+    test_squachmesh();
     test_baseline_does_not_blind();
     test_mute_rule_retires_when_it_covers_a_population();
     test_name_rule_matches_ble();

@@ -142,7 +142,7 @@ which one fired so you can judge a hit rather than just trust it:
 - **Payload signatures** — Apple Find My (`0x004C`/type `0x12`), Samsung,
   Tile (`0xFEED`), Galaxy SmartTag (`0xFD5A`), Google Fast Pair (`0xFE2C`),
   ASTM F3411 Remote ID over BLE (`0xFFFA`/`0x0D`) and over Wi-Fi
-  (vendor IE `FA:0B:BC`/`0x0D`).
+  (vendor IE `FA:0B:BC`/`0x0D`), and SquachMesh (`0xFFFF` + `SQM1`).
 - **Name and SSID keywords:** for hardware that announces itself.
 - **Vendor labelling** — 10,348 benign vendor prefixes across 43 common
   manufacturers (Apple, Samsung, Ubiquiti, Espressif, Google, …), also
@@ -191,9 +191,9 @@ console.
 ### Scoring
 
 Each hit adds points by class (bodycam and ALPR 5, follower 4, tracker/drone/
-glasses 3, telematics 2, camera 1). The score decays one point per minute and
-each device can only re-score every 120 seconds, so one loud beacon cannot run
-it away while sustained presence keeps it lit.
+glasses 3, telematics 2, camera 1, peer-detector 0). The score decays one point
+per minute and each device can only re-score every 120 seconds, so one loud
+beacon cannot run it away while sustained presence keeps it lit.
 
 - **0–2 clear** — LED winks once every 5 s (green)
 - **3–5 caution** — LED pulses once a second (amber)
@@ -835,6 +835,30 @@ four levels of breadth:
 minutes to an hour, so a `mac` rule silences a device only until it rotates.
 Measured here, all fourteen nearby BLE devices used rotating addresses. A
 MAC-based baseline would have been worthless within the hour.
+
+### Other detectors
+
+[SquachWatch](https://squachwatch.com) is another open-source detector on the
+same board family, and in its mesh mode it announces itself so that two of them
+can recognise each other. Observore reports one as **`peer-detector`**, named
+`SquachWatch`, with whatever name its owner typed.
+
+It is worth **zero points** on purpose. Another detector in the room is a fact
+about the room rather than a threat in it, and a class that moved the score
+would make a meetup read as an incident. It is still announced, because
+somebody else watching the same street is exactly the sort of thing a person
+wants to know.
+
+The signature was read out of their source rather than inferred from the air,
+and the distinction matters. The payload rides in manufacturer data under
+company ID `0xFFFF` — the Bluetooth SIG's reserved non-production ID, which is
+shared with every other hobby project that declined to squat a registered one,
+so the company alone means nothing. The four magic bytes `SQM1` are what make
+it specific, and their own header says the magic is not optional for that
+reason. A typed name is twelve bytes at a fixed offset, and it is repeated only
+while every byte of it is printable: half of somebody's chosen name is not
+their name, and an escape sequence in a field this device draws would be a
+stranger deciding what our screen does.
 
 A **fingerprint** hashes only the parts of an advert that survive rotation:
 which AD fields are present and how long they are, the manufacturer's company

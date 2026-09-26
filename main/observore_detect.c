@@ -34,6 +34,13 @@
 
 /* Apple manufacturer-data payload types. */
 #define APPLE_TYPE_FINDMY          0x12    /* Find My network broadcast */
+
+/* The SIG's reserved "not a real product" company ID, shared by every hobby
+ * project that declined to squat a registered one. Meaningless on its own. */
+#define COMPANY_NONPRODUCTION      0xFFFF
+/* SquachMesh: 'S' 'Q' 'M' '1', then a version byte. */
+static const uint8_t SQUACHMESH_MAGIC[4] = {0x53, 0x51, 0x4D, 0x31};
+#define SQUACHMESH_VERSION         1
 #define APPLE_FINDMY_LEN           0x19
 
 /* ------------------------------------------------------------------ */
@@ -380,6 +387,13 @@ static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
     [OBSERVORE_CLASS_ALPR]             = {"alpr",             5, OBSERVORE_URGENCY_URGENT, true },
     [OBSERVORE_CLASS_BODYCAM]          = {"bodycam",          5, OBSERVORE_URGENCY_URGENT, true },
     [OBSERVORE_CLASS_FOLLOWER]         = {"follower",         4, OBSERVORE_URGENCY_HIGH,   true },
+    /* Worth zero points on purpose. Another detector in the room is a fact
+     * about the room, not a threat in it, and a class that raised the score
+     * would make a meetup read as an incident. It is still announced, because
+     * "somebody else is watching too" is the sort of thing a person wants to
+     * know, and it is unprotected because muting the kind wholesale is a
+     * reasonable thing to want. */
+    [OBSERVORE_CLASS_PEER_DETECTOR]    = {"peer-detector",    0, OBSERVORE_URGENCY_LOW,    false},
 };
 
 const observore_class_desc_t *observore_class_desc(observore_class_t cls)
@@ -475,6 +489,61 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
             ev->cls = OBSERVORE_CLASS_TRACKER;
             ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
             set_label(ev, "Find My tracker");
+            return true;
+        }
+        /* --- SquachMesh ----------------------------------------------
+         * SquachWatch is another open-source detector on the same board
+         * family, and in mesh mode it announces itself so two of them can
+         * draw each other on screen. The payload rides under company ID
+         * 0xFFFF -- the SIG's reserved non-production ID -- so the company
+         * alone means nothing: it is shared with every other hobby project
+         * that made the same honest choice. The four magic bytes are what
+         * make this specific, which is exactly why their own header says the
+         * magic is not optional.
+         *
+         * Read from their source rather than guessed from the air: four bytes
+         * "SQM1", a version, a little-endian appearance word, a reserved
+         * flags byte -- eight bytes, or twenty when the owner typed a name
+         * that follows NUL-padded. */
+        if (company == COMPANY_NONPRODUCTION && payload_len >= 8 &&
+            memcmp(payload, SQUACHMESH_MAGIC, sizeof(SQUACHMESH_MAGIC)) == 0) {
+            ev->cls = OBSERVORE_CLASS_PEER_DETECTOR;
+            ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
+            /* Their version byte is theirs to bump. An unknown one is still
+             * a SquachWatch -- refusing to name it would be pretending not
+             * to have recognised something we plainly did. */
+            uint8_t version = payload[4];
+            /* A typed name is twelve bytes at offset 8, and it is a stranger's
+             * bytes landing in a string this device renders. Copied one
+             * printable character at a time and stopped at anything else,
+             * which is the same rule their own decoder applies for the same
+             * reason. */
+            char name[13] = {0};
+            size_t n = 0;
+            if (payload_len >= 20) {
+                for (size_t k = 0; k < 12; k++) {
+                    uint8_t c = payload[8 + k];
+                    if (c == 0) {
+                        break;
+                    }
+                    if (c < 0x20 || c > 0x7E) {
+                        n = 0;          /* not a name we will repeat */
+                        break;
+                    }
+                    name[n++] = (char)c;
+                }
+            }
+            name[n] = '\0';
+            /* What it is goes in the label; what its owner called it goes in
+             * the detail, which is also the field a baseline turns into a
+             * name rule. A name that was not wholly printable is dropped
+             * rather than sanitised: half of somebody's chosen name is not
+             * their name, and nothing here needs to display it. */
+            set_label(ev, version == SQUACHMESH_VERSION ? "SquachWatch"
+                                                        : "SquachWatch (newer)");
+            if (n > 0) {
+                set_detail(ev, name);
+            }
             return true;
         }
         /* Note there is deliberately no bare COMPANY_SAMSUNG rule here.
