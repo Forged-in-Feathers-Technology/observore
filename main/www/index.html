@@ -708,6 +708,23 @@ function renderMutes(m) {
     k.textContent = r.kind;
     const v = document.createElement('span');
     v.textContent = r.value;
+    // What this rule has actually silenced. A rule covering many addresses is
+    // describing a kind of device rather than one, and the device stops
+    // honouring it -- say both, because from outside a rule that silences
+    // everything looks exactly like a quiet room.
+    if (r.suppressed) {
+      const n = document.createElement('span');
+      n.className = 'k';
+      n.textContent = r.disabled
+        ? 'retired: covered ' + r.addresses + ' addresses'
+        : r.suppressed + ' hidden' + (r.addresses > 1 ? ', ' + r.addresses + ' addresses' : '');
+      n.title = r.disabled
+        ? 'This shape matched too many different devices to be one device, so it is no longer applied.'
+        : 'Sightings this rule has discarded since boot.';
+      if (r.disabled) n.classList.add('warn');
+      v.appendChild(document.createTextNode(' '));
+      v.appendChild(n);
+    }
     const x = document.createElement('button');
     x.textContent = '×';
     x.title = 'Stop ignoring';

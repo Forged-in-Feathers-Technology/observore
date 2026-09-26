@@ -826,6 +826,123 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_baseline_does_not_blind(void)
+{
+    banner("a baseline must not silence a whole population of devices");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* Three different phones broadcasting the same shape -- flags and one
+     * service UUID, which is what a great many devices send and what makes a
+     * fingerprint describe a model rather than a device. */
+    uint8_t common[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t a[6] = {0x41, 0x11, 0x11, 0x11, 0x11, 0x11};
+    const uint8_t b[6] = {0x42, 0x22, 0x22, 0x22, 0x22, 0x22};
+    const uint8_t c[6] = {0x43, 0x33, 0x33, 0x33, 0x33, 0x33};
+    observore_observation_t oa = {.mac = a, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                  .addr_random = true, .adv = common, .adv_len = sizeof(common)};
+    observore_observation_t ob = oa; ob.mac = b;
+    observore_observation_t oc = oa; oc.mac = c;
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&oa, SECS(t));
+        observore_track_observe(&ob, SECS(t));
+        observore_track_observe(&oc, SECS(t));
+    }
+
+    static observore_event_t scratch[32];
+    observore_baseline_t r;
+    observore_mute_baseline(scratch, 32, &r);
+    CHECK(r.by_fingerprint == 0,
+          "a shape shared by three devices is a model, not a device, so no "
+          "fingerprint rule (got %zu)", r.by_fingerprint);
+    CHECK(r.by_mac == 3, "each one is muted by its own address instead (got %zu)", r.by_mac);
+
+    /* A fourth device of the same model, arriving afterwards, must still be
+     * heard. This is the check the feature shipped without: the old test
+     * proved a rule was written, not that the detector still worked.
+     *
+     * Asked of the mute layer directly, because track_observe() answers "is
+     * this worth reporting", which a device seen once is not either way. */
+    const uint8_t d[6] = {0x44, 0x44, 0x44, 0x44, 0x44, 0x44};
+    uint32_t common_fp = observore_fingerprint(common, sizeof(common));
+    CHECK(!observore_mute_matches(d, OBSERVORE_CLASS_UNKNOWN, NULL, common_fp),
+          "a different device of the same model must still be heard");
+    CHECK(observore_mute_matches(a, OBSERVORE_CLASS_UNKNOWN, NULL, common_fp),
+          "while the three that were there are ignored by address");
+
+    /* And the lone device keeps the durable rule it deserves. */
+    observore_mute_clear();
+    observore_track_init();
+    uint8_t lone[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x9A, 0x00, 0x77, 0x77};
+    observore_observation_t ol = {.mac = a, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                  .addr_random = true, .adv = lone, .adv_len = sizeof(lone)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&ol, SECS(t));
+    }
+    observore_mute_baseline(scratch, 32, &r);
+    CHECK(r.by_fingerprint == 1,
+          "a shape only one device carries still earns a fingerprint rule (got %zu)",
+          r.by_fingerprint);
+
+    /* A two-character broadcast name is a fragment, not an identity: as a
+     * substring rule it silenced a hundred addresses on the bench. */
+    observore_mute_clear();
+    observore_track_init();
+    uint8_t named[] = {0x02, 0x01, 0x06, 0x03, 0x09, 0x34, 0x32};   /* name "42" */
+    observore_observation_t on = {.mac = b, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                  .addr_random = false, .adv = named, .adv_len = sizeof(named)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&on, SECS(t));
+    }
+    observore_mute_baseline(scratch, 32, &r);
+    CHECK(r.by_name == 0, "a two-character name is too short to be a rule (got %zu)", r.by_name);
+    CHECK(!observore_mute_matches((const uint8_t[]){1,2,3,4,5,6},
+                                  OBSERVORE_CLASS_UNKNOWN, "PIXEL-4210", 0),
+          "so something else whose name merely contains it is still heard");
+
+    observore_mute_clear();
+}
+
+static void test_mute_rule_retires_when_it_covers_a_population(void)
+{
+    banner("a fingerprint rule that covers many addresses stops being honoured");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    uint8_t common[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    observore_mute_rule_t fp = {.kind = OBSERVORE_MUTE_FINGERPRINT,
+                                .fingerprint = observore_fingerprint(common, sizeof(common))};
+    CHECK(observore_mute_add(&fp, NULL) == ESP_OK, "add the fingerprint rule");
+
+    /* Address after address, all the same shape -- a household of phones. */
+    uint8_t mac[6] = {0x50, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t fpv = observore_fingerprint(common, sizeof(common));
+    int suppressed = 0, heard = 0;
+    for (int i = 0; i < 20; i++) {
+        mac[5] = (uint8_t)i;
+        if (observore_mute_matches(mac, OBSERVORE_CLASS_UNKNOWN, NULL, fpv)) {
+            suppressed++;
+        } else {
+            heard++;
+        }
+    }
+    CHECK(suppressed > 0, "it silences the first few, as asked");
+    CHECK(heard > 0, "and stops once it is plainly describing a population "
+                     "(suppressed %d, heard %d)", suppressed, heard);
+
+    observore_mute_stat_t st;
+    CHECK(observore_mute_stat(0, &st), "the rule reports what it has covered");
+    CHECK(st.disabled, "and says it has been retired");
+    CHECK(st.addresses > OBSERVORE_MUTE_ADDRESS_LIMIT, "having covered %u addresses",
+          (unsigned)st.addresses);
+
+    observore_mute_clear();
+}
+
 static void test_baseline_follower(void)
 {
     banner("a baseline mutes a rotating follower by fingerprint, not by address");
@@ -1826,6 +1943,8 @@ int main(void)
     test_fingerprint();
     test_fingerprint_safety();
     test_baseline_follower();
+    test_baseline_does_not_blind();
+    test_mute_rule_retires_when_it_covers_a_population();
     test_name_rule_matches_ble();
     test_mac_parsing();
 

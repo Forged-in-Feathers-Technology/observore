@@ -7,8 +7,11 @@
 
 #ifdef OBSERVORE_HOST_TEST
 /* The host build exercises the matching and list logic without NVS. */
+#include <stdio.h>
 #define MUTE_LOCK()   do {} while (0)
 #define MUTE_UNLOCK() do {} while (0)
+#define ESP_LOGW(tag, fmt, ...) ((void)(tag))
+static const char *TAG = "observore.mute";
 static void mute_load(void) {}
 static void mute_save(void) {}
 #else
@@ -27,6 +30,18 @@ static SemaphoreHandle_t s_lock;
 
 static observore_mute_rule_t s_rules[OBSERVORE_MUTE_MAX];
 static size_t            s_count;
+
+/* Per-rule reach, kept in RAM only: it describes what has happened since boot,
+ * not what the rule is, and persisting it would make a rule that misbehaved
+ * once look guilty forever. `last` is the address most recently suppressed, so
+ * a change of address can be counted without storing every one. */
+static struct {
+    uint32_t suppressed;
+    uint8_t  addresses;
+    bool     disabled;
+    uint8_t  last[OBSERVORE_MAC_LEN];
+    bool     have_last;
+} s_stat[OBSERVORE_MUTE_MAX];
 static uint32_t          s_suppressed;
 
 /* ------------------------------------------------------------------ */
@@ -94,6 +109,50 @@ bool observore_mute_class_is_protected(observore_class_t cls)
     return observore_class_desc(cls)->protected_cls;
 }
 
+/* Count what a rule has covered, and retire a fingerprint rule that has
+ * clearly stopped describing a device. Called with the lock held. */
+static void note_reach(size_t i, const uint8_t mac[OBSERVORE_MAC_LEN])
+{
+    if (i >= OBSERVORE_MUTE_MAX) {
+        return;
+    }
+    if (s_stat[i].suppressed < UINT32_MAX) {
+        s_stat[i].suppressed++;
+    }
+    if (!s_stat[i].have_last ||
+        memcmp(s_stat[i].last, mac, OBSERVORE_MAC_LEN) != 0) {
+        memcpy(s_stat[i].last, mac, OBSERVORE_MAC_LEN);
+        s_stat[i].have_last = true;
+        if (s_stat[i].addresses < UINT8_MAX) {
+            s_stat[i].addresses++;
+        }
+    }
+    if (!s_stat[i].disabled &&
+        s_rules[i].kind == OBSERVORE_MUTE_FINGERPRINT &&
+        s_stat[i].addresses > OBSERVORE_MUTE_ADDRESS_LIMIT) {
+        s_stat[i].disabled = true;
+        ESP_LOGW(TAG, "ignore rule %u (fingerprint %08lx) has covered %u "
+                      "addresses -- it describes a kind of device, not one, "
+                      "so it is no longer honoured",
+                 (unsigned)i, (unsigned long)s_rules[i].fingerprint,
+                 (unsigned)s_stat[i].addresses);
+    }
+}
+
+bool observore_mute_stat(size_t index, observore_mute_stat_t *out)
+{
+    bool ok = false;
+    MUTE_LOCK();
+    if (index < s_count && out) {
+        out->suppressed = s_stat[index].suppressed;
+        out->addresses  = s_stat[index].addresses;
+        out->disabled   = s_stat[index].disabled;
+        ok = true;
+    }
+    MUTE_UNLOCK();
+    return ok;
+}
+
 bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
                         const char *name, uint32_t fingerprint)
 {
@@ -101,6 +160,7 @@ bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_clas
         return false;
     }
     bool hit = false;
+    size_t hit_index = 0;
 
     MUTE_LOCK();
     for (size_t i = 0; i < s_count && !hit; i++) {
@@ -121,18 +181,25 @@ bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_clas
                 hit = name && observore_contains_ci(name, r->ssid);
                 break;
             case OBSERVORE_MUTE_FINGERPRINT:
-                /* The safety rule, enforced here rather than left to the
-                 * caller: a fingerprint identifies a kind of device, so it
-                 * must never be able to silence a threat. */
+                /* Two safety rules, both enforced here rather than left to
+                 * callers. A fingerprint identifies a kind of device, so it
+                 * must never silence a threat -- and a fingerprint rule that
+                 * has covered more addresses than one device could have stops
+                 * being honoured at all. */
                 hit = fingerprint != 0 && r->fingerprint == fingerprint &&
-                      !observore_mute_class_is_protected(cls);
+                      !observore_mute_class_is_protected(cls) &&
+                      !s_stat[i].disabled;
                 break;
             default:
                 break;
         }
+        if (hit) {
+            hit_index = i;
+        }
     }
     if (hit) {
         s_suppressed++;
+        note_reach(hit_index, mac);
     }
     MUTE_UNLOCK();
     return hit;
@@ -360,6 +427,50 @@ bool observore_mute_parse_class(const char *name, observore_class_t *out)
 /* Turn one tracked device into the most durable mute rule it supports and add
  * it, tallying the outcome into `r`. Pulled out of the baseline loop so that
  * loop can walk the table in chunks (see observore_mute_baseline). */
+/* Fingerprints seen in this baseline, and how many devices carried each.
+ *
+ * A shape shared by two devices in one room is not a device, it is a model --
+ * and a rule written against it silences every one of them, including the ones
+ * that walk in tomorrow. Measured here rather than guessed: a baseline taken
+ * in a house wrote three such rules and took a detector from three thousand
+ * sightings an hour to twenty-five, reading "clear" throughout. */
+#define FP_TALLY_MAX 48
+static struct { uint32_t fp; uint8_t seen; } s_tally[FP_TALLY_MAX];
+static size_t s_tally_n;
+
+static void tally_add(uint32_t fp)
+{
+    if (fp == 0) {
+        return;
+    }
+    for (size_t i = 0; i < s_tally_n; i++) {
+        if (s_tally[i].fp == fp) {
+            if (s_tally[i].seen < UINT8_MAX) {
+                s_tally[i].seen++;
+            }
+            return;
+        }
+    }
+    if (s_tally_n < FP_TALLY_MAX) {
+        s_tally[s_tally_n].fp = fp;
+        s_tally[s_tally_n].seen = 1;
+        s_tally_n++;
+    }
+}
+
+/* How many devices in this baseline share a shape. Anything the tally could
+ * not hold is treated as shared, which errs towards the address rule -- the
+ * conservative direction, since a MAC rule can only ever silence one device. */
+static unsigned tally_count(uint32_t fp)
+{
+    for (size_t i = 0; i < s_tally_n; i++) {
+        if (s_tally[i].fp == fp) {
+            return s_tally[i].seen;
+        }
+    }
+    return 2;
+}
+
 static void baseline_one(const observore_event_t *e, observore_baseline_t *r)
 {
     observore_mute_rule_t rule;
@@ -391,10 +502,19 @@ static void baseline_one(const observore_event_t *e, observore_baseline_t *r)
      * they are, and nothing about a baseline changes what they are. */
     bool rotating_follower = e->cls == OBSERVORE_CLASS_FOLLOWER &&
                              e->addr_random;
-    if (e->detail[0] != '\0') {
+    /* Only where the shape belongs to exactly one device in front of us. */
+    bool shape_is_one_device = e->fingerprint != 0 &&
+                               tally_count(e->fingerprint) == 1;
+    /* A name rule matches as a substring, which is right for a console where
+     * somebody typed it deliberately and wrong for a baseline that takes
+     * whatever a device happens to broadcast. A short name is a fragment: the
+     * SSID "42" silenced a hundred different addresses on the bench, every one
+     * of them something whose name merely contained those two characters. */
+    bool name_is_specific = strlen(e->detail) >= OBSERVORE_BASELINE_NAME_MIN;
+    if (e->detail[0] != '\0' && name_is_specific) {
         rule.kind = OBSERVORE_MUTE_NAME;
         snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
-    } else if (e->fingerprint != 0 &&
+    } else if (shape_is_one_device &&
                (!observore_mute_class_is_protected(e->cls) ||
                 rotating_follower)) {
         rule.kind = OBSERVORE_MUTE_FINGERPRINT;
@@ -442,7 +562,20 @@ void observore_mute_baseline(observore_event_t *scratch, size_t cap,
      * exactly what put "baseline failed: out of memory" on the 3.5" CYD's
      * screen. Chunking also fixes the web path, which previously baselined only
      * the first `cap` (24) devices on such a board and silently left the rest. */
+    /* Two passes over the table: the first counts how many devices carry each
+     * advert shape, the second writes the rules. A single pass cannot know
+     * whether the shape in front of it is shared, and that is the whole
+     * question. */
     size_t cursor = 0, got;
+    s_tally_n = 0;
+    do {
+        got = observore_track_all_from(scratch, cap, &cursor);
+        for (size_t i = 0; i < got; i++) {
+            tally_add(scratch[i].fingerprint);
+        }
+    } while (got == cap);
+
+    cursor = 0;
     do {
         got = observore_track_all_from(scratch, cap, &cursor);
         r.seen += got;

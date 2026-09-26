@@ -379,7 +379,23 @@ static esp_err_t mutes_handler(httpd_req_t *req)
                 observore_jb_printf(&jb, "unrenderable kind %u", r.kind);
                 break;
         }
-        observore_jb_printf(&jb, "\"}");
+        /* What the rule has actually done, not just what it says. A rule
+         * silencing a whole population reads exactly like a quiet room from
+         * outside; this is what makes the difference visible. */
+        observore_mute_stat_t st = {0};
+        observore_mute_stat(i, &st);
+        if (st.suppressed == 0 && !st.disabled) {
+            /* Said only of the rules it is true of. Most rules have never
+             * fired, and on a board with no PSRAM the whole list has to fit in
+             * a four-kilobyte buffer -- spending thirty bytes a rule on three
+             * zeroes truncated the list instead. */
+            observore_jb_printf(&jb, "\"}");
+        } else {
+            observore_jb_printf(&jb, "\",\"suppressed\":%" PRIu32
+                                     ",\"addresses\":%u,\"disabled\":%s}",
+                                st.suppressed, (unsigned)st.addresses,
+                                st.disabled ? "true" : "false");
+        }
         if (observore_jb_full(&jb)) {
             ESP_LOGW(TAG, "mute list truncated at %zu of %zu", i, n);
             break;
