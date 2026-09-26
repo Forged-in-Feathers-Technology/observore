@@ -18,6 +18,9 @@ static SemaphoreHandle_t s_lock;
 typedef struct {
     observore_event_t ev;
     int64_t       last_scored_us;
+    /* Rotations already reflected in the score. New evidence about a device
+     * should not have to wait out a cooldown meant for repetition. */
+    uint16_t      scored_rotations;
     bool          in_use;
     bool          classified;
     bool          has_scored;   /* distinct from last_scored_us == 0, which is
@@ -27,6 +30,11 @@ typedef struct {
 
 static observore_slot_t s_devices[OBSERVORE_MAX_DEVICES];
 static uint16_t     s_score;
+/* How much of the score mere presence is currently responsible for, so the cap
+ * can be enforced across devices rather than per device. Decays with the
+ * score, since a capped contribution that never released would silence the
+ * class permanently after one crowded afternoon. */
+static uint16_t     s_follower_score;
 static int64_t      s_last_decay_us;
 static uint32_t     s_total_sightings;
 
@@ -59,6 +67,7 @@ void observore_track_clear(void)
     OBSERVORE_LOCK();
     memset(s_devices, 0, sizeof(s_devices));
     s_score = 0;
+    s_follower_score = 0;
     s_last_decay_us = 0;
     s_total_sightings = 0;
     OBSERVORE_UNLOCK();
@@ -188,11 +197,18 @@ static void apply_decay(int64_t now_us)
 {
     if (s_score == 0) {
         s_last_decay_us = now_us;
+        s_follower_score = 0;
         return;
     }
     while (s_score > 0 &&
            now_us - s_last_decay_us >= OBSERVORE_SCORE_DECAY_INTERVAL_US) {
         s_score--;
+        /* The capped share decays alongside it. A cap that filled once and
+         * never released would silence presence for good after a single
+         * crowded afternoon. */
+        if (s_follower_score > 0) {
+            s_follower_score--;
+        }
         s_last_decay_us += OBSERVORE_SCORE_DECAY_INTERVAL_US;
     }
     /* Once bottomed out, stop carrying decay debt forward -- otherwise a later
@@ -209,13 +225,40 @@ static void score_device(observore_slot_t *slot, int64_t now_us)
     if (slot->ev.points == 0) {
         return;
     }
-    if (slot->has_scored &&
+    /* The cooldown throttles a beacon shouting ten times a second. It should
+     * not throttle a device whose evidence has just changed kind: a follower
+     * that has survived rotating its address is a different statement from the
+     * same follower a minute ago, and waiting two minutes to say so is the
+     * cooldown doing the opposite of its job. */
+    bool new_evidence = slot->ev.rotations > slot->scored_rotations;
+    if (slot->has_scored && !new_evidence &&
         now_us - slot->last_scored_us < OBSERVORE_SCORE_COOLDOWN_US) {
         return;
     }
+
+    uint8_t points = slot->ev.points;
+    if (slot->ev.cls == OBSERVORE_CLASS_FOLLOWER) {
+        /* Presence alone is worth a point; surviving an address rotation is
+         * worth the class. See the constants for the arithmetic that made
+         * this necessary. */
+        if (slot->ev.rotations == 0) {
+            points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
+            /* And however many of them there are, together they may not reach
+             * alert. A room full of people is not an emergency. */
+            if (s_follower_score >= OBSERVORE_FOLLOWER_SCORE_CAP) {
+                return;
+            }
+            if (s_follower_score + points > OBSERVORE_FOLLOWER_SCORE_CAP) {
+                points = (uint8_t)(OBSERVORE_FOLLOWER_SCORE_CAP - s_follower_score);
+            }
+            s_follower_score = (uint16_t)(s_follower_score + points);
+        }
+    }
+
     slot->has_scored = true;
     slot->last_scored_us = now_us;
-    uint32_t next = (uint32_t)s_score + slot->ev.points;
+    slot->scored_rotations = slot->ev.rotations;
+    uint32_t next = (uint32_t)s_score + points;
     s_score = (next > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX : (uint16_t)next;
 }
 

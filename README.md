@@ -232,6 +232,27 @@ tracker/drone/glasses/hunter 3, telematics 2, camera 1, peer-detector 0). The sc
 per minute and each device can only re-score every 120 seconds, so one loud
 beacon cannot run it away while sustained presence keeps it lit.
 
+**Presence is capped, and rotation is what scores.** A follower used to be
+worth four points and could re-score every two minutes: two points a minute
+each, against one point a minute of decay in total. So one persistent device
+pinned the score at its ceiling in about ninety minutes and eight did it in
+seven — measured on a board in a living room reading 98 with nothing in the
+table but followers, and again in a restaurant, where every diner's phone
+qualifies by sitting near you for an hour. Alert became the resting state of any
+populated place, and a level that is always on says nothing.
+
+So mere presence is worth one point, and all followers together may contribute
+at most five — the top of caution, chosen against the level boundaries rather
+than as a round number, since six is where alert begins. Twelve strangers'
+phones scored 48 before this and score 5 after it.
+
+A follower that has **survived rotating its address** still scores the full
+four, and is not subject to the cap: it outlasted the one thing meant to make
+it forgettable, which is evidence, where sitting in a café is not. That
+strengthening also bypasses the per-device cooldown, once — the cooldown exists
+to throttle a beacon shouting ten times a second, not to spend two minutes
+declining to mention that the evidence just changed kind.
+
 - **0–2 clear** — LED winks once every 5 s (green)
 - **3–5 caution** — LED pulses once a second (amber)
 - **6+ alert** — LED flutters (red)
