@@ -65,8 +65,19 @@ void observore_display_backlight_release(void);
  * have a panel and no touch -- and then there is no other way to dim it. The
  * level is remembered across reboots. */
 #define OBSERVORE_BRIGHT_STEPS 4
+/* One past the fixed steps: let the ambient light sensor choose. Stored and
+ * reported like any other setting, so a console that knows about four levels
+ * and finds a fifth will show it as unknown rather than misrepresent it. */
+#define OBSERVORE_BRIGHT_AUTO  OBSERVORE_BRIGHT_STEPS
 int  observore_display_brightness(void);
 void observore_display_set_brightness(int step);
+
+/* Which level the backlight is actually at, which differs from the setting
+ * whenever the light sensor is in charge. */
+int  observore_display_brightness_effective(void);
+
+/* True where this board has a light sensor wired and the option set. */
+bool observore_display_has_light_sensor(void);
 
 /* True once when the screen's Baseline button has been pressed. Polled by the
  * main loop, which owns the memory a baseline needs; the same request the

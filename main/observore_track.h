@@ -13,6 +13,19 @@
 #define OBSERVORE_FOLLOWER_MIN_HITS    3
 #define OBSERVORE_FOLLOWER_MIN_SPAN_US (5 * 60 * 1000000LL)
 
+/* How long a device that is trivially identifiable has to persist before
+ * persistence alone means anything.
+ *
+ * A fixed public address and a stable broadcast name is what a washing machine
+ * looks like, not what something following you looks like -- anything trying
+ * not to be noticed randomises its address or stays nameless. But "identifiable"
+ * is not "harmless": a cheap tracker with a fixed name from a public address
+ * would still be following you, so the answer is a longer span rather than an
+ * exemption. Five minutes catches a fixture in the next room; an hour does not,
+ * and something that has been beside you for an hour is worth a word either
+ * way. */
+#define OBSERVORE_FOLLOWER_NAMED_SPAN_US (60 * 60 * 1000000LL)
+
 /* A random address has to have come closer than this, at least once, before
  * persistence alone makes it a follower.
  *
@@ -104,6 +117,15 @@ size_t observore_track_nearby(observore_event_t *out, size_t max);
 /* Every device currently tracked, classified or not.  Used to take a
  * baseline: mark everything in range as known. */
 size_t observore_track_all(observore_event_t *out, size_t max);
+
+/* Drop every device an ignore rule now covers, and report how many went.
+ *
+ * Muting suppresses what arrives next; it says nothing about what is already
+ * in the table, which then sits there until it ages out half an hour later.
+ * On a screen that reads as the ignore having failed -- the thing you just
+ * dismissed is still in front of you. Called after a rule is added so the
+ * table and the rules agree at the moment of the decision. */
+size_t observore_track_forget_muted(void);
 
 /* The same walk in bounded chunks, so a caller can process every tracked
  * device without a buffer big enough to hold them all at once. Copies up to

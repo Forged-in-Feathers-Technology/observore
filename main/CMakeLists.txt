@@ -27,6 +27,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         bt
+        esp_adc
         driver
         esp_event
         esp_http_server

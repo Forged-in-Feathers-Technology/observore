@@ -25,7 +25,8 @@
     X(GOTIFY_TOK, "gotify_tok",  OBSERVORE_NVS_STR) \
     X(NOTIFY_PROV, "notify_prov", OBSERVORE_NVS_STR) \
     X(NOTIFY_USER, "notify_user", OBSERVORE_NVS_STR) \
-    X(RUNS,        "runs",        OBSERVORE_NVS_BLOB)
+    X(RUNS,        "runs",        OBSERVORE_NVS_BLOB) \
+    X(RETIRED,     "retired",     OBSERVORE_NVS_BLOB)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 

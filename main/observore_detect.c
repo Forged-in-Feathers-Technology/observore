@@ -38,6 +38,18 @@
 /* The SIG's reserved "not a real product" company ID, shared by every hobby
  * project that declined to squat a registered one. Meaningless on its own. */
 #define COMPANY_NONPRODUCTION      0xFFFF
+/* Flipper Devices Inc. in the SIG's company list. Worth stating because the
+ * wrong value is widespread: ESP32 Marauder comments Flipper's company ID as
+ * 0x0FBA and every project that copied the constant inherited it. 0x0FBA is
+ * Cosonic Intelligent Technologies, who make headsets -- flagging their
+ * customers as hacking tools. Flipper is 0x0E29. */
+#define COMPANY_FLIPPER            0x0E29
+/* The three 16-bit service UUIDs a Flipper advertises, one per hardware
+ * colour. */
+#define UUID16_FLIPPER_A           0x3081
+#define UUID16_FLIPPER_B           0x3082
+#define UUID16_FLIPPER_C           0x3083
+
 /* SquachMesh: 'S' 'Q' 'M' '1', then a version byte. */
 static const uint8_t SQUACHMESH_MAGIC[4] = {0x53, 0x51, 0x4D, 0x31};
 #define SQUACHMESH_VERSION         1
@@ -76,11 +88,23 @@ static const observore_keyword_t BLE_NAME_KEYWORDS[] = {
     {"smarttag",      OBSERVORE_CLASS_TRACKER,      "Galaxy SmartTag"},
     {"chipolo",       OBSERVORE_CLASS_TRACKER,      "Chipolo tracker"},
     {"airtag",        OBSERVORE_CLASS_TRACKER,      "AirTag"},
+    /* A Flipper advertises "Flipper " and then whatever the owner named it. */
+    {"flipper",       OBSERVORE_CLASS_HUNTER,       "Flipper Zero"},
+    /* Enphase solar equipment: the Envoy gateway and the Encharge batteries
+     * both broadcast their model and serial, sit still forever, and were
+     * arriving as followers. */
+    {"envoy",         OBSERVORE_CLASS_FIXTURE,      "Enphase Envoy"},
+    {"encharg",       OBSERVORE_CLASS_FIXTURE,      "Enphase Encharge"},
+    {"enphase",       OBSERVORE_CLASS_FIXTURE,      "Enphase solar"},
 };
 
 /* Matched against Wi-Fi SSIDs.  Deliberately narrower than the BLE list --
  * SSIDs are attacker-chosen free text and short needles produce noise. */
 static const observore_keyword_t SSID_KEYWORDS[] = {
+    /* Hak5 hold no IEEE registration, so the management AP's default name is
+     * the only thing to go on. The underscore is load-bearing: "pineapple"
+     * alone would claim somebody's home network. */
+    {"pineapple_", OBSERVORE_CLASS_HUNTER, "WiFi Pineapple"},
     {"flock",     OBSERVORE_CLASS_ALPR,   "Flock Safety"},
     {"alpr",      OBSERVORE_CLASS_ALPR,   "ALPR"},
     {"lpr-",      OBSERVORE_CLASS_ALPR,   "LPR"},
@@ -394,6 +418,29 @@ static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
      * know, and it is unprotected because muting the kind wholesale is a
      * reasonable thing to want. */
     [OBSERVORE_CLASS_PEER_DETECTOR]    = {"peer-detector",    0, OBSERVORE_URGENCY_LOW,    false},
+    /* An attack in progress rather than a device in the room, and scored to
+     * match: knocking devices off a network is how an attacker forces a
+     * handshake to capture, or simply takes a camera offline. Protected,
+     * because nothing about a fingerprint should ever be able to silence
+     * this. */
+    [OBSERVORE_CLASS_DEAUTH]           = {"deauth-flood",     5, OBSERVORE_URGENCY_URGENT, true },
+    /* Everything else here is equipment that watches. This is equipment that
+     * transmits at other radios -- a Flipper, a pwnagotchi, a Pineapple. Three
+     * points rather than five: the presence of the tool is capability, where a
+     * flood in progress is an act. Protected, for the same reason a tracker
+     * is: muting the kind would silence a stranger's as well as your own. */
+    [OBSERVORE_CLASS_HUNTER]           = {"hunter",           3, OBSERVORE_URGENCY_NORMAL, true },
+    /* Equipment bolted to a building, named and scored at nothing. Worth
+     * recognising rather than ignoring: a solar gateway that says "Envoy" was
+     * being promoted to follower -- "unidentified but persistently nearby" --
+     * when it is neither unidentified nor going anywhere. Naming it is more
+     * honest than muting it, and it survives a Clear ignores. */
+    [OBSERVORE_CLASS_FIXTURE]          = {"fixture",          0, OBSERVORE_URGENCY_LOW,    false},
+    /* Reported, barely scored. Every pair of budget earbuds in pairing mode
+     * used to arrive as a tracker worth three points, which is how a crowded
+     * cafe reads as four trackers and how a person learns to stop believing
+     * the score. One point keeps it visible without letting it escalate. */
+    [OBSERVORE_CLASS_ACCESSORY]        = {"accessory",        1, OBSERVORE_URGENCY_LOW,    false},
 };
 
 const observore_class_desc_t *observore_class_desc(observore_class_t cls)
@@ -550,12 +597,27 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
          * Every Samsung phone, watch and earbud advertises 0x0075, so matching
          * the company ID alone reports a crowded room as four trackers.  The
          * SmartTag is identified by its 0xFD5A service data below instead. */
+        if (company == COMPANY_FLIPPER) {
+            ev->cls = OBSERVORE_CLASS_HUNTER;
+            ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
+            set_label(ev, "Flipper Zero");
+            return true;
+        }
         if (company == COMPANY_META || company == COMPANY_META_TECH) {
             ev->cls = OBSERVORE_CLASS_SMARTGLASSES;
             ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
             set_label(ev, "Meta wearable");
             return true;
         }
+    }
+
+    if (adv_has_uuid16(adv, adv_len, UUID16_FLIPPER_A) ||
+        adv_has_uuid16(adv, adv_len, UUID16_FLIPPER_B) ||
+        adv_has_uuid16(adv, adv_len, UUID16_FLIPPER_C)) {
+        ev->cls = OBSERVORE_CLASS_HUNTER;
+        ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
+        set_label(ev, "Flipper Zero");
+        return true;
     }
 
     /* --- Tracker service UUIDs --------------------------------------- */
@@ -573,10 +635,29 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
         return true;
     }
     if (adv_service_data(adv, adv_len, UUID16_GOOGLE_FAST_PAIR, &sd_len)) {
-        /* Fast Pair also carries Google's Find Hub tags.  Lower confidence
-         * than the Apple case -- ordinary headphones advertise this too --
-         * so it is reported as a tracker but scored like one hit, not
-         * escalated on its own. */
+        /* Fast Pair carries both Google's Find Hub tags and every pair of
+         * earbuds in the world announcing itself to pair, and the two are not
+         * equally interesting.
+         *
+         * Exactly three bytes of service data is the discoverable frame: a
+         * 24-bit model ID and nothing else, which is what a device in pairing
+         * mode sends. That is the one form worth separating, and it is
+         * separated by SCORE rather than by silence -- an accessory is still
+         * reported, still listed, still visible. Anything else under this UUID
+         * stays a tracker at full weight.
+         *
+         * Deliberately asymmetric. Mistaking a tracker for an accessory costs
+         * two points on a device that is still on the screen; mistaking it for
+         * nothing would cost the detection, and there is no byte in this
+         * advert that reliably tells a tag from a headphone. A tracker in
+         * pairing mode is one its owner is setting up, not one following
+         * somebody. */
+        if (sd_len == 3) {
+            ev->cls = OBSERVORE_CLASS_ACCESSORY;
+            ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
+            set_label(ev, "Fast Pair pairing");
+            return true;
+        }
         ev->cls = OBSERVORE_CLASS_TRACKER;
         ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Fast Pair / Find Hub");
@@ -621,6 +702,32 @@ bool observore_classify(const observore_observation_t *obs, observore_event_t *o
     /* An ASTM Remote ID element is unambiguous and outranks everything else,
      * including the vendor prefix -- plenty of drones fly on a generic Wi-Fi
      * module whose OUI says nothing. */
+    /* A flood outranks everything, including a known vendor: whose equipment
+     * it is matters less than the fact that it is happening. */
+    if (obs->deauth_flood) {
+        ev.cls = OBSERVORE_CLASS_DEAUTH;
+        ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
+        set_label(&ev, "deauth flood");
+        if (obs->ssid && *obs->ssid) {
+            set_detail(&ev, obs->ssid);
+        }
+        ev.points = observore_class_points(ev.cls);
+        *out = ev;
+        return true;
+    }
+
+    if (obs->pwnagotchi) {
+        ev.cls = OBSERVORE_CLASS_HUNTER;
+        ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
+        set_label(&ev, "pwnagotchi");
+        if (obs->ssid && *obs->ssid) {
+            set_detail(&ev, obs->ssid);
+        }
+        ev.points = observore_class_points(ev.cls);
+        *out = ev;
+        return true;
+    }
+
     if (obs->remote_id) {
         ev.cls = OBSERVORE_CLASS_DRONE;
         ev.evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
@@ -740,7 +847,7 @@ const char *observore_evidence_name(observore_evidence_t ev)
 {
     static const char *names[OBSERVORE_EVIDENCE_MAX] = {
         "none", "oui", "ble-name", "ssid", "mfg-data", "service-uuid",
-        "persistence",
+        "persistence", "behaviour",
     };
     return (ev < OBSERVORE_EVIDENCE_MAX) ? names[ev] : "?";
 }

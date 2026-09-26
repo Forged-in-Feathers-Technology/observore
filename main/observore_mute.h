@@ -62,6 +62,16 @@ typedef struct {
  * is not muting your phone, it is muting phones. */
 #define OBSERVORE_MUTE_ADDRESS_LIMIT 8
 
+/* Retired shapes are remembered across reboots, and this is how many.
+ *
+ * The verdict is kept, not the counters -- "this shape describes a
+ * population" is a fact about the shape, and one that a restart does not
+ * undo. Without this the safety net reset at every boot and the device went
+ * deaf again until each bad rule re-earned its nine addresses, which on a
+ * quiet night is hours. A device that reboots for every update would have
+ * spent a part of each day blinded. */
+#define OBSERVORE_MUTE_RETIRED_MAX 16
+
 /* The shortest broadcast name a baseline will turn into a rule. Name rules
  * match as substrings -- deliberate and useful when a person types one, a trap
  * when a baseline takes whatever it hears. Anything shorter is muted by
@@ -86,6 +96,11 @@ void observore_mute_init(void);
  * precisely the thing this device exists to notice. */
 bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
                         const char *name, uint32_t fingerprint);
+
+/* The same question, without charging the answer to a rule's statistics. For
+ * sweeping the device table after a rule is added. */
+bool observore_mute_would_match(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
+                                const char *name, uint32_t fingerprint);
 
 /* True for classes a fingerprint rule must never silence. */
 bool observore_mute_class_is_protected(observore_class_t cls);

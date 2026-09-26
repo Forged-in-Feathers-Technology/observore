@@ -826,6 +826,214 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_ignoring_takes_it_off_the_screen(void)
+{
+    banner("ignoring a device removes it now, not in half an hour");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* A classified device, because the table's count is of classified rows --
+     * and a fixture is exactly the case that prompted this. */
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x06, 0x09, 'E', 'n', 'v', 'o', 'y'};
+    const uint8_t mac[6] = {0x94, 0x34, 0x69, 0x01, 0x02, 0x03};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                 .addr_random = false, .adv = adv, .adv_len = sizeof(adv)};
+    for (int t = 0; t <= 400; t += 100) {
+        observore_track_observe(&o, SECS(t));
+    }
+    observore_status_t st;
+    observore_track_status(&st, SECS(400));
+    CHECK(st.device_count == 1, "it is in the table to begin with");
+
+    /* Ignore it the way a tap on the screen does. */
+    observore_mute_rule_t rule = {.kind = OBSERVORE_MUTE_MAC};
+    memcpy(rule.mac, mac, 6);
+    CHECK(observore_mute_add(&rule, NULL) == ESP_OK, "the rule is written");
+    CHECK(observore_track_forget_muted() == 1, "and the row goes with it");
+    observore_track_status(&st, SECS(400));
+    CHECK(st.device_count == 0,
+          "so the screen stops showing what was just dismissed");
+
+    /* The sweep must not charge those rows to the rule: a rule that swept a
+     * crowded table could otherwise retire itself for covering a population
+     * it never actually silenced. */
+    observore_mute_stat_t stat;
+    CHECK(observore_mute_stat(0, &stat), "the rule has statistics");
+    CHECK(stat.suppressed == 0,
+          "and the sweep did not inflate them (got %u)", (unsigned)stat.suppressed);
+
+    observore_mute_clear();
+}
+
+static void test_fast_pair_split(void)
+{
+    banner("earbuds pairing are not a tracker following you");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* The discoverable frame: exactly three bytes of service data, a 24-bit
+     * model ID. This is a device in pairing mode. */
+    uint8_t pairing[] = {0x02, 0x01, 0x06,
+                         0x06, 0x16, 0x2C, 0xFE, 0x0E, 0xA0, 0x11};
+    const uint8_t mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                 .adv = pairing, .adv_len = sizeof(pairing)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "a pairing beacon is still reported");
+    CHECK(ev.cls == OBSERVORE_CLASS_ACCESSORY, "as an accessory, not a tracker");
+    CHECK(observore_class_points(OBSERVORE_CLASS_ACCESSORY) <
+          observore_class_points(OBSERVORE_CLASS_TRACKER),
+          "and scores below one");
+
+    /* It must still be visible -- the whole point is that nothing is dropped,
+     * only weighted differently. */
+    CHECK(observore_track_observe(&o, SECS(0)), "and it reaches the table");
+
+    /* Anything else under the same UUID keeps full tracker weight, because no
+     * byte here reliably tells a tag from a headphone and the expensive
+     * mistake is the other direction. */
+    observore_track_init();
+    uint8_t tag[] = {0x02, 0x01, 0x06,
+                     0x0B, 0x16, 0x2C, 0xFE, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77};
+    observore_observation_t ot = o; ot.adv = tag; ot.adv_len = sizeof(tag);
+    observore_event_t ev2;
+    CHECK(observore_classify(&ot, &ev2), "a longer Fast Pair frame classifies");
+    CHECK(ev2.cls == OBSERVORE_CLASS_TRACKER, "as a tracker, at full weight");
+
+    observore_mute_clear();
+}
+
+static void test_fixtures_are_not_followers(void)
+{
+    banner("a named appliance is not something following you");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* An Enphase Envoy: a public address, a stable name, bolted to a wall. */
+    uint8_t adv[] = {0x02, 0x01, 0x06,
+                     0x0D, 0x09, 'E', 'n', 'v', 'o', 'y', ' ', '1', '2', '1', '9', '0', '1'};
+    const uint8_t mac[6] = {0x94, 0x34, 0x69, 0x9D, 0x28, 0xC0};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -88,
+                                 .addr_random = false, .adv = adv, .adv_len = sizeof(adv)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "it classifies from its name");
+    CHECK(ev.cls == OBSERVORE_CLASS_FIXTURE, "as a fixture, not a follower");
+    CHECK(observore_class_points(OBSERVORE_CLASS_FIXTURE) == 0, "worth no points");
+
+    /* And a nameless appliance with a fixed address -- no keyword to match --
+     * still must not be promoted at five minutes the way a random address is.
+     * It gets an hour, because an hour beside you is worth saying either way. */
+    observore_track_init();
+    uint8_t bare[] = {0x02, 0x01, 0x06, 0x05, 0x09, 'P', 'r', 'n', 't'};
+    const uint8_t pm[6] = {0x3C, 0x2A, 0xF4, 0x01, 0x02, 0x03};
+    observore_observation_t op = {.mac = pm, .src = OBSERVORE_SRC_BLE, .rssi = -70,
+                                 .addr_random = false, .adv = bare, .adv_len = sizeof(bare)};
+    for (int t = 0; t <= 400; t += 100) {
+        observore_track_observe(&op, SECS(t));
+    }
+    observore_status_t st;
+    observore_track_status(&st, SECS(400));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 0,
+          "a named device on a fixed address is not a follower at seven minutes");
+
+    /* An hour of it is a different statement. */
+    observore_track_observe(&op, SECS(3700));
+    observore_track_status(&st, SECS(3700));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 1,
+          "but an hour beside you still counts");
+
+    /* The rotating, nameless case is untouched: five minutes is still five
+     * minutes for something trying not to be identified. */
+    observore_track_init();
+    uint8_t quiet[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t rm[6] = {0x4A, 0x11, 0x22, 0x33, 0x44, 0x55};
+    observore_observation_t oq = {.mac = rm, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                 .addr_random = true, .adv = quiet, .adv_len = sizeof(quiet)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&oq, SECS(t));
+    }
+    observore_track_status(&st, SECS(310));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 1,
+          "a nameless rotating address is still promoted at five minutes");
+
+    observore_mute_clear();
+}
+
+static void test_hunter_gear(void)
+{
+    banner("gear that transmits at other radios");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* Flipper Zero by company ID. 0x0E29 is Flipper Devices in the SIG list;
+     * the widespread 0x0FBA is Cosonic, who make headsets, and every project
+     * that copied Marauder's constant flags their customers as hacking
+     * tools. */
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x01, 0x02};
+    const uint8_t mac[6] = {0x0C, 0xFA, 0x22, 0x01, 0x02, 0x03};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = sizeof(flip)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "a Flipper advert classifies");
+    CHECK(ev.cls == OBSERVORE_CLASS_HUNTER, "as hunter gear");
+    CHECK(strcmp(ev.label, "Flipper Zero") == 0, "named (got \"%s\")", ev.label);
+
+    /* The company ID everybody copied must NOT be treated as a Flipper. */
+    uint8_t cosonic[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0xBA, 0x0F, 0x01, 0x02};
+    observore_observation_t oc = o; oc.adv = cosonic; oc.adv_len = sizeof(cosonic);
+    observore_event_t ev2;
+    bool got = observore_classify(&oc, &ev2);
+    CHECK(!got || ev2.cls != OBSERVORE_CLASS_HUNTER,
+          "a headset maker's company ID is not a Flipper");
+
+    /* And by service UUID, one per hardware colour. */
+    uint8_t uuid[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x82, 0x30};
+    observore_observation_t ou = o; ou.adv = uuid; ou.adv_len = sizeof(uuid);
+    observore_event_t ev3;
+    CHECK(observore_classify(&ou, &ev3) && ev3.cls == OBSERVORE_CLASS_HUNTER,
+          "a Flipper service UUID classifies too");
+
+    /* A pwnagotchi volunteers the marker in its own beacon. */
+    observore_observation_t op = {.mac = mac, .src = OBSERVORE_SRC_WIFI_SNIFF,
+                                  .rssi = -60, .pwnagotchi = true, .ssid = "throwaway"};
+    observore_event_t ev4;
+    CHECK(observore_classify(&op, &ev4), "a pwnagotchi beacon classifies");
+    CHECK(ev4.cls == OBSERVORE_CLASS_HUNTER && strcmp(ev4.label, "pwnagotchi") == 0,
+          "as hunter gear, named (got \"%s\")", ev4.label);
+
+    /* A Pineapple's management AP, and not somebody's fruit-themed network. */
+    observore_observation_t opi = {.mac = mac, .src = OBSERVORE_SRC_WIFI_SCAN,
+                                   .rssi = -60, .ssid = "Pineapple_A1B2"};
+    observore_event_t ev5;
+    CHECK(observore_classify(&opi, &ev5) && ev5.cls == OBSERVORE_CLASS_HUNTER,
+          "Pineapple_XXXX is the documented default");
+    observore_observation_t okitchen = opi; okitchen.ssid = "Pineapple Villa";
+    observore_event_t ev6;
+    got = observore_classify(&okitchen, &ev6);
+    CHECK(!got || ev6.cls != OBSERVORE_CLASS_HUNTER,
+          "but a home network merely called Pineapple is not one");
+
+    /* A flood is an act rather than a device, and outranks any label. */
+    observore_observation_t od = {.mac = mac, .src = OBSERVORE_SRC_WIFI_SNIFF,
+                                  .rssi = -40, .deauth_flood = true};
+    observore_event_t ev7;
+    CHECK(observore_classify(&od, &ev7), "a deauth flood classifies");
+    CHECK(ev7.cls == OBSERVORE_CLASS_DEAUTH, "as its own thing");
+    CHECK(observore_class_points(OBSERVORE_CLASS_DEAUTH) >
+          observore_class_points(OBSERVORE_CLASS_HUNTER),
+          "and scores above the mere presence of a tool");
+
+    observore_mute_clear();
+}
+
 static void test_squachmesh(void)
 {
     banner("SquachMesh: another detector announcing itself");
@@ -1013,6 +1221,22 @@ static void test_mute_rule_retires_when_it_covers_a_population(void)
     CHECK(st.disabled, "and says it has been retired");
     CHECK(st.addresses > OBSERVORE_MUTE_ADDRESS_LIMIT, "having covered %u addresses",
           (unsigned)st.addresses);
+
+    /* The verdict outlives the rule. Retirement is a fact about the shape, so
+     * writing the same rule again does not resurrect it -- which is also what
+     * makes it survivable across a reboot, where the counters do not. */
+    observore_mute_rule_t again = fp;
+    observore_mute_remove(0);
+    CHECK(observore_mute_add(&again, NULL) == ESP_OK, "the same rule can be re-added");
+    mac[5] = 0x99;
+    CHECK(!observore_mute_matches(mac, OBSERVORE_CLASS_UNKNOWN, NULL, fpv),
+          "but a shape already judged a population stays retired");
+
+    /* Clearing the list is a fresh start, judgements included. */
+    observore_mute_clear();
+    CHECK(observore_mute_add(&again, NULL) == ESP_OK, "add it once more after a clear");
+    CHECK(observore_mute_matches(mac, OBSERVORE_CLASS_UNKNOWN, NULL, fpv),
+          "and it is honoured again");
 
     observore_mute_clear();
 }
@@ -2017,6 +2241,10 @@ int main(void)
     test_fingerprint();
     test_fingerprint_safety();
     test_baseline_follower();
+    test_ignoring_takes_it_off_the_screen();
+    test_fast_pair_split();
+    test_fixtures_are_not_followers();
+    test_hunter_gear();
     test_squachmesh();
     test_baseline_does_not_blind();
     test_mute_rule_retires_when_it_covers_a_population();

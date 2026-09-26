@@ -238,7 +238,12 @@ static bool beacon_is_secure(const uint8_t *ies, size_t len)
 
 /* Walk the tagged IEs looking for the SSID and for an ASTM Remote ID element.
  * Returns true when a Remote ID element was present. */
-static bool parse_ies(const uint8_t *ies, size_t len, char *ssid, size_t ssid_len)
+/* The one key that makes a beacon a pwnagotchi rather than any other device
+ * with a brace in it. */
+static const char PWNAGOTCHI_MARKER[] = "pwnd_tot";
+
+static bool parse_ies(const uint8_t *ies, size_t len, char *ssid, size_t ssid_len,
+                      bool *pwnd)
 {
     bool odid = false;
     size_t i = 0;
@@ -263,11 +268,96 @@ static bool parse_ies(const uint8_t *ies, size_t len, char *ssid, size_t ssid_le
                    memcmp(body, ASTM_OUI, 3) == 0 &&
                    body[3] == ASTM_VENDOR_TYPE_ODID) {
             odid = true;
+        } else if (id == IE_VENDOR_SPECIFIC && pwnd && !*pwnd &&
+                   ie_len >= sizeof(PWNAGOTCHI_MARKER) - 1) {
+            /* A pwnagotchi finds other pwnagotchis by putting a plain-ASCII
+             * JSON blob in its own beacons -- name, version, uptime, handshake
+             * count, whether deauth is on. Nothing is obfuscated and nothing
+             * needs parsing: one byte scan for the key that no other device
+             * puts in a beacon is the whole signature. A JSON parser in the
+             * promiscuous callback would cost heap and time on every frame in
+             * the air, for a field this device only needs to recognise. */
+            for (size_t k = 0; k + sizeof(PWNAGOTCHI_MARKER) - 1 <= ie_len; k++) {
+                if (memcmp(body + k, PWNAGOTCHI_MARKER,
+                           sizeof(PWNAGOTCHI_MARKER) - 1) == 0) {
+                    *pwnd = true;
+                    break;
+                }
+            }
         }
 
         i += 2 + ie_len;
     }
     return odid;
+}
+
+/* Deauthentication and disassociation floods.
+ *
+ * One deauth is ordinary: access points dismiss clients all day. A burst of
+ * them is not, and it is the most actionable thing on Wi-Fi that this device
+ * can see -- it is how an attacker forces a handshake worth capturing, and how
+ * a camera is taken offline before anything happens in front of it. No vendor
+ * prefix can hide it, because the tell is the behaviour rather than the
+ * hardware.
+ *
+ * The frames name a victim, not a culprit: an attacker spoofs the access
+ * point's address, so what is reported is the address the flood is aimed at or
+ * sent as. Saying otherwise would be inventing an attribution the air does not
+ * carry.
+ *
+ * Counted per address over a rolling window. The sniffer sits on one channel
+ * for a few seconds at a time, so a flood elsewhere in the band can be missed
+ * entirely -- this finds what passes under the aerial, and says nothing about
+ * what does not. */
+#define DEAUTH_WINDOW_US   (10 * 1000000)
+#define DEAUTH_BURST       8      /* frames in the window before it is a flood */
+#define DEAUTH_TRACKED     6      /* addresses watched at once */
+#define DEAUTH_REPEAT_US   (60 * 1000000)
+
+static struct {
+    uint8_t  mac[6];
+    uint8_t  count;
+    int64_t  window_us;
+    int64_t  reported_us;
+} s_deauth[DEAUTH_TRACKED];
+
+/* True when this frame completes a burst worth reporting. */
+static bool note_deauth(const uint8_t *mac, int64_t now)
+{
+    int free_slot = -1, oldest = 0;
+    for (int i = 0; i < DEAUTH_TRACKED; i++) {
+        if (s_deauth[i].window_us == 0) {
+            if (free_slot < 0) {
+                free_slot = i;
+            }
+            continue;
+        }
+        if (memcmp(s_deauth[i].mac, mac, 6) == 0) {
+            if (now - s_deauth[i].window_us > DEAUTH_WINDOW_US) {
+                s_deauth[i].window_us = now;   /* a new window, not a flood */
+                s_deauth[i].count = 1;
+                return false;
+            }
+            if (++s_deauth[i].count < DEAUTH_BURST) {
+                return false;
+            }
+            /* Loud, and worth saying -- but not every frame of it. */
+            if (now - s_deauth[i].reported_us < DEAUTH_REPEAT_US) {
+                return false;
+            }
+            s_deauth[i].reported_us = now;
+            return true;
+        }
+        if (s_deauth[i].window_us < s_deauth[oldest].window_us) {
+            oldest = i;
+        }
+    }
+    int slot = free_slot >= 0 ? free_slot : oldest;
+    memcpy(s_deauth[slot].mac, mac, 6);
+    s_deauth[slot].count = 1;
+    s_deauth[slot].window_us = now;
+    s_deauth[slot].reported_us = 0;
+    return false;
 }
 
 static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
@@ -287,6 +377,23 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         return;  /* not a management frame */
     }
     uint8_t subtype = frame_subtype(hdr->frame_control);
+    /* 12 = deauthentication, 10 = disassociation. Neither carries an SSID or
+     * anything else to harvest; the frame itself is the evidence. */
+    if (subtype == 12 || subtype == 10) {
+        int64_t now = esp_timer_get_time();
+        s_sniffed_frames++;
+        if (note_deauth(hdr->addr2, now)) {
+            observore_observation_t obs = {
+                .mac          = hdr->addr2,
+                .src          = OBSERVORE_SRC_WIFI_SNIFF,
+                .rssi         = (int8_t)pkt->rx_ctrl.rssi,
+                .channel      = pkt->rx_ctrl.channel,
+                .deauth_flood = true,
+            };
+            observore_track_observe(&obs, now);
+        }
+        return;
+    }
     /* 8 = beacon, 5 = probe response.  Remote ID rides on beacons; SSIDs are
      * worth harvesting from both. */
     if (subtype != 8 && subtype != 5) {
@@ -298,7 +405,8 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     const uint8_t *ies = pkt->payload + hdr_len;
 
     char ssid[33] = {0};
-    bool odid = parse_ies(ies, ie_len, ssid, sizeof(ssid));
+    bool pwnd = false;
+    bool odid = parse_ies(ies, ie_len, ssid, sizeof(ssid), &pwnd);
 
     /* What the access point says about itself, if it says anything. Beacons
      * and probe responses from most consumer hardware carry a WPS element
@@ -316,6 +424,7 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         .ssid      = ssid[0] ? ssid : NULL,
         .wps       = observore_wps_empty(&wps) ? NULL : &wps,
         .remote_id = odid,
+        .pwnagotchi = pwnd,
     };
     /* Whether or not a scan ever succeeds, a beacon we just decoded is an
      * access point that is definitely in range. Privacy of the observed party
