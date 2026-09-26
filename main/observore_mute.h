@@ -41,6 +41,36 @@ typedef struct {
     uint32_t fingerprint;                /* FINGERPRINT kind */
 } observore_mute_rule_t;
 
+/* How widely each rule has been firing, alongside the rules themselves.
+ *
+ * A rule that silences everything looks exactly like a quiet room: the device
+ * reports "clear" and nothing says why. Two boards in one house made that
+ * visible only by comparison -- one admitted eight thousand sightings while
+ * the other, two metres away, admitted six. So each rule now carries what it
+ * has suppressed and roughly how many different addresses it has covered, and
+ * a fingerprint rule that turns out to cover a whole population of devices
+ * stops being honoured. */
+typedef struct {
+    uint32_t suppressed;   /* sightings this rule has discarded */
+    uint8_t  addresses;    /* distinct addresses seen, saturating */
+    bool     disabled;     /* stopped: it silenced too much to be a device */
+} observore_mute_stat_t;
+
+/* A fingerprint rule covering more addresses than this is describing a kind of
+ * device rather than one device, whatever it was written for. Phones in a
+ * household share advert shapes; a rule that has matched nine different ones
+ * is not muting your phone, it is muting phones. */
+#define OBSERVORE_MUTE_ADDRESS_LIMIT 8
+
+/* The shortest broadcast name a baseline will turn into a rule. Name rules
+ * match as substrings -- deliberate and useful when a person types one, a trap
+ * when a baseline takes whatever it hears. Anything shorter is muted by
+ * address instead. */
+#define OBSERVORE_BASELINE_NAME_MIN 4
+
+/* Reads the statistics for a rule by index. False if there is no such rule. */
+bool observore_mute_stat(size_t index, observore_mute_stat_t *out);
+
 /* Loads persisted rules.  Safe to call before NVS holds anything. */
 void observore_mute_init(void);
 

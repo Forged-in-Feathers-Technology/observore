@@ -892,6 +892,35 @@ broadcasts one, else its advert fingerprint, else — only as a last resort — 
 MAC. It reports the breakdown, and counts how many rules are merely temporary
 because they had to fall back to a rotating address.
 
+**A baseline must never make the device deaf**, and until v0.9.1 it could.
+Pressed in a house, it wrote fingerprint rules for shapes that half the
+Bluetooth devices in the building broadcast, and the detector went from three
+thousand sightings an hour to twenty-five while still reporting "clear" —
+which is indistinguishable from a quiet room. It took two boards side by side
+to notice: one admitted eight thousand sightings, the other, two metres away,
+admitted six.
+
+Three things now stand between a baseline and that outcome.
+
+A fingerprint rule is written **only for a shape carried by exactly one device
+in range at that moment**. Two devices sharing a shape means the shape is a
+model, not a device, and both are muted by address instead. The baseline makes
+two passes over the table for this, because a single pass cannot know whether
+what it is looking at is shared.
+
+A name rule needs a name of at least four characters. Name rules match as
+substrings, which is right when a person types one and wrong when a baseline
+takes whatever it hears: the SSID `42` silenced a hundred different addresses
+here, each one something whose name merely contained those two characters.
+
+And **every rule reports what it has actually done** — how many sightings it
+has discarded and how many distinct addresses it has covered, on `/api/mutes`
+and in the console beside the rule. A fingerprint rule that turns out to cover
+more than eight addresses is describing a population rather than a device, so
+the device stops honouring it and says so. That last one is the safety net for
+the case the first two cannot see: a shape shared with devices that were not
+in the room when the baseline was taken.
+
 One exception to the fingerprint rule above is made here, and only here. A
 `follower` on a rotating address gets a fingerprint rule from a baseline, where
 a console mute would refuse one. "Follower" is a verdict about how long
