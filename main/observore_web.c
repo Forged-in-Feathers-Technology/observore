@@ -188,7 +188,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
         ",\"reset_reason\":\"%s\",\"notifier\":%s"
-        ",\"bright\":%d,\"bright_steps\":%d"
+        ",\"bright\":%d,\"bright_now\":%d,\"bright_steps\":%d"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -216,7 +216,10 @@ static esp_err_t status_handler(httpd_req_t *req)
 #else
         "false"
 #endif
-        , observore_display_brightness(), OBSERVORE_BRIGHT_STEPS);
+        , observore_display_brightness(),
+        observore_display_brightness_effective(),
+        observore_display_has_light_sensor() ? OBSERVORE_BRIGHT_STEPS + 1
+                                            : OBSERVORE_BRIGHT_STEPS);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
@@ -444,6 +447,11 @@ static esp_err_t mute_handler(httpd_req_t *req)
     }
 
     esp_err_t err = observore_mute_add(&rule, NULL);
+    if (err == ESP_OK) {
+        /* So the list the console is about to redraw agrees with the rule it
+         * was just given. */
+        observore_track_forget_muted();
+    }
     if (err == ESP_ERR_NO_MEM) {
         return fail(req, "mute list is full");
     }
@@ -823,7 +831,9 @@ static esp_err_t bright_handler(httpd_req_t *req)
         return fail(req, "this build has no screen");
     }
     int step = atoi(value);
-    if (step < 0 || step >= OBSERVORE_BRIGHT_STEPS) {
+    int top = observore_display_has_light_sensor() ? OBSERVORE_BRIGHT_AUTO
+                                                   : OBSERVORE_BRIGHT_STEPS - 1;
+    if (step < 0 || step > top) {
         return fail(req, "step is out of range");
     }
     observore_display_set_brightness(step);

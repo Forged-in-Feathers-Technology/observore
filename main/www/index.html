@@ -470,7 +470,10 @@ function renderBright(s) {
   }
   const row = $('brightrow');
   row.textContent = '';
-  const names = ['Full', 'Bright', 'Dim', 'Dimmest'];
+  // A fifth button appears only where the board has a light sensor to hand the
+  // decision to; the device reports the count, so the page does not have to
+  // know which boards those are.
+  const names = ['Full', 'Bright', 'Dim', 'Dimmest', 'Auto'];
   for (let i = 0; i < s.bright_steps; i++) {
     const b = document.createElement('button');
     b.textContent = names[i] || String(i);

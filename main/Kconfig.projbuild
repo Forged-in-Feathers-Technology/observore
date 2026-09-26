@@ -214,6 +214,26 @@ config OBSERVORE_DISPLAY_RST
 config OBSERVORE_DISPLAY_BL
     int "Backlight GPIO (-1 if always on)"
     default 21
+config OBSERVORE_DISPLAY_LDR_GPIO
+    int "Ambient light sensor GPIO (-1 if none)"
+    default -1
+    help
+        The Cheap Yellow Displays carry a photoresistor, which lets the screen
+        dim itself in the dark -- the state this device most wants to be in,
+        since a bright panel in a dark room announces it. Must be an ADC1 pin.
+        Measured rather than assumed: probe the free pins and watch which one
+        moves when a hand covers the board.
+
+config OBSERVORE_DISPLAY_LDR_DARK_IS_HIGH
+    bool "The light sensor reads higher in the dark"
+    default y
+    depends on OBSERVORE_DISPLAY_LDR_GPIO >= 0
+    help
+        Which way the divider is wired. Measured on the 3.5" board: covering
+        it took the reading from about 1,100 to 1,700, so darker is higher
+        there. Wrong means the screen brightens in the dark, which is
+        unmistakable.
+
 config OBSERVORE_DISPLAY_MHZ
     int "SPI clock, MHz"
     default 26

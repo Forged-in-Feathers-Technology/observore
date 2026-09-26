@@ -35,6 +35,9 @@
 
 #include "observore_detect.h"
 #include "observore_font.h"
+#include <limits.h>
+
+#include "esp_adc/adc_oneshot.h"
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 
@@ -292,7 +295,97 @@ static char   s_wifi_msg[41];
 
 #define BL_COUNT OBSERVORE_BRIGHT_STEPS
 static const uint8_t BL_LEVELS[BL_COUNT] = {255, 160, 80, 24};
-static uint8_t s_bl_level;   /* index into BL_LEVELS */
+static uint8_t s_bl_level;   /* index into BL_LEVELS, or OBSERVORE_BRIGHT_AUTO */
+
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+/* The sensor learns its own range rather than being told one.
+ *
+ * Fixed thresholds assume a particular sensor exposure and a particular room,
+ * and the first attempt had both wrong: taken from a bare board where covering
+ * it reached 1,700 counts, they left a cased board in a lit room producing
+ * 1,157 to 1,298 -- the whole span below the second edge, so the two dim steps
+ * could never be reached. A case over the photoresistor is enough to do that,
+ * and there is no reason a person should have to know it happened.
+ *
+ * So the extremes seen are remembered and the steps divide whatever range the
+ * board actually experiences. The span has to be wide enough to mean something
+ * before it acts at all: in a room of unchanging light, min and max converge
+ * and every flicker would otherwise swing the backlight. */
+#define LDR_MIN_SPAN   120    /* counts, below which the light is not telling us anything */
+#define LDR_HYSTERESIS 8      /* per cent of the span */
+
+static int s_ldr_low = INT_MAX;
+static int s_ldr_high = INT_MIN;
+
+static adc_oneshot_unit_handle_t s_ldr;
+static int s_ldr_channel = -1;
+static int s_ldr_chosen;          /* the level the sensor last settled on */
+
+static void ldr_init(void)
+{
+    adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1};
+    if (adc_oneshot_new_unit(&unit, &s_ldr) != ESP_OK) {
+        ESP_LOGW(TAG, "no ADC1: the light sensor cannot be read");
+        return;
+    }
+    if (adc_oneshot_io_to_channel(CONFIG_OBSERVORE_DISPLAY_LDR_GPIO,
+                                  &(adc_unit_t){0},
+                                  (adc_channel_t *)&s_ldr_channel) != ESP_OK) {
+        ESP_LOGW(TAG, "gpio %d is not an ADC1 pin", CONFIG_OBSERVORE_DISPLAY_LDR_GPIO);
+        s_ldr_channel = -1;
+        return;
+    }
+    adc_oneshot_chan_cfg_t chan = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12};
+    adc_oneshot_config_channel(s_ldr, (adc_channel_t)s_ldr_channel, &chan);
+}
+
+/* The level the light suggests, with the hysteresis applied against whatever
+ * was chosen last. */
+static int ldr_level(void)
+{
+    int raw = 0;
+    if (s_ldr_channel < 0 ||
+        adc_oneshot_read(s_ldr, (adc_channel_t)s_ldr_channel, &raw) != ESP_OK) {
+        return s_ldr_chosen;
+    }
+#if !CONFIG_OBSERVORE_DISPLAY_LDR_DARK_IS_HIGH
+    raw = 4095 - raw;
+#endif
+    if (raw < s_ldr_low)  s_ldr_low = raw;
+    if (raw > s_ldr_high) s_ldr_high = raw;
+    int span = s_ldr_high - s_ldr_low;
+    if (span < LDR_MIN_SPAN) {
+        /* Not enough variation to divide. Hold whatever is showing rather than
+         * inventing steps out of noise. */
+        return s_ldr_chosen;
+    }
+
+    int level = 0;
+    int hyst = span * LDR_HYSTERESIS / 100;
+    for (int i = 0; i < BL_COUNT - 1; i++) {
+        /* Edges spread evenly across the range this board has actually seen.
+         * Moving towards dimmer clears the edge; moving back towards brighter
+         * has to clear it by the hysteresis too, or a reading sitting on a
+         * boundary makes the panel pulse every time somebody passes a lamp. */
+        int edge = s_ldr_low + span * (i + 1) / BL_COUNT;
+        if (s_ldr_chosen > i) {
+            edge -= hyst;
+        }
+        if (raw > edge) {
+            level = i + 1;
+        }
+    }
+    /* Said when it moves, never while it sits still. The thresholds above came
+     * from two readings on one board, and the only way to know whether they
+     * suit a real room is to watch what the room produces. */
+    if (level != s_ldr_chosen) {
+        ESP_LOGI(TAG, "ambient %d counts (range %d-%d) -> brightness step %d",
+                 raw, s_ldr_low, s_ldr_high, level);
+    }
+    s_ldr_chosen = level;
+    return level;
+}
+#endif
 
 static void ui_task(void *arg);
 
@@ -301,7 +394,16 @@ static void bl_apply(void)
     if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
         return;
     }
-    ledc_set_duty(BL_MODE, BL_CHANNEL, BL_LEVELS[s_bl_level]);
+    uint8_t level = s_bl_level;
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+    if (level == OBSERVORE_BRIGHT_AUTO) {
+        level = (uint8_t)ldr_level();
+    }
+#endif
+    if (level >= BL_COUNT) {
+        level = 0;
+    }
+    ledc_set_duty(BL_MODE, BL_CHANNEL, BL_LEVELS[level]);
     ledc_update_duty(BL_MODE, BL_CHANNEL);
 }
 
@@ -350,8 +452,20 @@ static void bl_init(void)
     observore_nvs_item_t item = {.key = "bright", .type = OBSERVORE_NVS_BLOB,
                                  .buf = &v, .len = sizeof(v)};
     if (observore_nvs_read(&item, 1) == ESP_OK && item.found &&
-        v < BL_COUNT) {
+        v <= OBSERVORE_BRIGHT_AUTO) {
         s_bl_level = v;
+    }
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+    ldr_init();
+    /* A board with a sensor starts by using it. The screen this device most
+     * wants is the dim one, and asking a person to remember to set that every
+     * time defeats the point. */
+    if (!item.found) {
+        s_bl_level = OBSERVORE_BRIGHT_AUTO;
+    }
+#endif
+    if (s_bl_level == OBSERVORE_BRIGHT_AUTO && !observore_display_has_light_sensor()) {
+        s_bl_level = 0;
     }
 
     ledc_timer_config_t timer = {
@@ -587,54 +701,74 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
     char text[COLS + 1], up[16];
     const esp_app_desc_t *app = esp_app_get_description();
 
-    line(0, "  OBSERVORE  system", C_BLACK, C_GREY);
+    /* A running row rather than numbered lines. The page grew a line for the
+     * backlight and every row below it had to be renumbered by hand, which on
+     * the shorter panel silently pushed the run history off the bottom. */
+    int r = 0;
+    line(r++, "  OBSERVORE  system", C_BLACK, C_GREY);
     snprintf(text, sizeof(text), " version  %.28s", app ? app->version : "?");
-    line(1, text, C_WHITE, C_BLACK);
+    line(r++, text, C_WHITE, C_BLACK);
     snprintf(text, sizeof(text), " board    %.28s", CONFIG_OBSERVORE_BOARD);
-    line(2, text, C_WHITE, C_BLACK);
+    line(r++, text, C_WHITE, C_BLACK);
     snprintf(text, sizeof(text), " up       %.28s", ago(now_us, up, sizeof(up)));
-    line(3, text, C_WHITE, C_BLACK);
+    line(r++, text, C_WHITE, C_BLACK);
     snprintf(text, sizeof(text), " seen     %u device%s, %lu sightings",
              st->device_count, st->device_count == 1 ? "" : "s",
              (unsigned long)st->total_sightings);
-    line(4, text, C_WHITE, C_BLACK);
+    line(r++, text, C_WHITE, C_BLACK);
+
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+    /* Only where the light sensor makes the setting ambiguous. Cycling a
+     * button with no indication of where you are in the cycle is how a person
+     * ends up asking whether auto is even switched on -- and on a board
+     * without a sensor the brightness speaks for itself. */
+    {
+        static const char *const names[] = {"full", "bright", "dim", "dimmest"};
+        int set = observore_display_brightness();
+        int now = observore_display_brightness_effective();
+        if (set == OBSERVORE_BRIGHT_AUTO) {
+            snprintf(text, sizeof(text), " light    auto (%s)",
+                     now >= 0 && now < 4 ? names[now] : "?");
+        } else {
+            snprintf(text, sizeof(text), " light    %s",
+                     set >= 0 && set < 4 ? names[set] : "?");
+        }
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+#endif
+
     snprintf(text, sizeof(text), " heap     %u free, %u least",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
-    line(5, text, C_WHITE, C_BLACK);
+    line(r++, text, C_WHITE, C_BLACK);
 
     /* The address, which is the one fact on this page a person has to take
      * somewhere else -- and on a board like this there is nowhere else to read
-     * it. The password is a different matter and is still never drawn: a
-     * screen faces a room, and the device prints that to serial for whoever is
-     * setting it up. Only true while the uplink is up, so it says so when it
-     * is not. */
+     * it. The password is a different matter and is still never drawn. */
     const char *ip = observore_wifi_uplink_ip();
     snprintf(text, sizeof(text), " console  %.28s",
              ip && ip[0] ? ip : "only during an uplink window");
-    line(6, text, C_WHITE, C_BLACK);
+    line(r++, text, C_WHITE, C_BLACK);
 
-    /* What the last version check found, since this page is where somebody
-     * would look after pressing "update" below. */
     const char *latest = observore_update_latest_version();
     if (observore_update_available()) {
         snprintf(text, sizeof(text), " update   %.12s is available", latest);
-        line(7, text, C_BLACK, C_AMBER);
+        line(r++, text, C_BLACK, C_AMBER);
     } else if (observore_update_check_pending()) {
-        line(7, " update   checking...", C_GREY, C_BLACK);
+        line(r++, " update   checking...", C_GREY, C_BLACK);
     } else if (latest && latest[0]) {
         snprintf(text, sizeof(text), " update   up to date (%.10s)", latest);
-        line(7, text, C_GREY, C_BLACK);
+        line(r++, text, C_GREY, C_BLACK);
     } else {
-        line(7, " update   not checked yet", C_GREY, C_BLACK);
+        line(r++, " update   not checked yet", C_GREY, C_BLACK);
     }
 
-    line(8, "", C_WHITE, C_BLACK);
-    line(9, " previous runs", C_GREY, C_BLACK);
+    line(r++, "", C_WHITE, C_BLACK);
+    line(r++, " previous runs", C_GREY, C_BLACK);
 
     observore_run_t runs[4];
     size_t nr = observore_runs_list(runs, 4);
-    int row = 10;
+    int row = r;
     for (size_t i = 0; i < nr && row < ROWS - BAR_LAST; i++, row++) {
         char dur[16];
         snprintf(dur, sizeof(dur), "%lluh%02llum",
@@ -644,7 +778,7 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
                  observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
         line(row, text, C_WHITE, C_BLACK);
     }
-    if (nr == 0) {
+    if (nr == 0 && row < ROWS - BAR_LAST) {
         line(row++, "   none recorded yet", C_GREY, C_BLACK);
     }
 #if CONFIG_OBSERVORE_TOUCH
@@ -985,6 +1119,9 @@ static void watch_tap(int y)
         observore_mac_str(e->mac, what);
     }
     if (observore_mute_add(&rule, NULL) == ESP_OK) {
+        /* And take it off the screen now rather than when it ages out half an
+         * hour from now, which reads as the tap having done nothing. */
+        observore_track_forget_muted();
         snprintf(s_notice, sizeof(s_notice), " ignoring %.20s", what);
     } else {
         snprintf(s_notice, sizeof(s_notice), " could not ignore %.20s", what);
@@ -1067,11 +1204,14 @@ static void handle_tap(int x, int y)
             snprintf(s_notice, sizeof(s_notice), " baseline requested");
             s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
             break;
-        case 2:
-            s_bl_level = (s_bl_level + 1) % BL_COUNT;
+        case 2: {
+            uint8_t top = observore_display_has_light_sensor()
+                              ? OBSERVORE_BRIGHT_AUTO : BL_COUNT - 1;
+            s_bl_level = (uint8_t)((s_bl_level + 1) % (top + 1));
             bl_apply();
             bl_save();
             break;
+        }
     }
     s_dirty = true;
 }
@@ -1113,6 +1253,18 @@ static void ui_task(void *arg)
             s_dirty = true;
         }
 #endif
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+        /* While the sensor is in charge, follow the room. Twice a second is
+         * far more often than a room changes and still costs one ADC read. */
+        if (s_bl_level == OBSERVORE_BRIGHT_AUTO) {
+            static int64_t s_last_ldr_us;
+            int64_t now_ldr = esp_timer_get_time();
+            if (now_ldr - s_last_ldr_us > 500 * 1000) {
+                s_last_ldr_us = now_ldr;
+                bl_apply();
+            }
+        }
+#endif
         if (s_dirty) {
             s_dirty = false;
             draw_current();
@@ -1127,9 +1279,33 @@ int observore_display_brightness(void)
     return s_bl_level;
 }
 
+/* What the backlight is actually doing. With the sensor in charge the setting
+ * says "auto" and nothing said which level that meant, which makes the one
+ * thing worth checking -- is it dimming? -- invisible. */
+int observore_display_brightness_effective(void)
+{
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+    if (s_bl_level == OBSERVORE_BRIGHT_AUTO) {
+        return s_ldr_chosen;
+    }
+#endif
+    return s_bl_level;
+}
+
+bool observore_display_has_light_sensor(void)
+{
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+    return s_ldr_channel >= 0;
+#else
+    return false;
+#endif
+}
+
 void observore_display_set_brightness(int step)
 {
-    if (!s_ready || step < 0 || step >= BL_COUNT) {
+    int top = observore_display_has_light_sensor() ? OBSERVORE_BRIGHT_AUTO
+                                                   : BL_COUNT - 1;
+    if (!s_ready || step < 0 || step > top) {
         return;
     }
     s_bl_level = (uint8_t)step;
@@ -1168,7 +1344,9 @@ void observore_display_init(void) {}
 /* No panel: the console hides the control rather than offering one that
  * refuses, which is what a negative level tells it. */
 int  observore_display_brightness(void) { return -1; }
+int  observore_display_brightness_effective(void) { return -1; }
 void observore_display_set_brightness(int step) { (void)step; }
+bool observore_display_has_light_sensor(void) { return false; }
 void observore_display_backlight_hold(void) {}
 void observore_display_backlight_release(void) {}
 

@@ -892,6 +892,25 @@ JSON blob in a vendor element of its own beacons so other pwnagotchis can find
 it — so the signature is one byte scan for `pwnd_tot`, with no JSON parser
 anywhere near the promiscuous callback.
 
+### Earbuds are not trackers
+
+Anything advertising Google's Fast Pair service used to arrive as a `tracker`
+worth three points — which is every pair of budget earbuds in pairing mode, and
+how a crowded cafe reads as four trackers. A person who sees that a few times
+stops believing the score.
+
+A Fast Pair advert carrying exactly three bytes of service data is the
+discoverable frame: a 24-bit model ID, which is what a device announcing itself
+to pair sends. That is now an **`accessory`** at one point. Everything else
+under the same UUID keeps full tracker weight.
+
+The asymmetry is deliberate, because no byte in this advert reliably tells a
+tag from a headphone. Mistaking a tracker for an accessory costs two points on
+a device that is **still reported and still listed**; mistaking it for nothing
+would cost the detection. Nothing is dropped here — only weighted — and a
+tracker in pairing mode is one its owner is setting up, not one following
+somebody.
+
 ### Other detectors
 
 [SquachWatch](https://squachwatch.com) is another open-source detector on the
@@ -922,6 +941,16 @@ ID, the service UUIDs, and the local name. The variable payload is excluded, so
 a Find My advert fingerprints identically before and after it rotates its key.
 It is not perfectly stable — a device that varies its advert *structure* gets a
 new fingerprint, but it holds for the large majority.
+
+**Ignoring something removes it now.** Muting suppresses what arrives next and
+says nothing about what is already in the device table, which used to sit there
+until it aged out half an hour later — on a screen that reads as the ignore
+having failed, because the thing you just dismissed is still in front of you.
+Adding a rule now sweeps the table so the two agree at the moment of the
+decision. The sweep asks the matcher a non-counting question, because charging
+those rows to whichever rule covered them would inflate what each rule appears
+to have suppressed, and could retire a good rule for a population it never
+actually silenced.
 
 **A fingerprint identifies a kind of device, not an individual one.** Two
 identical trackers fingerprint the same. So a fingerprint rule is never allowed
@@ -1136,6 +1165,39 @@ statement about a whole room; one tap on one row is not.
 Both confirmations lapse after five seconds and are cancelled by leaving the
 page, so a press nobody meant — a resistive panel under a sleeve, a board
 face-down on a desk — does nothing.
+
+### Brightness that follows the room
+
+The Cheap Yellow Displays carry a photoresistor, and on the 3.5" board it is
+GPIO34 — found by probing the pins the display and touch leave free and
+watching which one moved when a hand covered the screen. With
+`CONFIG_OBSERVORE_DISPLAY_LDR_GPIO` set, the backlight gains a fifth setting,
+**Auto**, which is the default on a board that has the sensor: a bright panel
+in a dark room announces the device, and asking a person to remember to dim it
+defeats the point.
+
+**The sensor learns its own range rather than being told one.** The first
+version had fixed thresholds taken from a bare board where covering it reached
+1,700 counts. On a board in a case they were useless: the room produced 1,157
+to 1,298, the whole span below the second edge, so two of the four steps could
+never be reached and the screen simply stayed bright. A case over the
+photoresistor is enough to do that, and nobody should have to know it
+happened. So the extremes seen are remembered and the steps divide whatever
+range the board actually experiences — measured afterwards on that same board:
+657 to 997, using all four steps, and in the opposite direction from the bare
+board, which the adaptive version does not care about either.
+
+It holds still until it has seen at least 120 counts of variation, because in a
+room of unchanging light every flicker would otherwise swing the backlight.
+The level follows twice a second, with hysteresis at eight per cent of the
+learned span, since a reading sitting on a boundary makes the panel pulse every
+time somebody passes a lamp.
+
+It cannot do better than that. **The board has no way to tell whether it is on
+USB or the cell**, so "dim on battery, bright when plugged in" is not
+available on this hardware — the same finding as the missing battery
+percentage. Ambient light is a fair proxy, since the dark room where the screen
+should be dim is usually also where the battery matters.
 
 ### Brightness without touch
 

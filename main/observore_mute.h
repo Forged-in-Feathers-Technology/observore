@@ -97,6 +97,11 @@ void observore_mute_init(void);
 bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
                         const char *name, uint32_t fingerprint);
 
+/* The same question, without charging the answer to a rule's statistics. For
+ * sweeping the device table after a rule is added. */
+bool observore_mute_would_match(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
+                                const char *name, uint32_t fingerprint);
+
 /* True for classes a fingerprint rule must never silence. */
 bool observore_mute_class_is_protected(observore_class_t cls);
 

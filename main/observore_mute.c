@@ -226,16 +226,45 @@ bool observore_mute_stat(size_t index, observore_mute_stat_t *out)
     return ok;
 }
 
+static bool matches_locked(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
+                           const char *name, uint32_t fingerprint, bool count);
+
+/* Asks the same question without counting the answer.
+ *
+ * Sweeping the device table through the ordinary matcher would charge every
+ * row to whichever rule covered it -- inflating what each rule appears to have
+ * suppressed, and in the worst case retiring a perfectly good fingerprint rule
+ * because a sweep made it look like it had covered a population. */
+bool observore_mute_would_match(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
+                                const char *name, uint32_t fingerprint)
+{
+    if (!mac) {
+        return false;
+    }
+    MUTE_LOCK();
+    bool hit = matches_locked(mac, cls, name, fingerprint, false);
+    MUTE_UNLOCK();
+    return hit;
+}
+
 bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
                         const char *name, uint32_t fingerprint)
 {
     if (!mac) {
         return false;
     }
+    MUTE_LOCK();
+    bool counted = matches_locked(mac, cls, name, fingerprint, true);
+    MUTE_UNLOCK();
+    return counted;
+}
+
+static bool matches_locked(const uint8_t mac[OBSERVORE_MAC_LEN], observore_class_t cls,
+                           const char *name, uint32_t fingerprint, bool count)
+{
     bool hit = false;
     size_t hit_index = 0;
 
-    MUTE_LOCK();
     for (size_t i = 0; i < s_count && !hit; i++) {
         const observore_mute_rule_t *r = &s_rules[i];
         switch (r->kind) {
@@ -270,11 +299,10 @@ bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_clas
             hit_index = i;
         }
     }
-    if (hit) {
+    if (hit && count) {
         s_suppressed++;
         note_reach(hit_index, mac);
     }
-    MUTE_UNLOCK();
     return hit;
 }
 

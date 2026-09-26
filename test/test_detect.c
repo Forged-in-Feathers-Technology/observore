@@ -826,6 +826,87 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_ignoring_takes_it_off_the_screen(void)
+{
+    banner("ignoring a device removes it now, not in half an hour");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* A classified device, because the table's count is of classified rows --
+     * and a fixture is exactly the case that prompted this. */
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x06, 0x09, 'E', 'n', 'v', 'o', 'y'};
+    const uint8_t mac[6] = {0x94, 0x34, 0x69, 0x01, 0x02, 0x03};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                 .addr_random = false, .adv = adv, .adv_len = sizeof(adv)};
+    for (int t = 0; t <= 400; t += 100) {
+        observore_track_observe(&o, SECS(t));
+    }
+    observore_status_t st;
+    observore_track_status(&st, SECS(400));
+    CHECK(st.device_count == 1, "it is in the table to begin with");
+
+    /* Ignore it the way a tap on the screen does. */
+    observore_mute_rule_t rule = {.kind = OBSERVORE_MUTE_MAC};
+    memcpy(rule.mac, mac, 6);
+    CHECK(observore_mute_add(&rule, NULL) == ESP_OK, "the rule is written");
+    CHECK(observore_track_forget_muted() == 1, "and the row goes with it");
+    observore_track_status(&st, SECS(400));
+    CHECK(st.device_count == 0,
+          "so the screen stops showing what was just dismissed");
+
+    /* The sweep must not charge those rows to the rule: a rule that swept a
+     * crowded table could otherwise retire itself for covering a population
+     * it never actually silenced. */
+    observore_mute_stat_t stat;
+    CHECK(observore_mute_stat(0, &stat), "the rule has statistics");
+    CHECK(stat.suppressed == 0,
+          "and the sweep did not inflate them (got %u)", (unsigned)stat.suppressed);
+
+    observore_mute_clear();
+}
+
+static void test_fast_pair_split(void)
+{
+    banner("earbuds pairing are not a tracker following you");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* The discoverable frame: exactly three bytes of service data, a 24-bit
+     * model ID. This is a device in pairing mode. */
+    uint8_t pairing[] = {0x02, 0x01, 0x06,
+                         0x06, 0x16, 0x2C, 0xFE, 0x0E, 0xA0, 0x11};
+    const uint8_t mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                 .adv = pairing, .adv_len = sizeof(pairing)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "a pairing beacon is still reported");
+    CHECK(ev.cls == OBSERVORE_CLASS_ACCESSORY, "as an accessory, not a tracker");
+    CHECK(observore_class_points(OBSERVORE_CLASS_ACCESSORY) <
+          observore_class_points(OBSERVORE_CLASS_TRACKER),
+          "and scores below one");
+
+    /* It must still be visible -- the whole point is that nothing is dropped,
+     * only weighted differently. */
+    CHECK(observore_track_observe(&o, SECS(0)), "and it reaches the table");
+
+    /* Anything else under the same UUID keeps full tracker weight, because no
+     * byte here reliably tells a tag from a headphone and the expensive
+     * mistake is the other direction. */
+    observore_track_init();
+    uint8_t tag[] = {0x02, 0x01, 0x06,
+                     0x0B, 0x16, 0x2C, 0xFE, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77};
+    observore_observation_t ot = o; ot.adv = tag; ot.adv_len = sizeof(tag);
+    observore_event_t ev2;
+    CHECK(observore_classify(&ot, &ev2), "a longer Fast Pair frame classifies");
+    CHECK(ev2.cls == OBSERVORE_CLASS_TRACKER, "as a tracker, at full weight");
+
+    observore_mute_clear();
+}
+
 static void test_fixtures_are_not_followers(void)
 {
     banner("a named appliance is not something following you");
@@ -2160,6 +2241,8 @@ int main(void)
     test_fingerprint();
     test_fingerprint_safety();
     test_baseline_follower();
+    test_ignoring_takes_it_off_the_screen();
+    test_fast_pair_split();
     test_fixtures_are_not_followers();
     test_hunter_gear();
     test_squachmesh();

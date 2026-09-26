@@ -490,6 +490,28 @@ size_t observore_track_snapshot(observore_event_t *out, size_t max)
     return collect(out, max, 1, BY_LAST_SEEN);   /* newest first */
 }
 
+size_t observore_track_forget_muted(void)
+{
+    size_t gone = 0;
+    OBSERVORE_LOCK();
+    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
+        if (!s_devices[i].in_use) {
+            continue;
+        }
+        const observore_event_t *e = &s_devices[i].ev;
+        /* The non-counting matcher: a sweep must not charge these rows to
+         * whichever rule covered them. */
+        if (observore_mute_would_match(e->mac, e->cls,
+                                       e->detail[0] ? e->detail : NULL,
+                                       e->fingerprint)) {
+            memset(&s_devices[i], 0, sizeof(s_devices[i]));
+            gone++;
+        }
+    }
+    OBSERVORE_UNLOCK();
+    return gone;
+}
+
 size_t observore_track_all(observore_event_t *out, size_t max)
 {
     return collect(out, max, -1, BY_NOTHING);

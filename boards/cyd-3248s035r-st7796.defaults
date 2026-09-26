@@ -24,6 +24,10 @@ CONFIG_OBSERVORE_DISPLAY_ST7796=y
 CONFIG_OBSERVORE_DISPLAY_WIDTH=480
 CONFIG_OBSERVORE_DISPLAY_HEIGHT=320
 CONFIG_OBSERVORE_DISPLAY_BL=27
+# The photoresistor, found by probing: 35 and 39 read zero on this board and
+# 34 swung six hundred counts under a hand. It is not a battery sense -- the
+# cell connector reports nothing at all.
+CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=34
 CONFIG_OBSERVORE_DISPLAY_BGR=y
 # CONFIG_OBSERVORE_DISPLAY_INVERT is not set
 # Both axes, where the 2.8" boards mirror only X: with X alone this panel came

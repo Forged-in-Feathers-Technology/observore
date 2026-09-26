@@ -436,6 +436,11 @@ static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
      * when it is neither unidentified nor going anywhere. Naming it is more
      * honest than muting it, and it survives a Clear ignores. */
     [OBSERVORE_CLASS_FIXTURE]          = {"fixture",          0, OBSERVORE_URGENCY_LOW,    false},
+    /* Reported, barely scored. Every pair of budget earbuds in pairing mode
+     * used to arrive as a tracker worth three points, which is how a crowded
+     * cafe reads as four trackers and how a person learns to stop believing
+     * the score. One point keeps it visible without letting it escalate. */
+    [OBSERVORE_CLASS_ACCESSORY]        = {"accessory",        1, OBSERVORE_URGENCY_LOW,    false},
 };
 
 const observore_class_desc_t *observore_class_desc(observore_class_t cls)
@@ -630,10 +635,29 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
         return true;
     }
     if (adv_service_data(adv, adv_len, UUID16_GOOGLE_FAST_PAIR, &sd_len)) {
-        /* Fast Pair also carries Google's Find Hub tags.  Lower confidence
-         * than the Apple case -- ordinary headphones advertise this too --
-         * so it is reported as a tracker but scored like one hit, not
-         * escalated on its own. */
+        /* Fast Pair carries both Google's Find Hub tags and every pair of
+         * earbuds in the world announcing itself to pair, and the two are not
+         * equally interesting.
+         *
+         * Exactly three bytes of service data is the discoverable frame: a
+         * 24-bit model ID and nothing else, which is what a device in pairing
+         * mode sends. That is the one form worth separating, and it is
+         * separated by SCORE rather than by silence -- an accessory is still
+         * reported, still listed, still visible. Anything else under this UUID
+         * stays a tracker at full weight.
+         *
+         * Deliberately asymmetric. Mistaking a tracker for an accessory costs
+         * two points on a device that is still on the screen; mistaking it for
+         * nothing would cost the detection, and there is no byte in this
+         * advert that reliably tells a tag from a headphone. A tracker in
+         * pairing mode is one its owner is setting up, not one following
+         * somebody. */
+        if (sd_len == 3) {
+            ev->cls = OBSERVORE_CLASS_ACCESSORY;
+            ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
+            set_label(ev, "Fast Pair pairing");
+            return true;
+        }
         ev->cls = OBSERVORE_CLASS_TRACKER;
         ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Fast Pair / Find Hub");
