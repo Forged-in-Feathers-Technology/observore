@@ -1123,6 +1123,15 @@ has a panel but no touch — otherwise there would be no way to dim it. The
 panel is hidden entirely where there is no screen rather than shown as a
 control that refuses.
 
+**On the 3.5" board's battery connector.** It charges a cell and reports
+nothing about it. The three ADC-capable pins the display and touch leave free
+were probed on a board running from a battery: 35 and 39 read zero, and 34
+swung from 1,101 to 1,734 counts when a hand covered the screen — that is the
+ambient light sensor, not a supply. A percentage would need a divider soldered
+from the cell to a free pin. The run history answers the question that matters
+without any of that: the figure above, 25.1 hours, was measured rather than
+estimated.
+
 **Calibrating another panel.** Three things vary between assemblies and all
 three are build options: the bounds of the resistive sheet, whether its axes
 are crossed relative to the landscape display, and which way each one runs.

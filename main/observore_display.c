@@ -513,8 +513,45 @@ static void draw_watch(const observore_status_t *st,
         const char *who = top[i].detail[0] ? top[i].detail
                         : top[i].vendor    ? top[i].vendor
                         : top[i].addr_random ? "random" : "";
-        snprintf(text, sizeof(text), "%-8.8s %s %4d %.8s",
-                 observore_class_name(top[i].cls), mac, top[i].rssi, who);
+        /* Do not print the same word twice on one row. A Flipper broadcasts
+         * "Flipper Arala75h" and we label it "Flipper Zero", so the row read
+         * "Flipper Ara... Flipper Zero" and spent eight columns saying nothing.
+         * Where the name opens with the label's first word, that word is
+         * already covered and the rest of the name is the part that
+         * identifies which one. */
+        if (top[i].label[0] && who == top[i].detail) {
+            const char *space = strchr(top[i].label, ' ');
+            size_t first = space ? (size_t)(space - top[i].label)
+                                 : strlen(top[i].label);
+            if (first > 0 && strncasecmp(who, top[i].label, first) == 0 &&
+                who[first] == ' ' && who[first + 1] != '\0') {
+                who += first + 1;
+            }
+        }
+        /* What we think it is, where the screen is wide enough to say so.
+         *
+         * A row shows the class and the device's own broadcast name, so a
+         * Flipper read "hunter" and left the reader to know what that meant --
+         * "Flipper Zero" lives in the label, which the glass never rendered at
+         * all. Forty columns genuinely has no room; sixty does, and the space
+         * was sitting empty. */
+#if COLS >= 56
+        /* Checked by the preprocessor, not at runtime: a runtime test leaves
+         * the wide branch compiled on the narrow panel, where the compiler can
+         * see it will not fit and refuses the build. Which is also what stops
+         * the label from being cut to "Find My trac" -- class, address, signal
+         * and name take thirty-two columns, leaving sixteen for the label on a
+         * sixty-column screen, and "Find My tracker" is fifteen. */
+        if (top[i].label[0]) {
+            snprintf(text, sizeof(text), "%-8.8s %s %4d %-11.11s %.16s",
+                     observore_class_name(top[i].cls), mac, top[i].rssi,
+                     who, top[i].label);
+        } else
+#endif
+        {
+            snprintf(text, sizeof(text), "%-8.8s %s %4d %.8s",
+                     observore_class_name(top[i].cls), mac, top[i].rssi, who);
+        }
         uint16_t fg = top[i].cls == OBSERVORE_CLASS_FOLLOWER ? C_WHITE : C_AMBER;
 #if CONFIG_OBSERVORE_TOUCH
         /* Which finding is on which row, so a tap can name the thing under the
