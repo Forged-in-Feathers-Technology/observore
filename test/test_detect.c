@@ -444,9 +444,67 @@ static void test_follower(void)
     observore_status_t st;
     observore_track_status(&st, SECS(301));
     CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 1, "follower not counted");
-    CHECK(st.score == observore_class_points(OBSERVORE_CLASS_FOLLOWER),
-          "follower should score %u, got %u",
-          observore_class_points(OBSERVORE_CLASS_FOLLOWER), st.score);
+    /* Presence alone is worth a point, not the class weight: this device has
+     * been in the room five minutes and has not rotated its address, which is
+     * what everybody in a cafe looks like. */
+    CHECK(st.score == OBSERVORE_FOLLOWER_PRESENT_POINTS,
+          "mere presence should score %u, got %u",
+          OBSERVORE_FOLLOWER_PRESENT_POINTS, st.score);
+}
+
+static void test_a_crowd_is_not_an_emergency(void)
+{
+    banner("a room full of people must not raise an alert");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* Twelve strangers, each with a phone, each in the room for the evening.
+     * Distinct advert shapes so nothing is folded together by rotation
+     * continuity. */
+    for (int i = 0; i < 12; i++) {
+        uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x20 + i), 0xFE};
+        uint8_t mac[6] = {0x40, 0x11, 0x22, 0x33, 0x44, (uint8_t)i};
+        observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                     .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+        for (int t = 0; t <= 310; t += 100) {
+            observore_track_observe(&o, SECS(t));
+        }
+    }
+    observore_status_t st;
+    observore_track_status(&st, SECS(320));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 12, "all twelve are listed");
+    CHECK(st.score <= OBSERVORE_FOLLOWER_SCORE_CAP,
+          "but presence is capped at %u, got %u",
+          OBSERVORE_FOLLOWER_SCORE_CAP, st.score);
+    CHECK(st.level != OBSERVORE_LEVEL_ALERT,
+          "so a crowd never reads as an alert (level %s)",
+          observore_level_name(st.level));
+
+    /* One of them rotates its address and comes back. That is different in
+     * kind, and it is not subject to the cap.
+     *
+     * On a clean table and in a tight window: the quantity being measured is a
+     * few points, decay removes one a minute, and a test that lets minutes
+     * pass between the two readings measures the decay instead. */
+    observore_track_init();
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t a1[6] = {0x7A, 0x01, 0x02, 0x03, 0x04, 0x05};
+    const uint8_t a2[6] = {0x7B, 0x06, 0x07, 0x08, 0x09, 0x0A};
+    observore_observation_t r1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                  .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+    observore_observation_t r2 = r1; r2.mac = a2;
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&r1, SECS(t));
+    }
+    observore_track_status(&st, SECS(324));
+    uint16_t before = st.score;
+    observore_track_observe(&r2, SECS(325));      /* quiet 15s: a rotation */
+    observore_track_status(&st, SECS(325));
+    CHECK(st.score >= before + 2,
+          "surviving a rotation is worth more than being present (%u -> %u)",
+          before, st.score);
 }
 
 static void test_scoring(void)
@@ -2232,6 +2290,7 @@ int main(void)
     test_random_signals_disagree();
     test_ssid();
     test_follower();
+    test_a_crowd_is_not_an_emergency();
     test_scoring();
     test_rssi_floor();
     test_table_pressure();

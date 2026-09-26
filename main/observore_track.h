@@ -50,6 +50,31 @@
 #define OBSERVORE_SCORE_COOLDOWN_US      (120 * 1000000LL)  /* per device re-score */
 #define OBSERVORE_SCORE_MAX               99
 
+/* The most the follower class may contribute at once.
+ *
+ * A follower is worth four points and may re-score every two minutes: two
+ * points a minute, each, against a decay of one point a minute in total. So a
+ * single persistent device pins the score at its ceiling in about ninety
+ * minutes and eight do it in seven -- measured, not predicted, on a board in a
+ * living room reading 98 with nothing in the table but followers. Alert became
+ * the resting state of any populated place, and a level that is always on says
+ * nothing.
+ *
+ * Five is the top of caution, chosen against the level boundaries rather than
+ * picked as a round number: six is where alert begins, so a cap of six would
+ * have let a crowd reach exactly the level this exists to prevent. Presence can
+ * raise caution and can never raise an alert. Anything that genuinely warrants alert --
+ * a body camera, an ALPR, a deauth flood, a follower that survived rotating
+ * its address -- scores outside this cap. */
+#define OBSERVORE_FOLLOWER_SCORE_CAP      5
+
+/* A follower that has changed address and come back is different in kind from
+ * one that has merely been in the room a while: it outlasted the single thing
+ * meant to make it forgettable. Presence in a cafe is not evidence; surviving
+ * a rotation is. Only the latter scores the full class weight, and it is not
+ * subject to the cap above. */
+#define OBSERVORE_FOLLOWER_PRESENT_POINTS 1
+
 /* A device that has not been heard from in this long is evicted. */
 #define OBSERVORE_DEVICE_TTL_US (30 * 60 * 1000000LL)
 
