@@ -62,6 +62,16 @@ typedef struct {
  * is not muting your phone, it is muting phones. */
 #define OBSERVORE_MUTE_ADDRESS_LIMIT 8
 
+/* Retired shapes are remembered across reboots, and this is how many.
+ *
+ * The verdict is kept, not the counters -- "this shape describes a
+ * population" is a fact about the shape, and one that a restart does not
+ * undo. Without this the safety net reset at every boot and the device went
+ * deaf again until each bad rule re-earned its nine addresses, which on a
+ * quiet night is hours. A device that reboots for every update would have
+ * spent a part of each day blinded. */
+#define OBSERVORE_MUTE_RETIRED_MAX 16
+
 /* The shortest broadcast name a baseline will turn into a rule. Name rules
  * match as substrings -- deliberate and useful when a person types one, a trap
  * when a baseline takes whatever it hears. Anything shorter is muted by

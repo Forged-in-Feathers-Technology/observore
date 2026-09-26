@@ -14,6 +14,8 @@
 static const char *TAG = "observore.mute";
 static void mute_load(void) {}
 static void mute_save(void) {}
+static void retired_load(void) {}
+static void retired_save(void) {}
 #else
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -42,6 +44,22 @@ static struct {
     uint8_t  last[OBSERVORE_MAC_LEN];
     bool     have_last;
 } s_stat[OBSERVORE_MUTE_MAX];
+
+/* Shapes judged to describe a population rather than a device. Stored by
+ * value rather than by rule index, so removing or adding rules cannot make
+ * the list point at the wrong one. */
+static uint32_t s_retired[OBSERVORE_MUTE_RETIRED_MAX];
+static uint8_t  s_retired_n;
+
+static bool shape_is_retired(uint32_t fp)
+{
+    for (uint8_t i = 0; i < s_retired_n; i++) {
+        if (s_retired[i] == fp) {
+            return true;
+        }
+    }
+    return false;
+}
 static uint32_t          s_suppressed;
 
 /* ------------------------------------------------------------------ */
@@ -74,6 +92,37 @@ static void mute_load(void)
     ESP_LOGI(TAG, "loaded %zu mute rules", s_count);
 }
 
+static void retired_load(void)
+{
+    uint32_t buf[OBSERVORE_MUTE_RETIRED_MAX] = {0};
+    observore_nvs_item_t item = {.key = "retired", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = buf, .len = sizeof(buf)};
+    if (observore_nvs_read(&item, 1) != ESP_OK || !item.found) {
+        return;
+    }
+    size_t n = item.len / sizeof(uint32_t);
+    if (n > OBSERVORE_MUTE_RETIRED_MAX) {
+        n = OBSERVORE_MUTE_RETIRED_MAX;
+    }
+    memcpy(s_retired, buf, n * sizeof(uint32_t));
+    s_retired_n = (uint8_t)n;
+    if (n) {
+        ESP_LOGI(TAG, "%u advert shapes stay retired from a previous run",
+                 (unsigned)n);
+    }
+}
+
+static void retired_save(void)
+{
+    const observore_nvs_item_t item = {
+        .key = "retired", .type = OBSERVORE_NVS_BLOB,
+        .buf = s_retired, .len = s_retired_n * sizeof(uint32_t),
+    };
+    if (observore_nvs_write(&item, 1) != ESP_OK) {
+        ESP_LOGW(TAG, "could not record the retired shapes");
+    }
+}
+
 static void mute_save(void)
 {
     const observore_nvs_item_t item = {
@@ -95,6 +144,7 @@ void observore_mute_init(void)
     s_suppressed = 0;
     memset(s_rules, 0, sizeof(s_rules));
     mute_load();
+    retired_load();
     MUTE_UNLOCK();
 }
 
@@ -107,6 +157,26 @@ bool observore_mute_class_is_protected(observore_class_t cls)
     /* Cameras and fleet telematics are deliberately unprotected: those are
      * street furniture, and muting a whole brand of them is the point. */
     return observore_class_desc(cls)->protected_cls;
+}
+
+/* Remember a shape as retired, and write it down. Called with the lock held.
+ *
+ * The list is small and oldest-out: sixteen shapes is far more than a room
+ * produces, and if it ever filled, the newest judgement is the one worth
+ * keeping. */
+static void retire_shape(uint32_t fp)
+{
+    if (fp == 0 || shape_is_retired(fp)) {
+        return;
+    }
+    if (s_retired_n < OBSERVORE_MUTE_RETIRED_MAX) {
+        s_retired[s_retired_n++] = fp;
+    } else {
+        memmove(&s_retired[0], &s_retired[1],
+                sizeof(s_retired[0]) * (OBSERVORE_MUTE_RETIRED_MAX - 1));
+        s_retired[OBSERVORE_MUTE_RETIRED_MAX - 1] = fp;
+    }
+    retired_save();
 }
 
 /* Count what a rule has covered, and retire a fingerprint rule that has
@@ -131,6 +201,7 @@ static void note_reach(size_t i, const uint8_t mac[OBSERVORE_MAC_LEN])
         s_rules[i].kind == OBSERVORE_MUTE_FINGERPRINT &&
         s_stat[i].addresses > OBSERVORE_MUTE_ADDRESS_LIMIT) {
         s_stat[i].disabled = true;
+        retire_shape(s_rules[i].fingerprint);
         ESP_LOGW(TAG, "ignore rule %u (fingerprint %08lx) has covered %u "
                       "addresses -- it describes a kind of device, not one, "
                       "so it is no longer honoured",
@@ -146,7 +217,9 @@ bool observore_mute_stat(size_t index, observore_mute_stat_t *out)
     if (index < s_count && out) {
         out->suppressed = s_stat[index].suppressed;
         out->addresses  = s_stat[index].addresses;
-        out->disabled   = s_stat[index].disabled;
+        out->disabled   = s_stat[index].disabled ||
+                          (s_rules[index].kind == OBSERVORE_MUTE_FINGERPRINT &&
+                           shape_is_retired(s_rules[index].fingerprint));
         ok = true;
     }
     MUTE_UNLOCK();
@@ -188,7 +261,7 @@ bool observore_mute_matches(const uint8_t mac[OBSERVORE_MAC_LEN], observore_clas
                  * being honoured at all. */
                 hit = fingerprint != 0 && r->fingerprint == fingerprint &&
                       !observore_mute_class_is_protected(cls) &&
-                      !s_stat[i].disabled;
+                      !shape_is_retired(r->fingerprint);
                 break;
             default:
                 break;
@@ -311,6 +384,13 @@ esp_err_t observore_mute_clear(void)
     s_count = 0;
     memset(s_rules, 0, sizeof(s_rules));
     mute_save();
+    /* Clearing the list is a fresh start, and that includes the judgements:
+     * a shape retired under one baseline should not haunt the next one. The
+     * device will reach the same conclusion again soon enough if it is still
+     * true, and the counting costs nothing. */
+    memset(s_stat, 0, sizeof(s_stat));
+    s_retired_n = 0;
+    retired_save();
     MUTE_UNLOCK();
     return ESP_OK;
 }

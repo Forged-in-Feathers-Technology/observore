@@ -1083,6 +1083,22 @@ static void test_mute_rule_retires_when_it_covers_a_population(void)
     CHECK(st.addresses > OBSERVORE_MUTE_ADDRESS_LIMIT, "having covered %u addresses",
           (unsigned)st.addresses);
 
+    /* The verdict outlives the rule. Retirement is a fact about the shape, so
+     * writing the same rule again does not resurrect it -- which is also what
+     * makes it survivable across a reboot, where the counters do not. */
+    observore_mute_rule_t again = fp;
+    observore_mute_remove(0);
+    CHECK(observore_mute_add(&again, NULL) == ESP_OK, "the same rule can be re-added");
+    mac[5] = 0x99;
+    CHECK(!observore_mute_matches(mac, OBSERVORE_CLASS_UNKNOWN, NULL, fpv),
+          "but a shape already judged a population stays retired");
+
+    /* Clearing the list is a fresh start, judgements included. */
+    observore_mute_clear();
+    CHECK(observore_mute_add(&again, NULL) == ESP_OK, "add it once more after a clear");
+    CHECK(observore_mute_matches(mac, OBSERVORE_CLASS_UNKNOWN, NULL, fpv),
+          "and it is honoured again");
+
     observore_mute_clear();
 }
 
