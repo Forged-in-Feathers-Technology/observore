@@ -327,8 +327,17 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
          * ever within the floor, not whether it is right now. */
         bool close_enough = !slot->ev.addr_random ||
                             slot->ev.rssi >= OBSERVORE_RANDOM_FOLLOWER_RSSI;
+        /* Something that publishes both a fixed address and a name has opted
+         * out of being hard to identify, so persistence on its own says much
+         * less. It is held to a longer span rather than excluded: see the
+         * constant for why an exemption would be the wrong shape. */
+        bool trivially_identifiable = !slot->ev.addr_random &&
+                                      slot->ev.detail[0] != '\0';
+        int64_t needed = trivially_identifiable
+                             ? OBSERVORE_FOLLOWER_NAMED_SPAN_US
+                             : OBSERVORE_FOLLOWER_MIN_SPAN_US;
         if (slot->ev.hits >= OBSERVORE_FOLLOWER_MIN_HITS &&
-            span >= OBSERVORE_FOLLOWER_MIN_SPAN_US && close_enough) {
+            span >= needed && close_enough) {
             slot->ev.cls = OBSERVORE_CLASS_FOLLOWER;
             slot->ev.evidence = OBSERVORE_EVIDENCE_PERSISTENCE;
             slot->ev.points = observore_class_points(OBSERVORE_CLASS_FOLLOWER);

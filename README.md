@@ -839,6 +839,27 @@ minutes to an hour, so a `mac` rule silences a device only until it rotates.
 Measured here, all fourteen nearby BLE devices used rotating addresses. A
 MAC-based baseline would have been worthless within the hour.
 
+### Things bolted to the building
+
+A solar gateway that broadcasts `Envoy / 1219…` from a fixed address, eighty-
+eight decibels down, was being reported as a **follower** — a class defined as
+"unidentified but persistently nearby", when it is neither unidentified nor
+going anywhere. Enphase gear is now named as a **`fixture`**, worth no points,
+and that is better than muting it: an ignore rule hides a thing, a class
+explains it, and the explanation survives **Clear ignores**.
+
+The general half matters more than the vendor. Anything publishing both a fixed
+public address and a stable broadcast name has opted out of being hard to
+identify, so persistence alone says much less about it — that is what a printer
+looks like, not what something trying not to be noticed looks like.
+
+Such a device is held to **an hour** before persistence promotes it, rather
+than the five minutes a nameless or rotating one gets. Not an exemption, and
+the distinction is the point: a cheap tracker with a fixed name from a public
+address would still be following you, and an hour beside you is worth a word
+whatever the thing calls itself. Five minutes catches the fixture in the next
+room; an hour does not.
+
 ### Equipment that transmits at other radios
 
 Everything else here is equipment that watches. This is the other kind, and it

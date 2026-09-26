@@ -23,6 +23,7 @@ typedef enum {
     OBSERVORE_CLASS_PEER_DETECTOR,    /* another detector announcing itself */
     OBSERVORE_CLASS_DEAUTH,           /* someone knocking devices off a network */
     OBSERVORE_CLASS_HUNTER,           /* gear that transmits at other radios */
+    OBSERVORE_CLASS_FIXTURE,          /* identified household equipment */
     OBSERVORE_CLASS_MAX
 } observore_class_t;
 

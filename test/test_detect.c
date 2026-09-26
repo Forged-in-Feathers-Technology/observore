@@ -826,6 +826,64 @@ static void test_fingerprint_safety(void)
           "a zero fingerprint rule must be refused");
 }
 
+static void test_fixtures_are_not_followers(void)
+{
+    banner("a named appliance is not something following you");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* An Enphase Envoy: a public address, a stable name, bolted to a wall. */
+    uint8_t adv[] = {0x02, 0x01, 0x06,
+                     0x0D, 0x09, 'E', 'n', 'v', 'o', 'y', ' ', '1', '2', '1', '9', '0', '1'};
+    const uint8_t mac[6] = {0x94, 0x34, 0x69, 0x9D, 0x28, 0xC0};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -88,
+                                 .addr_random = false, .adv = adv, .adv_len = sizeof(adv)};
+    observore_event_t ev;
+    CHECK(observore_classify(&o, &ev), "it classifies from its name");
+    CHECK(ev.cls == OBSERVORE_CLASS_FIXTURE, "as a fixture, not a follower");
+    CHECK(observore_class_points(OBSERVORE_CLASS_FIXTURE) == 0, "worth no points");
+
+    /* And a nameless appliance with a fixed address -- no keyword to match --
+     * still must not be promoted at five minutes the way a random address is.
+     * It gets an hour, because an hour beside you is worth saying either way. */
+    observore_track_init();
+    uint8_t bare[] = {0x02, 0x01, 0x06, 0x05, 0x09, 'P', 'r', 'n', 't'};
+    const uint8_t pm[6] = {0x3C, 0x2A, 0xF4, 0x01, 0x02, 0x03};
+    observore_observation_t op = {.mac = pm, .src = OBSERVORE_SRC_BLE, .rssi = -70,
+                                 .addr_random = false, .adv = bare, .adv_len = sizeof(bare)};
+    for (int t = 0; t <= 400; t += 100) {
+        observore_track_observe(&op, SECS(t));
+    }
+    observore_status_t st;
+    observore_track_status(&st, SECS(400));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 0,
+          "a named device on a fixed address is not a follower at seven minutes");
+
+    /* An hour of it is a different statement. */
+    observore_track_observe(&op, SECS(3700));
+    observore_track_status(&st, SECS(3700));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 1,
+          "but an hour beside you still counts");
+
+    /* The rotating, nameless case is untouched: five minutes is still five
+     * minutes for something trying not to be identified. */
+    observore_track_init();
+    uint8_t quiet[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
+    const uint8_t rm[6] = {0x4A, 0x11, 0x22, 0x33, 0x44, 0x55};
+    observore_observation_t oq = {.mac = rm, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                 .addr_random = true, .adv = quiet, .adv_len = sizeof(quiet)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&oq, SECS(t));
+    }
+    observore_track_status(&st, SECS(310));
+    CHECK(st.class_counts[OBSERVORE_CLASS_FOLLOWER] == 1,
+          "a nameless rotating address is still promoted at five minutes");
+
+    observore_mute_clear();
+}
+
 static void test_hunter_gear(void)
 {
     banner("gear that transmits at other radios");
@@ -2102,6 +2160,7 @@ int main(void)
     test_fingerprint();
     test_fingerprint_safety();
     test_baseline_follower();
+    test_fixtures_are_not_followers();
     test_hunter_gear();
     test_squachmesh();
     test_baseline_does_not_blind();

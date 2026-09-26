@@ -90,6 +90,12 @@ static const observore_keyword_t BLE_NAME_KEYWORDS[] = {
     {"airtag",        OBSERVORE_CLASS_TRACKER,      "AirTag"},
     /* A Flipper advertises "Flipper " and then whatever the owner named it. */
     {"flipper",       OBSERVORE_CLASS_HUNTER,       "Flipper Zero"},
+    /* Enphase solar equipment: the Envoy gateway and the Encharge batteries
+     * both broadcast their model and serial, sit still forever, and were
+     * arriving as followers. */
+    {"envoy",         OBSERVORE_CLASS_FIXTURE,      "Enphase Envoy"},
+    {"encharg",       OBSERVORE_CLASS_FIXTURE,      "Enphase Encharge"},
+    {"enphase",       OBSERVORE_CLASS_FIXTURE,      "Enphase solar"},
 };
 
 /* Matched against Wi-Fi SSIDs.  Deliberately narrower than the BLE list --
@@ -424,6 +430,12 @@ static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
      * flood in progress is an act. Protected, for the same reason a tracker
      * is: muting the kind would silence a stranger's as well as your own. */
     [OBSERVORE_CLASS_HUNTER]           = {"hunter",           3, OBSERVORE_URGENCY_NORMAL, true },
+    /* Equipment bolted to a building, named and scored at nothing. Worth
+     * recognising rather than ignoring: a solar gateway that says "Envoy" was
+     * being promoted to follower -- "unidentified but persistently nearby" --
+     * when it is neither unidentified nor going anywhere. Naming it is more
+     * honest than muting it, and it survives a Clear ignores. */
+    [OBSERVORE_CLASS_FIXTURE]          = {"fixture",          0, OBSERVORE_URGENCY_LOW,    false},
 };
 
 const observore_class_desc_t *observore_class_desc(observore_class_t cls)
