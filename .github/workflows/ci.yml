@@ -65,8 +65,9 @@ jobs:
           - board: cyd-3248s035r-st7796
             target: esp32
             profile: boards/cyd-3248s035r-st7796.defaults
-          # Built but not shipped: the panel is not driven yet, so a release
-          # asset would hand somebody a board with a dark screen.  Compiled
+          # Built but not shipped: the panel works, the FT3168 touch
+          # controller is not driven yet, and a release asset would hand
+          # somebody a touchscreen board whose screen ignores them.  Compiled
           # here so the profile cannot rot while that work happens.
           - board: waveshare-s3-amoled-143
             target: esp32s3

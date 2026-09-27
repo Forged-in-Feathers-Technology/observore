@@ -187,7 +187,35 @@ config OBSERVORE_DISPLAY_ILI9341
         are the values every other project uses for it, and each is a build
         option in case they are wrong.
 
+config OBSERVORE_DISPLAY_QSPI_AMOLED
+    bool "SH8601 / CO5300 AMOLED over QSPI"
+    help
+        The round AMOLED panels on Waveshare's ESP32-S3 boards, driven over
+        four data lines through espressif/esp_lcd_sh8601, which handles both
+        controllers.  There is no backlight pin: brightness is a command to
+        the panel, and black pixels are simply off.
+
+        Which of the two controllers is behind the glass varies within one
+        product, so it is a separate option below and getting it wrong is
+        visible -- see OBSERVORE_DISPLAY_CO5300.
+
 endchoice
+
+config OBSERVORE_DISPLAY_CO5300
+    bool "The panel is a CO5300 rather than an SH8601"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default y
+    help
+        Waveshare ships the 1.43" board with either controller and tells them
+        apart at runtime by bit-banging a read of register 0xDA: 0x86 is an
+        SH8601, 0xFF a CO5300.  Ours answered 0xFF.
+
+        They need different initialisation and the CO5300 starts six pixels
+        further along, so the wrong choice shows either nothing at all or an
+        image shifted sideways by six pixels.  A build option rather than a
+        runtime probe, because the probe means driving the panel's pins by
+        hand before the driver owns them, and the failure here is obvious the
+        moment anybody looks at the screen.
 
 
 config OBSERVORE_DISPLAY_WIDTH
@@ -201,6 +229,50 @@ config OBSERVORE_DISPLAY_WIDTH
 config OBSERVORE_DISPLAY_HEIGHT
     int "Panel height in landscape, pixels"
     default 240
+
+config OBSERVORE_DISPLAY_QSPI_D0
+    int "QSPI data line 0"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default 11
+
+config OBSERVORE_DISPLAY_QSPI_D1
+    int "QSPI data line 1"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default 12
+
+config OBSERVORE_DISPLAY_QSPI_D2
+    int "QSPI data line 2"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default 13
+
+config OBSERVORE_DISPLAY_QSPI_D3
+    int "QSPI data line 3"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default 14
+
+config OBSERVORE_DISPLAY_X_OFFSET
+    int "First column of the panel's own frame"
+    default 0
+    help
+        Some controllers address a frame wider than the glass and start it
+        part way along.  Six on a CO5300.  Everything drawn is shifted by
+        this, and a wrong value shows as an image offset sideways with a
+        stripe of stale pixels at one edge.
+
+config OBSERVORE_DISPLAY_INSET_X
+    int "Left and right margin, pixels"
+    default 0
+    help
+        Space the text grid may not use.  Zero on a rectangular panel.  On a
+        round one it is what keeps the corners of the grid inside the glass:
+        the largest square that fits in a circle of diameter D has a side of
+        D / sqrt(2), so a 466-pixel circle leaves 69 pixels at each side.
+
+config OBSERVORE_DISPLAY_INSET_Y
+    int "Top and bottom margin, pixels"
+    default 0
+    help
+        As OBSERVORE_DISPLAY_INSET_X, for the other axis.
 
 config OBSERVORE_DISPLAY_MOSI
     int "MOSI GPIO"
