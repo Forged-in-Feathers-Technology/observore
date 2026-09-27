@@ -24,5 +24,13 @@ dependencies:
     version: "^1.2.0"
     rules:
       - if: "target == esp32"
+  # The QSPI AMOLED driver, which handles both the SH8601 and the CO5300
+  # behind the same entry points. S3 only, for the same reason as the two
+  # above: its manifest names the targets it supports.
+  espressif/esp_lcd_sh8601:
+    version: "^1.0.0"
+    rules:
+      - if: "target == esp32s3"
+
   idf:
     version: ">=5.0"

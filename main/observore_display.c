@@ -20,6 +20,14 @@
 #include "esp_lcd_st7796.h"
 #define PANEL_NAME "ST7796"
 #define new_panel  esp_lcd_new_panel_st7796
+#elif CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#include "esp_lcd_sh8601.h"
+#if CONFIG_OBSERVORE_DISPLAY_CO5300
+#define PANEL_NAME "CO5300"
+#else
+#define PANEL_NAME "SH8601"
+#endif
+#define new_panel  esp_lcd_new_panel_sh8601
 #else
 #include "esp_lcd_panel_st7789.h"
 #define PANEL_NAME "ST7789"
@@ -64,14 +72,35 @@
 #ifndef CONFIG_OBSERVORE_DISPLAY_MIRROR_Y
 #define CONFIG_OBSERVORE_DISPLAY_MIRROR_Y 0
 #endif
+#ifndef CONFIG_OBSERVORE_DISPLAY_X_OFFSET
+#define CONFIG_OBSERVORE_DISPLAY_X_OFFSET 0
+#endif
+#ifndef CONFIG_OBSERVORE_DISPLAY_INSET_X
+#define CONFIG_OBSERVORE_DISPLAY_INSET_X 0
+#endif
+#ifndef CONFIG_OBSERVORE_DISPLAY_INSET_Y
+#define CONFIG_OBSERVORE_DISPLAY_INSET_Y 0
+#endif
 
 static const char *TAG = "observore.display";
 
 /* Landscape. The panel is 240x320 portrait; swapping axes gives 320 wide. */
 #define DISP_W OBSERVORE_DISPLAY_W
 #define DISP_H OBSERVORE_DISPLAY_H
-#define COLS   (DISP_W / OBSERVORE_FONT_W)   /* 40 */
-#define ROWS   (DISP_H / OBSERVORE_FONT_H)   /* 15 */
+
+/* Where the text grid begins, and how much of the glass it may use.
+ *
+ * Zero on a rectangular panel, so the grid is the screen. On a round one the
+ * grid is the largest square that fits inside the circle -- 41 columns by 20
+ * rows on a 466-pixel one -- and the inset is the quarter-circle at each
+ * corner that no character may be drawn into. Text does not reflow around a
+ * curve legibly at eight pixels a character, and a page of readings that is
+ * clipped at the corners is worse than one that is smaller and whole. */
+#define INSET_X CONFIG_OBSERVORE_DISPLAY_INSET_X
+#define INSET_Y CONFIG_OBSERVORE_DISPLAY_INSET_Y
+#define X_OFF   CONFIG_OBSERVORE_DISPLAY_X_OFFSET
+#define COLS   ((DISP_W - 2 * INSET_X) / OBSERVORE_FONT_W)   /* 40 */
+#define ROWS   ((DISP_H - 2 * INSET_Y) / OBSERVORE_FONT_H)   /* 15 */
 
 /* RGB565. Chosen to read across a room, not to be pretty. */
 #define C_BLACK  0x0000
@@ -103,6 +132,7 @@ static const char *TAG = "observore.display";
 
 
 static esp_lcd_panel_handle_t s_panel;
+static esp_lcd_panel_io_handle_t s_io;
 /* What is on the glass, so a redraw sends only the lines that changed. */
 static char     s_shown[ROWS][COLS + 1];
 static uint16_t s_shown_bg[ROWS];
@@ -123,11 +153,69 @@ static int64_t  s_notice_until_us;
 static uint16_t s_cells[CELLS][OBSERVORE_FONT_W * OBSERVORE_FONT_H];
 static unsigned s_cell_next;
 
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+/* Waveshare's own sequence for each controller, kept as they wrote it.
+ *
+ * 0x11 sleep out, 0x53 brightness control on, 0x51 brightness (starting at
+ * zero so nothing is watched initialising), 0x29 display on, then 0x51 again
+ * at full. The CO5300 wants 0xC4 set first and no tearing-effect line; the
+ * SH8601 wants the TE configuration and no 0xC4. Neither list is guessed. */
+#if CONFIG_OBSERVORE_DISPLAY_CO5300
+static const sh8601_lcd_init_cmd_t PANEL_INIT_CMDS[] = {
+    {0x11, (uint8_t []){0x00}, 0, 80},
+    {0xC4, (uint8_t []){0x80}, 1, 0},
+    {0x53, (uint8_t []){0x20}, 1, 1},
+    {0x63, (uint8_t []){0xFF}, 1, 1},
+    {0x51, (uint8_t []){0x00}, 1, 1},
+    {0x29, (uint8_t []){0x00}, 0, 10},
+    {0x51, (uint8_t []){0xFF}, 1, 0},
+};
+#else
+static const sh8601_lcd_init_cmd_t PANEL_INIT_CMDS[] = {
+    {0x11, (uint8_t []){0x00}, 0, 120},
+    {0x44, (uint8_t []){0x01, 0xD1}, 2, 0},
+    {0x35, (uint8_t []){0x00}, 1, 0},
+    {0x53, (uint8_t []){0x20}, 1, 10},
+    {0x51, (uint8_t []){0x00}, 1, 10},
+    {0x29, (uint8_t []){0x00}, 0, 10},
+    {0x51, (uint8_t []){0xFF}, 1, 0},
+};
+#endif
+/* Brightness is a command here rather than a pin, so the levels are the
+ * panel's own 0-255 rather than a PWM duty. Same four steps as everywhere
+ * else, and they mean the same thing to a reader. */
+#define PANEL_BRIGHTNESS_CMD 0x51
+#endif
+
+/* One row of glyph cells, which is how much of the panel is cleared at a
+ * time. A round panel has corners the text grid never reaches, and an AMOLED
+ * powers up with whatever was last in its RAM, so the whole surface is
+ * written once at startup rather than only the part with characters on it. */
+#define CLEAR_STRIP_BYTES (DISP_W * OBSERVORE_FONT_H * 2)
+
 /* The panel takes each 16-bit pixel most significant byte first and the SPI
  * path sends the host's bytes as they are, so the swap is done here. Measured
  * on the bench rather than taken from the data_endian field: without this the
  * green band came out red, and with inversion on top it came out cyan. */
 static inline uint16_t px(uint16_t c) { return (uint16_t)((c << 8) | (c >> 8)); }
+
+/* Black the whole panel, corners included, in strips one glyph tall. Uses a
+ * temporary buffer rather than a static one: this runs once, and on the board
+ * that needs it there are eight megabytes of PSRAM to borrow it from. */
+static void clear_panel(void)
+{
+    uint16_t *strip = heap_caps_malloc(CLEAR_STRIP_BYTES, MALLOC_CAP_DMA);
+    if (!strip) {
+        ESP_LOGW(TAG, "no buffer to clear the panel with; corners may be stale");
+        return;
+    }
+    memset(strip, 0, CLEAR_STRIP_BYTES);
+    for (int y = 0; y < DISP_H; y += OBSERVORE_FONT_H) {
+        int h = (y + OBSERVORE_FONT_H <= DISP_H) ? OBSERVORE_FONT_H : DISP_H - y;
+        esp_lcd_panel_draw_bitmap(s_panel, X_OFF, y, X_OFF + DISP_W, y + h, strip);
+    }
+    free(strip);
+}
 
 static void draw_glyph(int col, int row, char c, uint16_t fg, uint16_t bg)
 {
@@ -141,7 +229,8 @@ static void draw_glyph(int col, int row, char c, uint16_t fg, uint16_t bg)
             cell[y * OBSERVORE_FONT_W + x] = px((g[y] >> (7 - x)) & 1 ? fg : bg);
         }
     }
-    int x0 = col * OBSERVORE_FONT_W, y0 = row * OBSERVORE_FONT_H;
+    int x0 = X_OFF + INSET_X + col * OBSERVORE_FONT_W;
+    int y0 = INSET_Y + row * OBSERVORE_FONT_H;
     esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x0 + OBSERVORE_FONT_W,
                               y0 + OBSERVORE_FONT_H, cell);
 }
@@ -391,9 +480,11 @@ static void ui_task(void *arg);
 
 static void bl_apply(void)
 {
+#if !CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
     if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
         return;
     }
+#endif
     uint8_t level = s_bl_level;
 #if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
     if (level == OBSERVORE_BRIGHT_AUTO) {
@@ -403,8 +494,17 @@ static void bl_apply(void)
     if (level >= BL_COUNT) {
         level = 0;
     }
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    /* No backlight to dim: an AMOLED lights each pixel itself, and the panel
+     * scales them for us. The same four steps, sent as a command. */
+    if (s_io) {
+        uint8_t duty = BL_LEVELS[level];
+        esp_lcd_panel_io_tx_param(s_io, PANEL_BRIGHTNESS_CMD, &duty, 1);
+    }
+#else
     ledc_set_duty(BL_MODE, BL_CHANNEL, BL_LEVELS[level]);
     ledc_update_duty(BL_MODE, BL_CHANNEL);
+#endif
 }
 
 /* Nesting depth of backlight holds; see the header for why they exist. */
@@ -444,9 +544,11 @@ static void bl_save(void)
 
 static void bl_init(void)
 {
+#if !CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
     if (CONFIG_OBSERVORE_DISPLAY_BL < 0) {
         return;
     }
+#endif
 
     uint8_t v = 0;
     observore_nvs_item_t item = {.key = "bright", .type = OBSERVORE_NVS_BLOB,
@@ -468,6 +570,11 @@ static void bl_init(void)
         s_bl_level = 0;
     }
 
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    /* Nothing to set up: the stored level goes straight to the panel. */
+    bl_apply();
+    return;
+#else
     ledc_timer_config_t timer = {
         .speed_mode      = BL_MODE,
         .duty_resolution = BL_BITS,
@@ -491,6 +598,7 @@ static void bl_init(void)
         return;
     }
     bl_apply();
+#endif
 }
 
 void observore_display_init(void)
@@ -501,6 +609,19 @@ void observore_display_init(void)
         return;
     }
 
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    /* Four data lines and no D/C pin: the command travels in the address
+     * phase instead, which is what the QSPI flag below selects. */
+    spi_bus_config_t bus = {
+        .sclk_io_num = CONFIG_OBSERVORE_DISPLAY_SCLK,
+        .data0_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D0,
+        .data1_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D1,
+        .data2_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D2,
+        .data3_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D3,
+        .flags = SPICOMMON_BUSFLAG_QUAD,
+        .max_transfer_sz = CLEAR_STRIP_BYTES,
+    };
+#else
     spi_bus_config_t bus = {
         .mosi_io_num = CONFIG_OBSERVORE_DISPLAY_MOSI,
         .miso_io_num = CONFIG_OBSERVORE_DISPLAY_MISO,
@@ -509,6 +630,7 @@ void observore_display_init(void)
         .quadhd_io_num = -1,
         .max_transfer_sz = sizeof(s_cells[0]),
     };
+#endif
     esp_err_t err = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI bus: %s", esp_err_to_name(err));
@@ -516,6 +638,18 @@ void observore_display_init(void)
     }
 
     esp_lcd_panel_io_handle_t io = NULL;
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    esp_lcd_panel_io_spi_config_t io_cfg = {
+        .cs_gpio_num = CONFIG_OBSERVORE_DISPLAY_CS,
+        .dc_gpio_num = -1,
+        .spi_mode = 0,
+        .pclk_hz = CONFIG_OBSERVORE_DISPLAY_MHZ * 1000 * 1000,
+        .trans_queue_depth = 4,
+        .lcd_cmd_bits = 32,
+        .lcd_param_bits = 8,
+        .flags = { .quad_mode = true },
+    };
+#else
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .cs_gpio_num = CONFIG_OBSERVORE_DISPLAY_CS,
         .dc_gpio_num = CONFIG_OBSERVORE_DISPLAY_DC,
@@ -525,19 +659,31 @@ void observore_display_init(void)
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
     };
+#endif
     err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &io_cfg, &io);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "panel IO: %s", esp_err_to_name(err));
         return;
     }
 
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    sh8601_vendor_config_t vendor = {
+        .init_cmds = PANEL_INIT_CMDS,
+        .init_cmds_size = sizeof(PANEL_INIT_CMDS) / sizeof(PANEL_INIT_CMDS[0]),
+        .flags = { .use_qspi_interface = 1 },
+    };
+#endif
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = CONFIG_OBSERVORE_DISPLAY_RST,
         .rgb_ele_order = CONFIG_OBSERVORE_DISPLAY_BGR ? LCD_RGB_ELEMENT_ORDER_BGR
                                                       : LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+        .vendor_config = &vendor,
+#endif
     };
+    s_io = io;
     err = new_panel(io, &panel_cfg, &s_panel);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, PANEL_NAME ": %s", esp_err_to_name(err));
@@ -550,10 +696,15 @@ void observore_display_init(void)
      * build setting either way, because the failure looks like a negative and
      * is obvious the moment the screen is looked at. */
     esp_lcd_panel_invert_color(s_panel, CONFIG_OBSERVORE_DISPLAY_INVERT);
+#if !CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    /* The rectangular panels are portrait parts used in landscape. The round
+     * one is square and arrives the right way up. */
     esp_lcd_panel_swap_xy(s_panel, true);
     esp_lcd_panel_mirror(s_panel, CONFIG_OBSERVORE_DISPLAY_MIRROR_X,
                          CONFIG_OBSERVORE_DISPLAY_MIRROR_Y);
+#endif
     esp_lcd_panel_disp_on_off(s_panel, true);
+    clear_panel();
 
 
     memset(s_shown, 0, sizeof(s_shown));

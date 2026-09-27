@@ -1,17 +1,15 @@
 # Waveshare ESP32-S3-Touch-AMOLED-1.43 -- a round 1.43" AMOLED on an S3 with
 # 16 MB flash and 8 MB octal PSRAM.
 #
-# Radio only at this stage. The panel, the touch controller and the motion
-# sensor are all present and none of them is driven yet; what this profile
-# does is get the detector itself running on the board, so the hardware is
-# proven before any of the interesting work starts.
+# The panel is driven now. The touch controller and the motion sensor are
+# still present and still idle.
 #
 # Everything here was read off the board rather than out of a datasheet --
 # esptool for the silicon, and the factory demo's own boot log and app image
 # for the peripherals:
 #
 #   ESP32-S3 rev v0.2, 16 MB flash, 8 MB octal PSRAM at 80 MHz
-#   SH8601      round AMOLED over QSPI (espressif__esp_lcd_sh8601 2.0.1)
+#   SH8601/CO5300  round AMOLED over QSPI (espressif__esp_lcd_sh8601)
 #   QMI8658     6-axis IMU, I2C slave 0x6A
 #   PCF85063    real-time clock
 #   a touch controller whose part number appears nowhere in the factory image
@@ -32,7 +30,41 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 
-# No user LED on this board. The panel is the indicator, once it is driven.
+# The panel, from Waveshare's own ESP-IDF sources rather than the wiki page,
+# whose pin table contradicts itself. QSPI on SPI2: CS 9, clock 10, data
+# 11-14, reset 21. There is no D/C pin and no backlight pin.
+#
+# 466x466, round. The text grid is the largest square inside that circle --
+# 41 columns by 20 rows, against 40x15 on the 2.8" boards -- and the 69- and
+# 73-pixel insets are the corners it may not be drawn into.
+#
+# The board ships with either of two controllers and Waveshare tells them
+# apart by reading register 0xDA: 0x86 an SH8601, 0xFF a CO5300. The factory
+# firmware on this unit logged 0xFF before it was overwritten, so this is a
+# CO5300 -- which also needs the six-pixel column offset below.
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED=y
+CONFIG_OBSERVORE_DISPLAY_CO5300=y
+CONFIG_OBSERVORE_DISPLAY_WIDTH=466
+CONFIG_OBSERVORE_DISPLAY_HEIGHT=466
+CONFIG_OBSERVORE_DISPLAY_X_OFFSET=6
+CONFIG_OBSERVORE_DISPLAY_INSET_X=69
+CONFIG_OBSERVORE_DISPLAY_INSET_Y=73
+CONFIG_OBSERVORE_DISPLAY_SCLK=10
+CONFIG_OBSERVORE_DISPLAY_CS=9
+CONFIG_OBSERVORE_DISPLAY_RST=21
+CONFIG_OBSERVORE_DISPLAY_QSPI_D0=11
+CONFIG_OBSERVORE_DISPLAY_QSPI_D1=12
+CONFIG_OBSERVORE_DISPLAY_QSPI_D2=13
+CONFIG_OBSERVORE_DISPLAY_QSPI_D3=14
+CONFIG_OBSERVORE_DISPLAY_MHZ=40
+CONFIG_OBSERVORE_DISPLAY_BL=-1
+CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
+# The touch controller is an FT3168 at 0x38 on I2C SDA 47 / SCL 48. Not
+# driven yet: the existing touch code speaks XPT2046 over SPI.
+# CONFIG_OBSERVORE_TOUCH is not set
+
+# No user LED on this board. The panel is the indicator.
 CONFIG_OBSERVORE_LED_NONE=y
 CONFIG_OBSERVORE_BUTTON_GPIO=0
 
