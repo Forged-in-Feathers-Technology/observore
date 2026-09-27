@@ -340,17 +340,56 @@ config OBSERVORE_DISPLAY_MIRROR_Y
     default n
 
 config OBSERVORE_TOUCH
-    bool "Resistive touch panel (XPT2046)"
+    bool "Touch panel"
     default n
     help
-        The touch controller carried by the Cheap Yellow Display, on its own
-        SPI pins. Off by default: a panel without touch, or with a controller
-        that is not an XPT2046, would only poll a line that never answers.
+        Off by default: a panel without touch would only poll a line that
+        never answers. Which controller is behind the glass is a separate
+        choice, because the two supported ones share no wiring, no bus and
+        no arithmetic.
 
 if OBSERVORE_TOUCH
 
+choice OBSERVORE_TOUCH_KIND
+    prompt "Touch controller"
+    default OBSERVORE_TOUCH_XPT2046
+
+config OBSERVORE_TOUCH_XPT2046
+    bool "XPT2046, resistive, over SPI"
+    help
+        The controller carried by the Cheap Yellow Displays. Resistive, so a
+        press is a measured pressure and the panel needs calibrating against
+        the four edges of the glass in front of you.
+
+config OBSERVORE_TOUCH_FT3168
+    bool "FT3168, capacitive, over I2C"
+    help
+        The controller on Waveshare's round AMOLED boards. Capacitive, which
+        removes most of what the resistive path has to do: the chip reports
+        how many fingers are down and where each one is, already in panel
+        pixels, so there is no pressure threshold, no median filtering and
+        no calibration to get wrong.
+
+endchoice
+
+config OBSERVORE_TOUCH_SDA
+    int "Touch I2C SDA GPIO"
+    depends on OBSERVORE_TOUCH_FT3168
+    default 47
+
+config OBSERVORE_TOUCH_SCL
+    int "Touch I2C SCL GPIO"
+    depends on OBSERVORE_TOUCH_FT3168
+    default 48
+
+config OBSERVORE_TOUCH_I2C_ADDR
+    hex "Touch I2C address"
+    depends on OBSERVORE_TOUCH_FT3168
+    default 0x38
+
 config OBSERVORE_TOUCH_SHARED_BUS
     bool "Touch is on the panel's SPI bus"
+    depends on OBSERVORE_TOUCH_XPT2046
     default n
     help
         The 2.8" boards wire the touch controller to its own pins; some of the
@@ -361,22 +400,28 @@ config OBSERVORE_TOUCH_SHARED_BUS
 
 config OBSERVORE_TOUCH_MOSI
     int "Touch MOSI GPIO"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 32
 config OBSERVORE_TOUCH_MISO
     int "Touch MISO GPIO"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 39
 config OBSERVORE_TOUCH_SCLK
     int "Touch SCLK GPIO"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 25
 config OBSERVORE_TOUCH_CS
     int "Touch CS GPIO"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 33
 config OBSERVORE_TOUCH_IRQ
     int "Touch PENIRQ GPIO"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 36
 
 config OBSERVORE_TOUCH_Z_MIN
     int "Pressure below which a touch is ignored"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 400
     range 50 4095
     help
@@ -388,15 +433,19 @@ config OBSERVORE_TOUCH_Z_MIN
 
 config OBSERVORE_TOUCH_RAW_MIN_X
     int "Raw X at the low edge"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 200
 config OBSERVORE_TOUCH_RAW_MAX_X
     int "Raw X at the high edge"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 3900
 config OBSERVORE_TOUCH_RAW_MIN_Y
     int "Raw Y at the low edge"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 200
 config OBSERVORE_TOUCH_RAW_MAX_Y
     int "Raw Y at the high edge"
+    depends on OBSERVORE_TOUCH_XPT2046
     default 3900
     help
         The four bounds are a property of one piece of glass, not of the
@@ -405,6 +454,7 @@ config OBSERVORE_TOUCH_RAW_MAX_Y
 
 config OBSERVORE_TOUCH_SWAP_XY
     bool "Touch axes are crossed relative to the display"
+    depends on OBSERVORE_TOUCH_XPT2046
     default n
     help
         Wrong sends the finger along the wrong edge: dragging across the
@@ -412,9 +462,11 @@ config OBSERVORE_TOUCH_SWAP_XY
 
 config OBSERVORE_TOUCH_FLIP_X
     bool "Flip touch X"
+    depends on OBSERVORE_TOUCH_XPT2046
     default n
 config OBSERVORE_TOUCH_FLIP_Y
     bool "Flip touch Y"
+    depends on OBSERVORE_TOUCH_XPT2046
     default n
     help
         Wrong flips are unmistakable: the cursor goes the other way from the
