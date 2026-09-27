@@ -478,8 +478,8 @@ static void test_a_crowd_is_not_an_emergency(void)
     CHECK(st.score <= OBSERVORE_FOLLOWER_SCORE_CAP,
           "but presence is capped at %u, got %u",
           OBSERVORE_FOLLOWER_SCORE_CAP, st.score);
-    CHECK(st.level != OBSERVORE_LEVEL_ALERT,
-          "so a crowd never reads as an alert (level %s)",
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR,
+          "so a crowd reads clear, with all twelve listed (level %s)",
           observore_level_name(st.level));
 
     /* Rotation does not lift the ceiling either, which took hardware to
@@ -504,8 +504,33 @@ static void test_a_crowd_is_not_an_emergency(void)
     CHECK(st.score <= OBSERVORE_FOLLOWER_SCORE_CAP,
           "five rotated followers are still capped at %u, got %u",
           OBSERVORE_FOLLOWER_SCORE_CAP, st.score);
-    CHECK(st.level != OBSERVORE_LEVEL_ALERT,
-          "and cannot raise an alert (level %s)", observore_level_name(st.level));
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR,
+          "and cannot move the verdict at all (level %s)",
+          observore_level_name(st.level));
+
+    /* The invariant the ceiling buys: unidentified devices cannot carry an
+     * identified one over the line either. A Flipper in an empty room and a
+     * Flipper in a crowd read the same, because the crowd is not evidence
+     * about the Flipper. */
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x00, 0x01};
+    const uint8_t flipmac[6] = {0x80, 0xE1, 0x27, 0x01, 0x02, 0x03};
+    observore_observation_t f = {.mac = flipmac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = sizeof(flip)};
+    observore_track_observe(&f, SECS(341));
+    observore_track_status(&st, SECS(341));
+    CHECK(st.level == OBSERVORE_LEVEL_CAUTION,
+          "a hunter among five followers is caution, not alert (score %u)", st.score);
+
+    /* And a single body camera, with nothing else in the room at all, is. */
+    observore_track_init();
+    const uint8_t axon1[6] = {0x00, 0x25, 0xDF, 0x11, 0x12, 0x13};
+    uint8_t bare[] = {0x02, 0x01, 0x06};
+    observore_observation_t solo = {.mac = axon1, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                    .adv = bare, .adv_len = sizeof(bare)};
+    observore_track_observe(&solo, SECS(0));
+    observore_track_status(&st, SECS(0));
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT,
+          "one body camera, alone, is an alert (score %u)", st.score);
 
     /* What an alert is for: something identified as what it is. */
     observore_track_init();
@@ -529,7 +554,7 @@ static void test_a_crowd_is_not_an_emergency(void)
 
 static void test_scoring(void)
 {
-    banner("scoring, cooldown and decay");
+    banner("scoring");
 
     observore_track_init();
     const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03};
@@ -542,8 +567,11 @@ static void test_scoring(void)
     CHECK(observore_track_observe(&obs, SECS(0)), "bodycam not reported");
     observore_status_t st;
     observore_track_status(&st, SECS(0));
-    CHECK(st.score == 5, "bodycam should score 5, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "5 points is caution");
+    CHECK(st.score == 6, "bodycam should score 6, got %u", st.score);
+    /* One body camera, nothing else in the room, and the verdict is alert.
+     * It was caution until the weights were fixed, which made the clearest
+     * detection this device can make arrive as a shrug. */
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "a body camera alerts on its own");
 
     /* A chatty beacon cannot run the score away, and no longer needs a
      * cooldown to stop it: the score is what is present, and one device
@@ -552,15 +580,15 @@ static void test_scoring(void)
         observore_track_observe(&obs, SECS(i));
     }
     observore_track_status(&st, SECS(50));
-    CHECK(st.score == 5, "fifty sightings of one device still score 5, got %u", st.score);
+    CHECK(st.score == 6, "fifty sightings of one device still score 6, got %u", st.score);
 
     /* Nor does time raise it. Under the old accumulator this reached seven by
      * t=200 and the ceiling within the hour, which is how "alert" became the
      * resting state of any room with something in it. */
     observore_track_observe(&obs, SECS(200));
     observore_track_status(&st, SECS(200));
-    CHECK(st.score == 5, "the same device an hour later still scores 5, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "and is still caution, not alert");
+    CHECK(st.score == 6, "the same device an hour later still scores 6, got %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "and is still one device, not two");
 
     /* A second device of another class adds its own weight -- this is the
      * axis the score is supposed to measure. A Find My tracker, identified by
@@ -574,8 +602,8 @@ static void test_scoring(void)
                                   .adv = findmy, .adv_len = sizeof(findmy)};
     observore_track_observe(&o2, SECS(210));
     observore_track_status(&st, SECS(210));
-    CHECK(st.score > 5, "a second device raises the score (got %u)", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "two pieces of serious kit is an alert");
+    CHECK(st.score > 6, "a second device raises the score (got %u)", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "two pieces of serious kit is still an alert");
 
     /* And it comes down when the room empties, which the accumulator could
      * not do while anything remained. The table forgets a device thirty
@@ -589,7 +617,7 @@ static void test_scoring(void)
     observore_track_init();
     observore_track_observe(&obs, SECS(0));
     observore_track_status(&st, SECS(120));
-    CHECK(st.score == 5, "without tick(): expected 5, got %u", st.score);
+    CHECK(st.score == 6, "without tick(): expected 6, got %u", st.score);
 }
 
 static void test_rssi_floor(void)

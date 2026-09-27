@@ -55,30 +55,34 @@
 
 /* The most the follower class may contribute, together, ever.
  *
- * Five is the top of caution: a follower can make the device say "something
- * unidentified is hanging about", and can never make it say "there is
- * surveillance equipment here". Alert is reserved for things identified as
- * what they are -- a body camera, a licence-plate reader, a tracker, a drone,
- * a flood of deauthentication frames.
+ * Two is the top of clear, and that is the whole point: a follower is by
+ * definition UNIDENTIFIED, so it may fill the list and it may not move the
+ * verdict. The detector says "clear" while naming everything it can see,
+ * which is an honest pair of statements -- nothing here is identified as
+ * surveillance, and here is what is here.
  *
- * This took three attempts to get right, and the first two were wrong about
- * what a follower means. Duration is not evidence: everybody in a restaurant
- * has been near you for an hour. Rotation is not evidence either, which is the
+ * This took four attempts, and the first three were wrong about what a
+ * follower means. Duration is not evidence: everybody in a restaurant has
+ * been near you for an hour. Rotation is not evidence either, which is the
  * one that took hardware to see -- every modern phone rotates its Bluetooth
  * address every quarter of an hour, so "survived a rotation" is not a device
  * evading notice, it is a device behaving normally, and a house full of them
- * put a board at score 17 and alert.
+ * put a board at score 17 and alert. Capping the class at the top of caution
+ * fixed the number and left the verdict wrong in a quieter way: two boards
+ * soaked overnight in an ordinary room sat at exactly the cap for eight
+ * hours, amber the whole time, with nothing identified on either. A warning
+ * that is always on is not a warning.
  *
- * What is left is that a follower is by definition UNIDENTIFIED. That is
- * interesting, and worth listing, and worth a glance -- it is not worth an
- * alarm, because the detector cannot say what it is. */
-#define OBSERVORE_FOLLOWER_SCORE_CAP      5
+ * The ceiling doubles as an invariant. Two is less than the gap between
+ * caution and alert, so no quantity of unidentified devices can push an
+ * identified one over the line either -- a tracker and a crowd read the same
+ * as a tracker. Nothing unidentified ever produces an alert. */
+#define OBSERVORE_FOLLOWER_SCORE_CAP      2
 
 /* Within that cap a device that has merely been present counts one, and one
- * that has survived rotating its address counts the class weight -- so a
- * single such device reaches caution on its own rather than needing five
- * companions. The ordering still says something; the ceiling is what stops it
- * saying too much. */
+ * that has survived rotating its address counts the class weight -- so the
+ * ordering still says "this one has been followed across a rotation" while
+ * the ceiling keeps the class inside clear. */
 #define OBSERVORE_FOLLOWER_PRESENT_POINTS 1
 
 /* A device that has not been heard from in this long is evicted. */
@@ -106,9 +110,9 @@
 #define OBSERVORE_ROTATION_RSSI_DB   15
 
 typedef enum {
-    OBSERVORE_LEVEL_CLEAR = 0,   /* score 0-2  */
-    OBSERVORE_LEVEL_CAUTION,     /* score 3-5  */
-    OBSERVORE_LEVEL_ALERT,       /* score 6+   */
+    OBSERVORE_LEVEL_CLEAR = 0,   /* score 0-2: nothing identified          */
+    OBSERVORE_LEVEL_CAUTION,     /* score 3-5: equipment that could watch   */
+    OBSERVORE_LEVEL_ALERT,       /* score 6+:  equipment that is watching   */
 } observore_level_t;
 
 typedef struct {
@@ -127,7 +131,8 @@ void observore_track_init(void);
  * in microseconds. */
 bool observore_track_observe(const observore_observation_t *obs, int64_t now_us);
 
-/* Apply score decay and evict stale devices.  Call periodically. */
+/* Evict devices that have not been heard from within the TTL.  Call
+ * periodically; there is no decay left to apply. */
 void observore_track_tick(int64_t now_us);
 
 void observore_track_status(observore_status_t *out, int64_t now_us);
