@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# Build one board profile and flash it, refusing to flash if what was built is
+# not what was asked for.
+#
+# `idf.py -DSDKCONFIG_DEFAULTS=...` silently ignores the profile when an
+# sdkconfig already exists, and `idf.py set-target` writes one.  So a stale
+# sdkconfig -- from the last board, or from a set-target a moment earlier --
+# produces a clean, successful build of the wrong firmware, and the first
+# symptom is a dark screen on a board you have just reflashed.  That has
+# happened three times in this project: twice the 2.8" image onto the 3.5"
+# board, once the XIAO image onto a Waveshare AMOLED board.
+#
+# The fix is to check rather than to remember: the profile sets
+# CONFIG_OBSERVORE_BOARD, so the generated sdkconfig either names the board
+# that was asked for or nothing is flashed.
+#
+#   tools/flashboard.sh cyd-3248s035r-st7796 /dev/ttyUSB0
+#
+set -euo pipefail
+
+BOARD=${1:?usage: flashboard.sh <board> <port>}
+PORT=${2:?usage: flashboard.sh <board> <port>}
+cd "$(dirname "$0")/.."
+
+# Same board-to-chip mapping the CI matrix uses.  A profile does not name its
+# own target, and building for the wrong one fails in ways that look like
+# source errors (SPI3_HOST undeclared, when the C5 has only SPI2).
+case "$BOARD" in
+    cyd-*)                  TARGET=esp32   ;;
+    xiao-esp32c5|devkit-*)  TARGET=esp32c5 ;;
+    xiao-esp32c6)           TARGET=esp32c6 ;;
+    xiao-esp32s3|waveshare-s3-*) TARGET=esp32s3 ;;
+    *) echo "unknown board: $BOARD" >&2; exit 2 ;;
+esac
+
+PROFILE="boards/$BOARD.defaults"
+DEFAULTS="sdkconfig.defaults"
+[ -f "$PROFILE" ] && DEFAULTS="sdkconfig.defaults;$PROFILE"
+
+# set-target first, because it writes an sdkconfig; then remove it, so the
+# profile below is actually read.  Order matters and is the whole point.
+idf.py set-target "$TARGET" >/dev/null 2>&1
+rm -f sdkconfig
+idf.py -DSDKCONFIG_DEFAULTS="$DEFAULTS" build >/dev/null 2>&1
+
+if ! grep -qxF "CONFIG_OBSERVORE_BOARD=\"$BOARD\"" sdkconfig; then
+    echo "REFUSING to flash: sdkconfig says $(grep '^CONFIG_OBSERVORE_BOARD=' sdkconfig), not $BOARD" >&2
+    exit 1
+fi
+
+echo "  verified $BOARD on $TARGET, flashing $PORT"
+idf.py -p "$PORT" flash 2>&1 | grep -E "error|Hard resetting" | tail -1

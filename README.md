@@ -44,6 +44,14 @@ revisions, and the 3.5". See [the screen](#the-screen) for what they
 can do and [boards, which are not the same as
 chips](#boards-which-are-not-the-same-as-chips) for the profiles.
 
+An eighth profile, `waveshare-s3-amoled-143`, exists but is **not shipped**:
+CI builds it so it cannot rot, and the browser flasher does not offer it.
+Waveshare's ESP32-S3-Touch-AMOLED-1.43 is a round 1.43" AMOLED on an S3 with
+16 MB of flash and 8 MB of octal PSRAM, and at this stage the detector runs on
+it while the panel stays dark. The board also carries a QMI8658 motion sensor
+and a PCF85063 clock, neither of which any other board here has; what to do
+with the first of those is the interesting part and is not written yet.
+
 ## Getting started
 
 You need one of the seven supported boards and a USB cable. The whole first run
