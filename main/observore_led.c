@@ -5,7 +5,7 @@
 
 #if CONFIG_OBSERVORE_LED_ADDRESSABLE
 #include "led_strip.h"
-#else
+#elif CONFIG_OBSERVORE_LED_MONO
 #include "driver/gpio.h"
 #endif
 
@@ -77,7 +77,7 @@ static void backend_show(bool lit, observore_level_t level, bool console)
     led_strip_refresh(s_strip);
 }
 
-#else  /* CONFIG_OBSERVORE_LED_MONO */
+#elif CONFIG_OBSERVORE_LED_MONO
 
 #define LED_GPIO ((gpio_num_t)CONFIG_OBSERVORE_LED_GPIO)
 
@@ -104,7 +104,19 @@ static void backend_show(bool lit, observore_level_t level, bool console)
 #endif
 }
 
+#else  /* CONFIG_OBSERVORE_LED_NONE */
+
+/* No LED, and therefore no blink task: the level still reaches the panel, the
+ * console and the notifier, which is every other way this device says it. */
+static void backend_init(void) {}
+static void backend_show(bool lit, observore_level_t level, bool console)
+{
+    (void)lit; (void)level; (void)console;
+}
+
 #endif
+
+#if !CONFIG_OBSERVORE_LED_NONE
 
 /* One blink period, expressed as on-time and off-time.  Distinguishable at a
  * glance without having to count flashes:
@@ -155,11 +167,15 @@ static void led_task(void *arg)
     }
 }
 
+#endif  /* !CONFIG_OBSERVORE_LED_NONE */
+
 void observore_led_init(void)
 {
     backend_init();
     backend_show(false, OBSERVORE_LEVEL_CLEAR, false);
+#if !CONFIG_OBSERVORE_LED_NONE
     xTaskCreate(led_task, "observore_led", 2560, NULL, 2, NULL);
+#endif
 }
 
 void observore_led_set_level(observore_level_t level)

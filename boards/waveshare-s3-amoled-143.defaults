@@ -1,0 +1,39 @@
+# Waveshare ESP32-S3-Touch-AMOLED-1.43 -- a round 1.43" AMOLED on an S3 with
+# 16 MB flash and 8 MB octal PSRAM.
+#
+# Radio only at this stage. The panel, the touch controller and the motion
+# sensor are all present and none of them is driven yet; what this profile
+# does is get the detector itself running on the board, so the hardware is
+# proven before any of the interesting work starts.
+#
+# Everything here was read off the board rather than out of a datasheet --
+# esptool for the silicon, and the factory demo's own boot log and app image
+# for the peripherals:
+#
+#   ESP32-S3 rev v0.2, 16 MB flash, 8 MB octal PSRAM at 80 MHz
+#   SH8601      round AMOLED over QSPI (espressif__esp_lcd_sh8601 2.0.1)
+#   QMI8658     6-axis IMU, I2C slave 0x6A
+#   PCF85063    real-time clock
+#   a touch controller whose part number appears nowhere in the factory image
+#
+# The console is the chip's own USB-Serial/JTAG; there is no UART bridge.
+
+# 16 MB, against the 4 MB the partition table is sized for. The remainder is
+# unused for now, which is the harmless direction: an image built for more
+# flash than the chip carries does not boot at all.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# Octal PSRAM, which no other board in this project has. It is what makes the
+# 4 KB JSON ceiling on /api/mutes and /api/history a thing this board does not
+# need to care about, once something is written to take advantage of it.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# No user LED on this board. The panel is the indicator, once it is driven.
+CONFIG_OBSERVORE_LED_NONE=y
+CONFIG_OBSERVORE_BUTTON_GPIO=0
+
+CONFIG_OBSERVORE_BOARD="waveshare-s3-amoled-143"

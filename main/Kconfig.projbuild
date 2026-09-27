@@ -49,6 +49,15 @@ config OBSERVORE_LED_ADDRESSABLE
         colour, which is legible at a glance in a way that counting flashes
         never is.
 
+config OBSERVORE_LED_NONE
+    bool "No user LED"
+    help
+        The board has no LED to drive.  Choose this rather than pointing
+        OBSERVORE_LED_GPIO at a pin that is probably free: on a dense board
+        an unused number usually belongs to something, and driving it is how
+        you find out what.  A board with a panel says everything the LED
+        would have said, so nothing is lost but the blink.
+
 endchoice
 
 config OBSERVORE_LED_ACTIVE_LOW
@@ -372,7 +381,7 @@ config OBSERVORE_BOARD
     help
         Which board this image was built for, using the same names the release
         and the web flasher use: xiao-esp32s3, devkit-esp32c5, xiao-esp32c5,
-        xiao-esp32c6.
+        xiao-esp32c6, the three CYD profiles and waveshare-s3-amoled-143.
 
         This is not the chip. Two of those boards are ESP32-C5s and they are not
         interchangeable -- they differ in LED type and pin, button pin, and
