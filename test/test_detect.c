@@ -1221,6 +1221,90 @@ static void test_squachmesh(void)
     observore_mute_clear();
 }
 
+static void test_a_baseline_may_not_silence_a_kind(void)
+{
+    banner("a baseline silences a protected device by address, never by name");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* A Flipper, named as every Flipper is: the word and then whatever the
+     * owner called it. The name is sixteen characters, comfortably past the
+     * length a baseline requires, which is exactly how the real one got a
+     * name rule and went unreported on two boards for a week. */
+    uint8_t flip[32] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x00, 0x01};
+    size_t n = 9;
+    const char *name = "Flipper Arala75h";
+    flip[n++] = (uint8_t)(1 + strlen(name));
+    flip[n++] = 0x09;
+    memcpy(&flip[n], name, strlen(name));
+    n += strlen(name);
+    const uint8_t fmac[6] = {0x80, 0xE1, 0x27, 0x8D, 0xAD, 0x84};
+    observore_observation_t f = {.mac = fmac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = n};
+    CHECK(observore_track_observe(&f, SECS(0)), "the Flipper is reported to begin with");
+
+    static observore_event_t scratch[32];
+    observore_baseline_t r;
+    observore_mute_baseline(scratch, 32, &r);
+
+    CHECK(r.by_name == 0, "no name rule for a protected class (got %zu)", r.by_name);
+    CHECK(r.by_mac == 1, "it is silenced by its address instead (got %zu)", r.by_mac);
+    CHECK(r.protected_muted == 1,
+          "and the baseline says it silenced one (got %zu)", r.protected_muted);
+    CHECK(r.protected_example == OBSERVORE_CLASS_HUNTER,
+          "naming the class it was (got %s)",
+          observore_class_desc((observore_class_t)r.protected_example)->name);
+
+    /* The owner's own is quiet. */
+    CHECK(observore_mute_matches(fmac, OBSERVORE_CLASS_HUNTER, name, 0),
+          "the one that was here is ignored");
+
+    /* A stranger's, at another address, is not -- which is the whole point.
+     * Under a name rule this was silenced too, because a name rule matches as
+     * a substring and every Flipper's name begins with the same word. */
+    const uint8_t other[6] = {0x80, 0xE1, 0x27, 0x01, 0x02, 0x03};
+    CHECK(!observore_mute_matches(other, OBSERVORE_CLASS_HUNTER, "Flipper Zeta99x", 0),
+          "another Flipper, elsewhere, is still reported");
+
+    /* The same holds for the class this device most exists to find, where the
+     * broadcast name is a model rather than a pet name -- so a name rule
+     * would have quieted every one of that model anywhere. */
+    observore_mute_clear();
+    observore_track_init();
+    uint8_t cam[32] = {0x02, 0x01, 0x06};
+    size_t cn = 3;
+    const char *model = "AXON BODY 3";
+    cam[cn++] = (uint8_t)(1 + strlen(model));
+    cam[cn++] = 0x09;
+    memcpy(&cam[cn], model, strlen(model));
+    cn += strlen(model);
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x0A, 0x0B, 0x0C};
+    observore_observation_t c = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                 .adv = cam, .adv_len = cn};
+    observore_track_observe(&c, SECS(0));
+    observore_mute_baseline(scratch, 32, &r);
+    CHECK(r.by_name == 0, "no name rule for a body camera either (got %zu)", r.by_name);
+    const uint8_t axon2[6] = {0x00, 0x25, 0xDF, 0x99, 0x98, 0x97};
+    CHECK(!observore_mute_matches(axon2, OBSERVORE_CLASS_BODYCAM, model, 0),
+          "a stranger's body camera of the same model is still reported");
+
+    /* The follower class keeps the trade it was given deliberately: a
+     * household phone earns that verdict by sitting still for five minutes,
+     * and a MAC rule on a rotating address would be gone within the hour. */
+    CHECK(!observore_mute_class_needs_address_rule(OBSERVORE_CLASS_FOLLOWER),
+          "a follower may still be silenced by name");
+    CHECK(observore_mute_class_needs_address_rule(OBSERVORE_CLASS_TRACKER) &&
+              observore_mute_class_needs_address_rule(OBSERVORE_CLASS_BODYCAM) &&
+              observore_mute_class_needs_address_rule(OBSERVORE_CLASS_HUNTER),
+          "the classes worth finding may not");
+    CHECK(!observore_mute_class_needs_address_rule(OBSERVORE_CLASS_CAMERA),
+          "street furniture may be muted wholesale, which is the point of it");
+
+    observore_mute_clear();
+}
+
 static void test_baseline_does_not_blind(void)
 {
     banner("a baseline must not silence a whole population of devices");
@@ -2361,6 +2445,7 @@ int main(void)
     test_hunter_gear();
     test_squachmesh();
     test_baseline_does_not_blind();
+    test_a_baseline_may_not_silence_a_kind();
     test_mute_rule_retires_when_it_covers_a_population();
     test_name_rule_matches_ble();
     test_mac_parsing();

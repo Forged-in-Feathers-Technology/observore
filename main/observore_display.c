@@ -1104,7 +1104,12 @@ static void watch_tap(int y)
     const observore_event_t *e = &s_snap_top[i];
     observore_mute_rule_t rule;
     memset(&rule, 0, sizeof(rule));
-    if (e->detail[0] != '\0') {
+    /* A name rule matches as a substring, so for the classes this device
+     * exists to find it is silenced by address and nothing else: dismissing
+     * the body camera in front of you must not also dismiss every other one
+     * of that model you ever walk past. */
+    if (e->detail[0] != '\0' &&
+        !observore_mute_class_needs_address_rule(e->cls)) {
         rule.kind = OBSERVORE_MUTE_NAME;
         snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
     } else {

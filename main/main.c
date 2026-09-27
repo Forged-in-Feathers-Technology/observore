@@ -365,11 +365,22 @@ void app_main(void)
                 observore_baseline_t b;
                 observore_mute_baseline(snap, chunk, &b);
                 free(snap);
-                char msg[48];
-                snprintf(msg, sizeof(msg), "baseline set: %zu now ignored", b.added);
+                char msg[64];
+                if (b.protected_muted > 0) {
+                    /* Named on the glass, because this is the case where a
+                     * baseline has just silenced the kind of thing the device
+                     * is for. A Flipper went unreported for a week that way,
+                     * and nothing on screen had said so. */
+                    snprintf(msg, sizeof(msg), "baseline: %zu ignored, incl %zu %s",
+                             b.added, b.protected_muted,
+                             observore_class_desc((observore_class_t)b.protected_example)->name);
+                } else {
+                    snprintf(msg, sizeof(msg), "baseline set: %zu now ignored", b.added);
+                }
                 observore_display_notice(msg, 6);
-                ESP_LOGI(TAG, "baseline from the button: %zu seen, %zu muted",
-                         b.seen, b.added);
+                ESP_LOGI(TAG, "baseline from the button: %zu seen, %zu muted, "
+                              "%zu of a protected class",
+                         b.seen, b.added, b.protected_muted);
             } else {
                 observore_display_notice("baseline failed: out of memory", 6);
             }

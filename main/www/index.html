@@ -850,7 +850,14 @@ $('baseline').addEventListener('click', async () => {
         ? '. ' + out.temporary + ' of those rotate their address and will ' +
           'reappear within the hour'
         : '') +
-      (out.no_room ? '. ' + out.no_room + ' did not fit' : '') + '.';
+      (out.no_room ? '. ' + out.no_room + ' did not fit' : '') + '.' +
+      (out.protected
+        ? ' Note: ' + out.protected + ' of them ' +
+          (out.protected === 1 ? 'was a ' : 'were of the ') +
+          out.protected_class + (out.protected === 1 ? '' : ' class') +
+          ' — silenced by address only, so another one would still be ' +
+          'reported.'
+        : '');
   } catch (e) {
     $('baselinenote').textContent = 'baseline failed: ' + e.message;
   }

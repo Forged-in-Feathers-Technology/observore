@@ -105,6 +105,11 @@ bool observore_mute_would_match(const uint8_t mac[OBSERVORE_MAC_LEN], observore_
 /* True for classes a fingerprint rule must never silence. */
 bool observore_mute_class_is_protected(observore_class_t cls);
 
+/* True for classes a baseline or a tap may silence only one address at a
+ * time: the protected classes, less the follower class.  See the definition
+ * for why the follower class is the exception. */
+bool observore_mute_class_needs_address_rule(observore_class_t cls);
+
 /* Adding a rule that already exists succeeds without duplicating it.
  * `added` (optional) reports whether the list actually grew, so a caller does
  * not have to bracket the call with observore_mute_count(). */
@@ -148,6 +153,12 @@ typedef struct {
     size_t by_name, by_fingerprint, by_mac;
     size_t temporary;   /* MAC rules on rotating addresses: back within the hour */
     size_t no_room;     /* rules refused because the table is full */
+    /* Devices of a protected class that this baseline silenced -- a tracker,
+     * a body camera, a Flipper.  Each got an address-specific rule, and the
+     * count is reported because a baseline that quietly muted the one thing
+     * worth finding is how a Flipper went unreported for a week. */
+    size_t  protected_muted;
+    uint8_t protected_example;   /* class of the first, for the message */
 } observore_baseline_t;
 
 /* Mark everything currently in range as known and start the score from a
