@@ -227,35 +227,72 @@ console.
 
 ### Scoring
 
-Each hit adds points by class (bodycam, ALPR and deauth-flood 5, follower 4,
-tracker/drone/glasses/hunter 3, telematics 2, camera 1, peer-detector 0). The score decays one point
-per minute and each device can only re-score every 120 seconds, so one loud
-beacon cannot run it away while sustained presence keeps it lit.
+Each device present counts its class (bodycam, ALPR and deauth-flood 6,
+tracker/drone/glasses/hunter 3, telematics 2, camera 1, accessory 1,
+peer-detector and fixture 0, follower capped — see below), and the score is
+their sum.
 
-**Presence is capped, and rotation is what scores.** A follower used to be
-worth four points and could re-score every two minutes: two points a minute
-each, against one point a minute of decay in total. So one persistent device
-pinned the score at its ceiling in about ninety minutes and eight did it in
-seven — measured on a board in a living room reading 98 with nothing in the
-table but followers, and again in a restaurant, where every diner's phone
-qualifies by sitting near you for an hour. Alert became the resting state of any
-populated place, and a level that is always on says nothing.
+Six is one alert by itself, and that is the whole of the split. **Six names an
+act**: a body camera is recording, a plate reader is reading plates, a flood of
+deauthentication frames is knocking devices off a network. **Three names a
+capability**: a Flipper, a drone, a tracker are all things that *could* be
+aimed at you and usually are not, so they read caution alone and alert in
+company.
 
-So mere presence is worth one point, and all followers together may contribute
-at most five — the top of caution, chosen against the level boundaries rather
-than as a round number, since six is where alert begins. Twelve strangers'
-phones scored 48 before this and score 5 after it.
+**The score is what is here now, not a history of it.**
 
-A follower that has **survived rotating its address** still scores the full
-four, and is not subject to the cap: it outlasted the one thing meant to make
-it forgettable, which is evidence, where sitting in a café is not. That
-strengthening also bypasses the per-device cooldown, once — the cooldown exists
-to throttle a beacon shouting ten times a second, not to spend two minutes
-declining to mention that the evidence just changed kind.
+It used to accumulate: every device added its points again every two minutes,
+against a decay of one point a minute in total. Anything worth two points or
+more therefore outran the decay on its own, so the score climbed to its ceiling
+and stayed there. Ninety-nine meant "something persistent has been here a
+while" — never "how much is here" or "how serious". A board on a desk with a
+Flipper and a few phones sat at 99 and alert indefinitely, and a level that is
+always on is not read.
 
-- **0–2 clear** — LED winks once every 5 s (green)
-- **3–5 caution** — LED pulses once a second (amber)
-- **6+ alert** — LED flutters (red)
+So the score is a sum over the devices currently tracked, worked out when
+asked. It rises when something arrives and falls when it leaves; the device
+table's own thirty-minute expiry is what brings it down, and is slow enough
+that nothing flickers. There is no accumulator, no decay and no per-device
+cooldown to tune — one device present fifty times is still one device.
+
+**Followers cannot move the verdict at all.** Together they contribute at
+most two — the top of clear — so the device lists every one of them and still
+says "nothing here is identified as surveillance", which are two true
+statements rather than one hedge. The verdict is reserved for things
+identified as what they are.
+
+Two is also less than the gap between caution and alert, which buys an
+invariant worth stating plainly: **no quantity of unidentified devices can
+push an identified one over the line.** A Flipper in an empty room and a
+Flipper in a crowded bar both read caution, because the crowd is not evidence
+about the Flipper.
+
+That ceiling took four attempts, and the first three were wrong about what a
+follower means. **Duration is not evidence** — everybody in a restaurant has
+been near you for an hour. **Rotation is not evidence either**, which took
+hardware to see: every modern phone changes its Bluetooth address every
+quarter of an hour, so "survived a rotation" describes a phone behaving
+normally, not a device evading notice. A house full of them put a board at
+seventeen and alert. **Capping the class at the top of caution** fixed the
+number and left the verdict wrong in a quieter way: two boards soaked
+overnight in an ordinary room sat at exactly the cap for eight hours, amber
+throughout, with nothing identified on either. A warning that is always on is
+not a warning.
+
+What remains true is that a follower is, by definition, **unidentified**. That
+is worth listing and worth a glance. It is not worth an alarm, because the
+device cannot say what the thing is. Within the cap the ordering still holds —
+mere presence counts one, a rotation counts two — so the list still says which
+of them has been followed across a rotation, while the ceiling keeps the class
+inside clear.
+
+Sustained presence is not lost; it has moved to where it belongs. A device does
+not *become* a follower until it has been there five minutes. Duration decides
+what something is, and the score says what is here.
+
+- **0–2 clear** — nothing identified. LED winks once every 5 s (green)
+- **3–5 caution** — equipment that could watch. LED pulses once a second (amber)
+- **6+ alert** — equipment that is watching. LED flutters (red)
 
 The rhythm is what the XIAO's single monochrome LED can say, and it is the same
 on every board. Boards with an addressable WS2812, the C5 kits, add the
@@ -936,8 +973,8 @@ in the band is simply missed — this finds what passes under the aerial and
 says nothing about what does not.
 
 **Hunter gear** — a Flipper Zero, a pwnagotchi, a WiFi Pineapple — scores
-three rather than five: the presence of a tool is capability, where a flood is
-an act.
+three rather than six: the presence of a tool is capability, where a flood is
+an act. So hunter gear is caution on its own and alert beside something else.
 
 Two of those signatures are worth their footnotes. Flipper's Bluetooth company
 ID is `0x0E29`; the widely copied `0x0FBA` belongs to Cosonic, who make

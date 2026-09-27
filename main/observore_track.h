@@ -46,33 +46,43 @@
 #define OBSERVORE_ANNOUNCED_MAX    32
 
 /* Scoring. */
-#define OBSERVORE_SCORE_DECAY_INTERVAL_US (60 * 1000000LL)  /* -1 point per minute */
-#define OBSERVORE_SCORE_COOLDOWN_US      (120 * 1000000LL)  /* per device re-score */
+/* Neither a decay interval nor a per-device cooldown appears here any more.
+ * The score is a sum over what is currently tracked rather than an
+ * accumulator, so there is nothing to throttle and nothing to bleed off: a
+ * device counts once while it is present and stops counting when the table
+ * forgets it. See observore_track_status(). */
 #define OBSERVORE_SCORE_MAX               99
 
-/* The most the follower class may contribute at once.
+/* The most the follower class may contribute, together, ever.
  *
- * A follower is worth four points and may re-score every two minutes: two
- * points a minute, each, against a decay of one point a minute in total. So a
- * single persistent device pins the score at its ceiling in about ninety
- * minutes and eight do it in seven -- measured, not predicted, on a board in a
- * living room reading 98 with nothing in the table but followers. Alert became
- * the resting state of any populated place, and a level that is always on says
- * nothing.
+ * Two is the top of clear, and that is the whole point: a follower is by
+ * definition UNIDENTIFIED, so it may fill the list and it may not move the
+ * verdict. The detector says "clear" while naming everything it can see,
+ * which is an honest pair of statements -- nothing here is identified as
+ * surveillance, and here is what is here.
  *
- * Five is the top of caution, chosen against the level boundaries rather than
- * picked as a round number: six is where alert begins, so a cap of six would
- * have let a crowd reach exactly the level this exists to prevent. Presence can
- * raise caution and can never raise an alert. Anything that genuinely warrants alert --
- * a body camera, an ALPR, a deauth flood, a follower that survived rotating
- * its address -- scores outside this cap. */
-#define OBSERVORE_FOLLOWER_SCORE_CAP      5
+ * This took four attempts, and the first three were wrong about what a
+ * follower means. Duration is not evidence: everybody in a restaurant has
+ * been near you for an hour. Rotation is not evidence either, which is the
+ * one that took hardware to see -- every modern phone rotates its Bluetooth
+ * address every quarter of an hour, so "survived a rotation" is not a device
+ * evading notice, it is a device behaving normally, and a house full of them
+ * put a board at score 17 and alert. Capping the class at the top of caution
+ * fixed the number and left the verdict wrong in a quieter way: two boards
+ * soaked overnight in an ordinary room sat at exactly the cap for eight
+ * hours, amber the whole time, with nothing identified on either. A warning
+ * that is always on is not a warning.
+ *
+ * The ceiling doubles as an invariant. Two is less than the gap between
+ * caution and alert, so no quantity of unidentified devices can push an
+ * identified one over the line either -- a tracker and a crowd read the same
+ * as a tracker. Nothing unidentified ever produces an alert. */
+#define OBSERVORE_FOLLOWER_SCORE_CAP      2
 
-/* A follower that has changed address and come back is different in kind from
- * one that has merely been in the room a while: it outlasted the single thing
- * meant to make it forgettable. Presence in a cafe is not evidence; surviving
- * a rotation is. Only the latter scores the full class weight, and it is not
- * subject to the cap above. */
+/* Within that cap a device that has merely been present counts one, and one
+ * that has survived rotating its address counts the class weight -- so the
+ * ordering still says "this one has been followed across a rotation" while
+ * the ceiling keeps the class inside clear. */
 #define OBSERVORE_FOLLOWER_PRESENT_POINTS 1
 
 /* A device that has not been heard from in this long is evicted. */
@@ -100,10 +110,19 @@
 #define OBSERVORE_ROTATION_RSSI_DB   15
 
 typedef enum {
-    OBSERVORE_LEVEL_CLEAR = 0,   /* score 0-2  */
-    OBSERVORE_LEVEL_CAUTION,     /* score 3-5  */
-    OBSERVORE_LEVEL_ALERT,       /* score 6+   */
+    OBSERVORE_LEVEL_CLEAR = 0,   /* nothing identified                      */
+    OBSERVORE_LEVEL_CAUTION,     /* equipment that could watch              */
+    OBSERVORE_LEVEL_ALERT,       /* equipment that is watching              */
 } observore_level_t;
+
+/* The ceiling on unidentified devices is load-bearing, so it is checked
+ * rather than trusted: the heaviest capability class plus the entire follower
+ * class must still fall short of an alert. Retune any of the three and this
+ * stops the build rather than quietly letting a crowd escalate a Flipper. */
+_Static_assert(OBSERVORE_FOLLOWER_SCORE_CAP + OBSERVORE_SCORE_CAUTION <
+                   OBSERVORE_SCORE_ALERT,
+               "unidentified devices must not be able to carry an identified "
+               "one over the line into alert");
 
 typedef struct {
     uint16_t      score;
@@ -121,7 +140,8 @@ void observore_track_init(void);
  * in microseconds. */
 bool observore_track_observe(const observore_observation_t *obs, int64_t now_us);
 
-/* Apply score decay and evict stale devices.  Call periodically. */
+/* Evict devices that have not been heard from within the TTL.  Call
+ * periodically; there is no decay left to apply. */
 void observore_track_tick(int64_t now_us);
 
 void observore_track_status(observore_status_t *out, int64_t now_us);

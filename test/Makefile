@@ -7,7 +7,14 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
            ../main/observore_notify_fmt.c ../main/observore_wps.c \
            ../main/observore_version.c ../main/observore_heapwatch.c
 
-run: $(SRCS) ../main/observore_oui_table.h
+# Headers count as sources here.  Most of what this suite pins down lives in
+# them -- class weights, the verdict thresholds, the follower ceiling -- and
+# without this line a header-only change leaves the old binary in place and
+# `make && ./run` reports on code that is no longer there.  That has produced
+# a false pass in this repository before.
+HDRS     = $(wildcard ../main/*.h)
+
+run: $(SRCS) $(HDRS) ../main/observore_oui_table.h
 	$(CC) $(CFLAGS) $(INCS) $(SRCS) -o run
 
 ../main/observore_oui_table.h:

@@ -478,38 +478,83 @@ static void test_a_crowd_is_not_an_emergency(void)
     CHECK(st.score <= OBSERVORE_FOLLOWER_SCORE_CAP,
           "but presence is capped at %u, got %u",
           OBSERVORE_FOLLOWER_SCORE_CAP, st.score);
-    CHECK(st.level != OBSERVORE_LEVEL_ALERT,
-          "so a crowd never reads as an alert (level %s)",
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR,
+          "so a crowd reads clear, with all twelve listed (level %s)",
           observore_level_name(st.level));
 
-    /* One of them rotates its address and comes back. That is different in
-     * kind, and it is not subject to the cap.
-     *
-     * On a clean table and in a tight window: the quantity being measured is a
-     * few points, decay removes one a minute, and a test that lets minutes
-     * pass between the two readings measures the decay instead. */
+    /* Rotation does not lift the ceiling either, which took hardware to
+     * learn: every modern phone rotates its Bluetooth address every quarter
+     * of an hour, so "survived a rotation" describes a phone behaving
+     * normally rather than a device evading notice. A house full of them put
+     * a board at seventeen and alert. */
     observore_track_init();
-    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
-    const uint8_t a1[6] = {0x7A, 0x01, 0x02, 0x03, 0x04, 0x05};
-    const uint8_t a2[6] = {0x7B, 0x06, 0x07, 0x08, 0x09, 0x0A};
-    observore_observation_t r1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -55,
-                                  .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
-    observore_observation_t r2 = r1; r2.mac = a2;
-    for (int t = 0; t <= 310; t += 100) {
-        observore_track_observe(&r1, SECS(t));
+    for (int i = 0; i < 5; i++) {
+        uint8_t a1[6] = {0x7A, 0x01, 0x02, 0x03, 0x04, (uint8_t)i};
+        uint8_t a2[6] = {0x7B, 0x06, 0x07, 0x08, 0x09, (uint8_t)i};
+        uint8_t shape[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x40 + i), 0xFE};
+        observore_observation_t r1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                      .addr_random = true, .adv = shape, .adv_len = sizeof(shape)};
+        observore_observation_t r2 = r1; r2.mac = a2;
+        for (int t = 0; t <= 310; t += 100) {
+            observore_track_observe(&r1, SECS(t));
+        }
+        observore_track_observe(&r2, SECS(330));   /* quiet 20s: a rotation */
     }
-    observore_track_status(&st, SECS(324));
-    uint16_t before = st.score;
-    observore_track_observe(&r2, SECS(325));      /* quiet 15s: a rotation */
-    observore_track_status(&st, SECS(325));
-    CHECK(st.score >= before + 2,
-          "surviving a rotation is worth more than being present (%u -> %u)",
-          before, st.score);
+    observore_track_status(&st, SECS(340));
+    CHECK(st.score <= OBSERVORE_FOLLOWER_SCORE_CAP,
+          "five rotated followers are still capped at %u, got %u",
+          OBSERVORE_FOLLOWER_SCORE_CAP, st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR,
+          "and cannot move the verdict at all (level %s)",
+          observore_level_name(st.level));
+
+    /* The invariant the ceiling buys: unidentified devices cannot carry an
+     * identified one over the line either. A Flipper in an empty room and a
+     * Flipper in a crowd read the same, because the crowd is not evidence
+     * about the Flipper. */
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x00, 0x01};
+    const uint8_t flipmac[6] = {0x80, 0xE1, 0x27, 0x01, 0x02, 0x03};
+    observore_observation_t f = {.mac = flipmac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = sizeof(flip)};
+    observore_track_observe(&f, SECS(341));
+    observore_track_status(&st, SECS(341));
+    CHECK(st.level == OBSERVORE_LEVEL_CAUTION,
+          "a hunter among five followers is caution, not alert (score %u)", st.score);
+
+    /* And a single body camera, with nothing else in the room at all, is. */
+    observore_track_init();
+    const uint8_t axon1[6] = {0x00, 0x25, 0xDF, 0x11, 0x12, 0x13};
+    uint8_t bare[] = {0x02, 0x01, 0x06};
+    observore_observation_t solo = {.mac = axon1, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                    .adv = bare, .adv_len = sizeof(bare)};
+    observore_track_observe(&solo, SECS(0));
+    observore_track_status(&st, SECS(0));
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT,
+          "one body camera, alone, is an alert (score %u)", st.score);
+
+    /* What an alert is for: something identified as what it is. */
+    observore_track_init();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x09, 0x08, 0x07};
+    uint8_t plain[] = {0x02, 0x01, 0x06};
+    observore_observation_t cam = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                   .adv = plain, .adv_len = sizeof(plain)};
+    observore_track_observe(&cam, SECS(0));
+    uint8_t findmy[31] = {0};
+    findmy[0] = 0x1E; findmy[1] = 0xFF; findmy[2] = 0x4C; findmy[3] = 0x00;
+    findmy[4] = 0x12; findmy[5] = 0x19; findmy[6] = 0x10;
+    const uint8_t tag[6] = {0x4A, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B};
+    observore_observation_t trk = {.mac = tag, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                   .addr_random = true, .adv = findmy, .adv_len = sizeof(findmy)};
+    observore_track_observe(&trk, SECS(1));
+    observore_track_status(&st, SECS(1));
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT,
+          "a body camera and a tracker together is what alert is for (score %u)",
+          st.score);
 }
 
 static void test_scoring(void)
 {
-    banner("scoring, cooldown and decay");
+    banner("scoring");
 
     observore_track_init();
     const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03};
@@ -522,47 +567,57 @@ static void test_scoring(void)
     CHECK(observore_track_observe(&obs, SECS(0)), "bodycam not reported");
     observore_status_t st;
     observore_track_status(&st, SECS(0));
-    CHECK(st.score == 5, "bodycam should score 5, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "5 points is caution");
+    CHECK(st.score == 6, "bodycam should score 6, got %u", st.score);
+    /* One body camera, nothing else in the room, and the verdict is alert.
+     * It was caution until the weights were fixed, which made the clearest
+     * detection this device can make arrive as a shrug. */
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "a body camera alerts on its own");
 
-    /* A chatty beacon must not run the score away: inside the cooldown the
-     * repeat sightings are tracked but not scored. */
+    /* A chatty beacon cannot run the score away, and no longer needs a
+     * cooldown to stop it: the score is what is present, and one device
+     * present fifty times is still one device. */
     for (int i = 1; i < 50; i++) {
         observore_track_observe(&obs, SECS(i));
     }
     observore_track_status(&st, SECS(50));
-    CHECK(st.score == 5, "cooldown breached: score ran to %u", st.score);
+    CHECK(st.score == 6, "fifty sightings of one device still score 6, got %u", st.score);
 
-    /* Decay is continuous and applied lazily, so the score at any instant does
-     * not depend on how often tick() happened to run.  By t=200 the score has
-     * shed three points, and the cooldown has expired so the sighting scores
-     * another five: 5 - 3 + 5 = 7. */
+    /* Nor does time raise it. Under the old accumulator this reached seven by
+     * t=200 and the ceiling within the hour, which is how "alert" became the
+     * resting state of any room with something in it. */
     observore_track_observe(&obs, SECS(200));
     observore_track_status(&st, SECS(200));
-    CHECK(st.score == 7, "expected 7 at t=200, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "7 points is alert");
+    CHECK(st.score == 6, "the same device an hour later still scores 6, got %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "and is still one device, not two");
 
-    /* Three more quiet minutes, three more points shed. */
-    observore_track_tick(SECS(380));
-    observore_track_status(&st, SECS(380));
-    CHECK(st.score == 4, "expected 4 after further decay, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "4 points is caution");
+    /* A second device of another class adds its own weight -- this is the
+     * axis the score is supposed to measure. A Find My tracker, identified by
+     * its payload rather than by a vendor prefix invented for a test. */
+    uint8_t findmy[31] = {0};
+    findmy[0] = 0x1E; findmy[1] = 0xFF; findmy[2] = 0x4C; findmy[3] = 0x00;
+    findmy[4] = 0x12; findmy[5] = 0x19; findmy[6] = 0x10;
+    const uint8_t tagmac[6] = {0x4A, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E};
+    observore_observation_t o2 = {.mac = tagmac, .src = OBSERVORE_SRC_BLE,
+                                  .rssi = -50, .addr_random = true,
+                                  .adv = findmy, .adv_len = sizeof(findmy)};
+    observore_track_observe(&o2, SECS(210));
+    observore_track_status(&st, SECS(210));
+    CHECK(st.score > 6, "a second device raises the score (got %u)", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "two pieces of serious kit is still an alert");
 
-    /* Decay must floor at zero and not leave debt that eats a later hit. */
-    observore_track_tick(SECS(10000));
-    observore_track_status(&st, SECS(10000));
-    CHECK(st.score == 0, "score should floor at 0, got %u", st.score);
-    observore_track_observe(&obs, SECS(10001));
-    observore_track_status(&st, SECS(10002));
-    CHECK(st.score == 5, "a fresh hit after a long quiet must survive, got %u",
-          st.score);
+    /* And it comes down when the room empties, which the accumulator could
+     * not do while anything remained. The table forgets a device thirty
+     * minutes after it was last heard. */
+    observore_track_tick(SECS(210 + 31 * 60));
+    observore_track_status(&st, SECS(210 + 31 * 60));
+    CHECK(st.score == 0, "an empty room scores nothing, got %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR, "and reads clear again");
 
-    /* And the reading must not depend on tick() having been called at all. */
+    /* The reading never depended on tick() having run, and still must not. */
     observore_track_init();
     observore_track_observe(&obs, SECS(0));
     observore_track_status(&st, SECS(120));
-    CHECK(st.score == 3, "lazy decay without tick(): expected 3, got %u",
-          st.score);
+    CHECK(st.score == 6, "without tick(): expected 6, got %u", st.score);
 }
 
 static void test_rssi_floor(void)

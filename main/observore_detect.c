@@ -396,51 +396,64 @@ uint32_t observore_fingerprint(const uint8_t *adv, size_t adv_len)
     return h ? h : 1u;
 }
 
-/* Urgency is abstract and translated per provider in observore_notify_fmt.c.
+/* Six points is one alert, on purpose: a class scored six raises the verdict
+ * by itself, with nothing else in the room, because it names an act. A body
+ * camera is recording, a plate reader is reading plates, a flood of
+ * deauthentication frames is knocking devices off a network. Three points is
+ * caution alone and alert in company, which is where capability belongs -- a
+ * Flipper, a drone, a tracker are all things that COULD be aimed at you and
+ * usually are not. Anything unidentified is capped below three (see
+ * OBSERVORE_FOLLOWER_SCORE_CAP), so it can never carry a capability over the
+ * line: a tracker in a crowd reads the same as a tracker alone.
+ *
+ * A bodycam used to be worth five, which needed a companion to reach alert,
+ * so the one thing the detector exists to shout about arrived as amber.
+ *
+ * Urgency is abstract and translated per provider in observore_notify_fmt.c.
  *
  * "Protected" means a fingerprint mute rule may never silence the class: a
  * fingerprint identifies a KIND of device, so muting your own tracker that way
  * would silence a stranger's too. */
 static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
-    [OBSERVORE_CLASS_UNKNOWN]          = {"unknown",          0, OBSERVORE_URGENCY_LOW,    false},
-    [OBSERVORE_CLASS_CAMERA]           = {"camera",           1, OBSERVORE_URGENCY_LOW,    false},
-    [OBSERVORE_CLASS_FLEET_TELEMATICS] = {"fleet-telematics", 2, OBSERVORE_URGENCY_LOW,    false},
-    [OBSERVORE_CLASS_TRACKER]          = {"tracker",          3, OBSERVORE_URGENCY_HIGH,   true },
-    [OBSERVORE_CLASS_SMARTGLASSES]     = {"smart-glasses",    3, OBSERVORE_URGENCY_NORMAL, true },
-    [OBSERVORE_CLASS_DRONE]            = {"drone",            3, OBSERVORE_URGENCY_NORMAL, true },
-    [OBSERVORE_CLASS_ALPR]             = {"alpr",             5, OBSERVORE_URGENCY_URGENT, true },
-    [OBSERVORE_CLASS_BODYCAM]          = {"bodycam",          5, OBSERVORE_URGENCY_URGENT, true },
-    [OBSERVORE_CLASS_FOLLOWER]         = {"follower",         4, OBSERVORE_URGENCY_HIGH,   true },
+    [OBSERVORE_CLASS_UNKNOWN]          = {"unknown",          0,                      OBSERVORE_URGENCY_LOW,   false},
+    [OBSERVORE_CLASS_CAMERA]           = {"camera",           1,                      OBSERVORE_URGENCY_LOW,   false},
+    [OBSERVORE_CLASS_FLEET_TELEMATICS] = {"fleet-telematics", 2,                      OBSERVORE_URGENCY_LOW,   false},
+    [OBSERVORE_CLASS_TRACKER]          = {"tracker",          OBSERVORE_SCORE_CAUTION, OBSERVORE_URGENCY_HIGH,  true },
+    [OBSERVORE_CLASS_SMARTGLASSES]     = {"smart-glasses",    OBSERVORE_SCORE_CAUTION, OBSERVORE_URGENCY_NORMAL, true },
+    [OBSERVORE_CLASS_DRONE]            = {"drone",            OBSERVORE_SCORE_CAUTION, OBSERVORE_URGENCY_NORMAL, true },
+    [OBSERVORE_CLASS_ALPR]             = {"alpr",             OBSERVORE_SCORE_ALERT,  OBSERVORE_URGENCY_URGENT, true },
+    [OBSERVORE_CLASS_BODYCAM]          = {"bodycam",          OBSERVORE_SCORE_ALERT,  OBSERVORE_URGENCY_URGENT, true },
+    [OBSERVORE_CLASS_FOLLOWER]         = {"follower",         4,                      OBSERVORE_URGENCY_HIGH,  true },
     /* Worth zero points on purpose. Another detector in the room is a fact
      * about the room, not a threat in it, and a class that raised the score
      * would make a meetup read as an incident. It is still announced, because
      * "somebody else is watching too" is the sort of thing a person wants to
      * know, and it is unprotected because muting the kind wholesale is a
      * reasonable thing to want. */
-    [OBSERVORE_CLASS_PEER_DETECTOR]    = {"peer-detector",    0, OBSERVORE_URGENCY_LOW,    false},
+    [OBSERVORE_CLASS_PEER_DETECTOR]    = {"peer-detector",    0,                      OBSERVORE_URGENCY_LOW,   false},
     /* An attack in progress rather than a device in the room, and scored to
      * match: knocking devices off a network is how an attacker forces a
      * handshake to capture, or simply takes a camera offline. Protected,
      * because nothing about a fingerprint should ever be able to silence
      * this. */
-    [OBSERVORE_CLASS_DEAUTH]           = {"deauth-flood",     5, OBSERVORE_URGENCY_URGENT, true },
+    [OBSERVORE_CLASS_DEAUTH]           = {"deauth-flood",     OBSERVORE_SCORE_ALERT,  OBSERVORE_URGENCY_URGENT, true },
     /* Everything else here is equipment that watches. This is equipment that
      * transmits at other radios -- a Flipper, a pwnagotchi, a Pineapple. Three
-     * points rather than five: the presence of the tool is capability, where a
+     * points rather than six: the presence of the tool is capability, where a
      * flood in progress is an act. Protected, for the same reason a tracker
      * is: muting the kind would silence a stranger's as well as your own. */
-    [OBSERVORE_CLASS_HUNTER]           = {"hunter",           3, OBSERVORE_URGENCY_NORMAL, true },
+    [OBSERVORE_CLASS_HUNTER]           = {"hunter",           OBSERVORE_SCORE_CAUTION, OBSERVORE_URGENCY_NORMAL, true },
     /* Equipment bolted to a building, named and scored at nothing. Worth
      * recognising rather than ignoring: a solar gateway that says "Envoy" was
      * being promoted to follower -- "unidentified but persistently nearby" --
      * when it is neither unidentified nor going anywhere. Naming it is more
      * honest than muting it, and it survives a Clear ignores. */
-    [OBSERVORE_CLASS_FIXTURE]          = {"fixture",          0, OBSERVORE_URGENCY_LOW,    false},
+    [OBSERVORE_CLASS_FIXTURE]          = {"fixture",          0,                      OBSERVORE_URGENCY_LOW,   false},
     /* Reported, barely scored. Every pair of budget earbuds in pairing mode
      * used to arrive as a tracker worth three points, which is how a crowded
      * cafe reads as four trackers and how a person learns to stop believing
      * the score. One point keeps it visible without letting it escalate. */
-    [OBSERVORE_CLASS_ACCESSORY]        = {"accessory",        1, OBSERVORE_URGENCY_LOW,    false},
+    [OBSERVORE_CLASS_ACCESSORY]        = {"accessory",        1,                      OBSERVORE_URGENCY_LOW,   false},
 };
 
 const observore_class_desc_t *observore_class_desc(observore_class_t cls)
