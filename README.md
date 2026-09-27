@@ -227,31 +227,37 @@ console.
 
 ### Scoring
 
-Each hit adds points by class (bodycam, ALPR and deauth-flood 5, follower 4,
-tracker/drone/glasses/hunter 3, telematics 2, camera 1, peer-detector 0). The score decays one point
-per minute and each device can only re-score every 120 seconds, so one loud
-beacon cannot run it away while sustained presence keeps it lit.
+Each device present counts its class (bodycam, ALPR and deauth-flood 5,
+follower 4, tracker/drone/glasses/hunter 3, telematics 2, camera 1, accessory 1,
+peer-detector and fixture 0), and the score is their sum.
 
-**Presence is capped, and rotation is what scores.** A follower used to be
-worth four points and could re-score every two minutes: two points a minute
-each, against one point a minute of decay in total. So one persistent device
-pinned the score at its ceiling in about ninety minutes and eight did it in
-seven — measured on a board in a living room reading 98 with nothing in the
-table but followers, and again in a restaurant, where every diner's phone
-qualifies by sitting near you for an hour. Alert became the resting state of any
-populated place, and a level that is always on says nothing.
+**The score is what is here now, not a history of it.**
 
-So mere presence is worth one point, and all followers together may contribute
-at most five — the top of caution, chosen against the level boundaries rather
-than as a round number, since six is where alert begins. Twelve strangers'
-phones scored 48 before this and score 5 after it.
+It used to accumulate: every device added its points again every two minutes,
+against a decay of one point a minute in total. Anything worth two points or
+more therefore outran the decay on its own, so the score climbed to its ceiling
+and stayed there. Ninety-nine meant "something persistent has been here a
+while" — never "how much is here" or "how serious". A board on a desk with a
+Flipper and a few phones sat at 99 and alert indefinitely, and a level that is
+always on is not read.
 
-A follower that has **survived rotating its address** still scores the full
-four, and is not subject to the cap: it outlasted the one thing meant to make
-it forgettable, which is evidence, where sitting in a café is not. That
-strengthening also bypasses the per-device cooldown, once — the cooldown exists
-to throttle a beacon shouting ten times a second, not to spend two minutes
-declining to mention that the evidence just changed kind.
+So the score is a sum over the devices currently tracked, worked out when
+asked. It rises when something arrives and falls when it leaves; the device
+table's own thirty-minute expiry is what brings it down, and is slow enough
+that nothing flickers. There is no accumulator, no decay and no per-device
+cooldown to tune — one device present fifty times is still one device.
+
+**Presence is capped.** A follower that has only been nearby counts one point,
+and all of them together count at most five — the top of caution, chosen
+against the level boundaries rather than as a round number, since six is where
+alert begins. Twelve strangers' phones in a café score five, not forty-eight.
+A follower that has **survived rotating its address** counts the full four and
+is outside the cap: it outlasted the one thing meant to make it forgettable,
+which is evidence, where sitting in a café is not.
+
+Sustained presence is not lost; it has moved to where it belongs. A device does
+not *become* a follower until it has been there five minutes. Duration decides
+what something is, and the score says what is here.
 
 - **0–2 clear** — LED winks once every 5 s (green)
 - **3–5 caution** — LED pulses once a second (amber)

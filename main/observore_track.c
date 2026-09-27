@@ -17,25 +17,14 @@ static SemaphoreHandle_t s_lock;
 
 typedef struct {
     observore_event_t ev;
-    int64_t       last_scored_us;
-    /* Rotations already reflected in the score. New evidence about a device
-     * should not have to wait out a cooldown meant for repetition. */
-    uint16_t      scored_rotations;
     bool          in_use;
     bool          classified;
-    bool          has_scored;   /* distinct from last_scored_us == 0, which is
-                                 * a legitimate timestamp at boot */
-    bool          reported;     /* already emitted to the serial event log */
+    /* Whether this device has already been handed to the notifier, so a
+     * digest names it once rather than every cycle it remains in range. */
+    bool          reported;
 } observore_slot_t;
 
 static observore_slot_t s_devices[OBSERVORE_MAX_DEVICES];
-static uint16_t     s_score;
-/* How much of the score mere presence is currently responsible for, so the cap
- * can be enforced across devices rather than per device. Decays with the
- * score, since a capped contribution that never released would silence the
- * class permanently after one crowded afternoon. */
-static uint16_t     s_follower_score;
-static int64_t      s_last_decay_us;
 static uint32_t     s_total_sightings;
 
 /* Devices announced recently, so that one which fades and returns is not
@@ -66,9 +55,6 @@ void observore_track_clear(void)
 {
     OBSERVORE_LOCK();
     memset(s_devices, 0, sizeof(s_devices));
-    s_score = 0;
-    s_follower_score = 0;
-    s_last_decay_us = 0;
     s_total_sightings = 0;
     OBSERVORE_UNLOCK();
 }
@@ -190,78 +176,6 @@ static observore_slot_t *claim_slot(void)
     return victim;
 }
 
-/* Decay is applied lazily from the last accounted-for instant rather than on a
- * timer tick, so the score is the same whether tick() runs every second or not
- * at all.  Every public entry point calls this first. */
-static void apply_decay(int64_t now_us)
-{
-    if (s_score == 0) {
-        s_last_decay_us = now_us;
-        s_follower_score = 0;
-        return;
-    }
-    while (s_score > 0 &&
-           now_us - s_last_decay_us >= OBSERVORE_SCORE_DECAY_INTERVAL_US) {
-        s_score--;
-        /* The capped share decays alongside it. A cap that filled once and
-         * never released would silence presence for good after a single
-         * crowded afternoon. */
-        if (s_follower_score > 0) {
-            s_follower_score--;
-        }
-        s_last_decay_us += OBSERVORE_SCORE_DECAY_INTERVAL_US;
-    }
-    /* Once bottomed out, stop carrying decay debt forward -- otherwise a later
-     * burst would be decayed away the instant it arrived. */
-    if (s_score == 0) {
-        s_last_decay_us = now_us;
-    }
-}
-
-/* Add points for a device, respecting the per-device cooldown so a beacon
- * shouting ten times a second cannot run the score away on its own. */
-static void score_device(observore_slot_t *slot, int64_t now_us)
-{
-    if (slot->ev.points == 0) {
-        return;
-    }
-    /* The cooldown throttles a beacon shouting ten times a second. It should
-     * not throttle a device whose evidence has just changed kind: a follower
-     * that has survived rotating its address is a different statement from the
-     * same follower a minute ago, and waiting two minutes to say so is the
-     * cooldown doing the opposite of its job. */
-    bool new_evidence = slot->ev.rotations > slot->scored_rotations;
-    if (slot->has_scored && !new_evidence &&
-        now_us - slot->last_scored_us < OBSERVORE_SCORE_COOLDOWN_US) {
-        return;
-    }
-
-    uint8_t points = slot->ev.points;
-    if (slot->ev.cls == OBSERVORE_CLASS_FOLLOWER) {
-        /* Presence alone is worth a point; surviving an address rotation is
-         * worth the class. See the constants for the arithmetic that made
-         * this necessary. */
-        if (slot->ev.rotations == 0) {
-            points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
-            /* And however many of them there are, together they may not reach
-             * alert. A room full of people is not an emergency. */
-            if (s_follower_score >= OBSERVORE_FOLLOWER_SCORE_CAP) {
-                return;
-            }
-            if (s_follower_score + points > OBSERVORE_FOLLOWER_SCORE_CAP) {
-                points = (uint8_t)(OBSERVORE_FOLLOWER_SCORE_CAP - s_follower_score);
-            }
-            s_follower_score = (uint16_t)(s_follower_score + points);
-        }
-    }
-
-    slot->has_scored = true;
-    slot->last_scored_us = now_us;
-    slot->scored_rotations = slot->ev.rotations;
-    uint32_t next = (uint32_t)s_score + points;
-    s_score = (next > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX : (uint16_t)next;
-}
-
 bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 {
     if (!obs || !obs->mac) {
@@ -296,7 +210,6 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
     }
 
     OBSERVORE_LOCK();
-    apply_decay(now_us);
     s_total_sightings++;
 
     observore_slot_t *slot = find_slot(obs->mac);
@@ -417,7 +330,6 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
             announced_recently(&slot->ev, now_us)) {
             slot->reported = true;
         }
-        score_device(slot, now_us);
     }
     OBSERVORE_UNLOCK();
     return reportable;
@@ -426,7 +338,6 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 void observore_track_tick(int64_t now_us)
 {
     OBSERVORE_LOCK();
-    apply_decay(now_us);
 
     for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
         if (s_devices[i].in_use &&
@@ -448,23 +359,63 @@ static observore_level_t level_for(uint16_t score)
     return OBSERVORE_LEVEL_CLEAR;
 }
 
+/* The score is what is in front of the device, not a history of it.
+ *
+ * It used to accumulate: every device added its points again every two
+ * minutes, against a decay of one point a minute in total. Anything worth two
+ * points or more therefore outran the decay on its own, so the score climbed
+ * to its ceiling and stayed -- ninety-nine meant "something persistent has
+ * been here a while", never "how much is here". A number permanently at
+ * maximum is not read, and a level permanently at alert is not believed.
+ *
+ * So it is a sum over what is currently tracked, computed when asked. It rises
+ * when something arrives and falls when it leaves; the table's own thirty
+ * minute expiry is what makes it fall, and is slow enough that nothing
+ * flickers. Nothing to decay, no per-device cooldown, no accumulator to pin.
+ *
+ * Sustained presence is not lost, it has simply moved to where it belongs: a
+ * device does not become a follower until it has been there five minutes, and
+ * surviving an address rotation is what distinguishes it afterwards. Duration
+ * decides what something IS; the score says what is here. */
 void observore_track_status(observore_status_t *out, int64_t now_us)
 {
     if (!out) {
         return;
     }
+    (void)now_us;
     memset(out, 0, sizeof(*out));
     OBSERVORE_LOCK();
-    apply_decay(now_us);
-    out->score = s_score;
-    out->level = level_for(s_score);
     out->total_sightings = s_total_sightings;
+
+    uint32_t score = 0;
+    uint16_t presence = 0;
     for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
-        if (s_devices[i].in_use && s_devices[i].classified) {
-            out->device_count++;
-            out->class_counts[s_devices[i].ev.cls]++;
+        if (!s_devices[i].in_use || !s_devices[i].classified) {
+            continue;
         }
+        const observore_event_t *e = &s_devices[i].ev;
+        out->device_count++;
+        out->class_counts[e->cls]++;
+
+        uint16_t points = e->points;
+        if (e->cls == OBSERVORE_CLASS_FOLLOWER && e->rotations == 0) {
+            /* Presence alone, and all of it together capped: a room full of
+             * people is not an emergency, and twelve of them are not twelve
+             * times one person. */
+            points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
+            if (presence >= OBSERVORE_FOLLOWER_SCORE_CAP) {
+                continue;
+            }
+            if (presence + points > OBSERVORE_FOLLOWER_SCORE_CAP) {
+                points = (uint16_t)(OBSERVORE_FOLLOWER_SCORE_CAP - presence);
+            }
+            presence = (uint16_t)(presence + points);
+        }
+        score += points;
     }
+    out->score = (score > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
+                                               : (uint16_t)score;
+    out->level = level_for(out->score);
     OBSERVORE_UNLOCK();
 }
 

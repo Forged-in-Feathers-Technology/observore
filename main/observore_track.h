@@ -46,8 +46,11 @@
 #define OBSERVORE_ANNOUNCED_MAX    32
 
 /* Scoring. */
-#define OBSERVORE_SCORE_DECAY_INTERVAL_US (60 * 1000000LL)  /* -1 point per minute */
-#define OBSERVORE_SCORE_COOLDOWN_US      (120 * 1000000LL)  /* per device re-score */
+/* Neither a decay interval nor a per-device cooldown appears here any more.
+ * The score is a sum over what is currently tracked rather than an
+ * accumulator, so there is nothing to throttle and nothing to bleed off: a
+ * device counts once while it is present and stops counting when the table
+ * forgets it. See observore_track_status(). */
 #define OBSERVORE_SCORE_MAX               99
 
 /* The most the follower class may contribute at once.

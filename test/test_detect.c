@@ -525,44 +525,51 @@ static void test_scoring(void)
     CHECK(st.score == 5, "bodycam should score 5, got %u", st.score);
     CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "5 points is caution");
 
-    /* A chatty beacon must not run the score away: inside the cooldown the
-     * repeat sightings are tracked but not scored. */
+    /* A chatty beacon cannot run the score away, and no longer needs a
+     * cooldown to stop it: the score is what is present, and one device
+     * present fifty times is still one device. */
     for (int i = 1; i < 50; i++) {
         observore_track_observe(&obs, SECS(i));
     }
     observore_track_status(&st, SECS(50));
-    CHECK(st.score == 5, "cooldown breached: score ran to %u", st.score);
+    CHECK(st.score == 5, "fifty sightings of one device still score 5, got %u", st.score);
 
-    /* Decay is continuous and applied lazily, so the score at any instant does
-     * not depend on how often tick() happened to run.  By t=200 the score has
-     * shed three points, and the cooldown has expired so the sighting scores
-     * another five: 5 - 3 + 5 = 7. */
+    /* Nor does time raise it. Under the old accumulator this reached seven by
+     * t=200 and the ceiling within the hour, which is how "alert" became the
+     * resting state of any room with something in it. */
     observore_track_observe(&obs, SECS(200));
     observore_track_status(&st, SECS(200));
-    CHECK(st.score == 7, "expected 7 at t=200, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "7 points is alert");
+    CHECK(st.score == 5, "the same device an hour later still scores 5, got %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "and is still caution, not alert");
 
-    /* Three more quiet minutes, three more points shed. */
-    observore_track_tick(SECS(380));
-    observore_track_status(&st, SECS(380));
-    CHECK(st.score == 4, "expected 4 after further decay, got %u", st.score);
-    CHECK(st.level == OBSERVORE_LEVEL_CAUTION, "4 points is caution");
+    /* A second device of another class adds its own weight -- this is the
+     * axis the score is supposed to measure. A Find My tracker, identified by
+     * its payload rather than by a vendor prefix invented for a test. */
+    uint8_t findmy[31] = {0};
+    findmy[0] = 0x1E; findmy[1] = 0xFF; findmy[2] = 0x4C; findmy[3] = 0x00;
+    findmy[4] = 0x12; findmy[5] = 0x19; findmy[6] = 0x10;
+    const uint8_t tagmac[6] = {0x4A, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E};
+    observore_observation_t o2 = {.mac = tagmac, .src = OBSERVORE_SRC_BLE,
+                                  .rssi = -50, .addr_random = true,
+                                  .adv = findmy, .adv_len = sizeof(findmy)};
+    observore_track_observe(&o2, SECS(210));
+    observore_track_status(&st, SECS(210));
+    CHECK(st.score > 5, "a second device raises the score (got %u)", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT, "two pieces of serious kit is an alert");
 
-    /* Decay must floor at zero and not leave debt that eats a later hit. */
-    observore_track_tick(SECS(10000));
-    observore_track_status(&st, SECS(10000));
-    CHECK(st.score == 0, "score should floor at 0, got %u", st.score);
-    observore_track_observe(&obs, SECS(10001));
-    observore_track_status(&st, SECS(10002));
-    CHECK(st.score == 5, "a fresh hit after a long quiet must survive, got %u",
-          st.score);
+    /* And it comes down when the room empties, which the accumulator could
+     * not do while anything remained. The table forgets a device thirty
+     * minutes after it was last heard. */
+    observore_track_tick(SECS(210 + 31 * 60));
+    observore_track_status(&st, SECS(210 + 31 * 60));
+    CHECK(st.score == 0, "an empty room scores nothing, got %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR, "and reads clear again");
 
-    /* And the reading must not depend on tick() having been called at all. */
+    /* The reading never depended on tick() having run, and still must not. */
     observore_track_init();
     observore_track_observe(&obs, SECS(0));
     observore_track_status(&st, SECS(120));
-    CHECK(st.score == 3, "lazy decay without tick(): expected 3, got %u",
-          st.score);
+    CHECK(st.score == 5, "without tick(): expected 5, got %u", st.score);
 }
 
 static void test_rssi_floor(void)
