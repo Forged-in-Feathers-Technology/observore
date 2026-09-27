@@ -110,10 +110,19 @@
 #define OBSERVORE_ROTATION_RSSI_DB   15
 
 typedef enum {
-    OBSERVORE_LEVEL_CLEAR = 0,   /* score 0-2: nothing identified          */
-    OBSERVORE_LEVEL_CAUTION,     /* score 3-5: equipment that could watch   */
-    OBSERVORE_LEVEL_ALERT,       /* score 6+:  equipment that is watching   */
+    OBSERVORE_LEVEL_CLEAR = 0,   /* nothing identified                      */
+    OBSERVORE_LEVEL_CAUTION,     /* equipment that could watch              */
+    OBSERVORE_LEVEL_ALERT,       /* equipment that is watching              */
 } observore_level_t;
+
+/* The ceiling on unidentified devices is load-bearing, so it is checked
+ * rather than trusted: the heaviest capability class plus the entire follower
+ * class must still fall short of an alert. Retune any of the three and this
+ * stops the build rather than quietly letting a crowd escalate a Flipper. */
+_Static_assert(OBSERVORE_FOLLOWER_SCORE_CAP + OBSERVORE_SCORE_CAUTION <
+                   OBSERVORE_SCORE_ALERT,
+               "unidentified devices must not be able to carry an identified "
+               "one over the line into alert");
 
 typedef struct {
     uint16_t      score;

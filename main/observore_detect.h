@@ -118,6 +118,13 @@ typedef struct {
     bool        protected_cls;    /* a fingerprint rule may never silence it */
 } observore_class_desc_t;
 
+/* The two verdict thresholds. They live here, beside the weights, because the
+ * weights are expressed in terms of them: a class worth OBSERVORE_SCORE_CAUTION
+ * is exactly one caution on its own, and one worth OBSERVORE_SCORE_ALERT is
+ * exactly one alert. The levels themselves are in observore_track.h. */
+#define OBSERVORE_SCORE_CAUTION 3
+#define OBSERVORE_SCORE_ALERT   6
+
 const observore_class_desc_t *observore_class_desc(observore_class_t cls);
 
 /* Points a class contributes to the threat score on each scored sighting. */

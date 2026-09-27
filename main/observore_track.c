@@ -350,10 +350,10 @@ void observore_track_tick(int64_t now_us)
 
 static observore_level_t level_for(uint16_t score)
 {
-    if (score >= 6) {
+    if (score >= OBSERVORE_SCORE_ALERT) {
         return OBSERVORE_LEVEL_ALERT;
     }
-    if (score >= 3) {
+    if (score >= OBSERVORE_SCORE_CAUTION) {
         return OBSERVORE_LEVEL_CAUTION;
     }
     return OBSERVORE_LEVEL_CLEAR;
