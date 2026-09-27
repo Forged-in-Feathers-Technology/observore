@@ -55,7 +55,10 @@ carries a QMI8658 motion
 sensor and a PCF85063 clock, neither of which any other board here has; what
 to do with the first of those is the interesting part and is not written yet.
 
-**Capacitive touch** removes most of what the resistive path has to do. The
+**Capacitive touch** removes most of what the resistive path has to do, and
+adds one requirement instead: a bare finger, or a capacitive stylus. A
+passive plastic one registers as nothing at all, correctly and permanently,
+and the device cannot tell that apart from nobody touching it. The
 FT3168 reports how many fingers are down and where each one is, already in
 panel pixels, so there is no pressure threshold, no median filter and no
 calibration: the two days of arithmetic and one wrongly accused ribbon cable
@@ -68,7 +71,10 @@ panel is not there" look identical in a log that mentions neither.
 grid handles it by not trying to be clever. The largest square inside a circle
 of 466 pixels is 329 across, which is 41 columns by 20 rows — slightly more
 text than the 2.8" boards show, in a smaller space — and the four corners are
-simply never drawn into. Text does not reflow around a curve legibly at eight
+simply never drawn into. Touches outside that square are *clamped* into it
+rather than discarded: the crescents are live glass, not bezel, and the
+seventy pixels below the button bar are where a finger aiming at the bar
+actually lands. Text does not reflow around a curve legibly at eight
 pixels a character, and a page of readings clipped at the corners is worse
 than one that is smaller and whole.
 

@@ -203,21 +203,30 @@ static inline uint16_t px(uint16_t c) { return (uint16_t)((c << 8) | (c >> 8)); 
  * temporary buffer rather than a static one: this runs once, and on the board
  * that needs it there are eight megabytes of PSRAM to borrow it from. */
 #if CONFIG_OBSERVORE_TOUCH
-/* Panel pixels to text-grid pixels. The two are the same thing on a
- * rectangular panel. On a round one the grid is inset, and the corners
- * outside it belong to no row: a tap there is answered by ignoring it rather
- * than by clamping it onto the nearest button, which is what a clamp would
- * silently do to a thumb resting on the bezel. */
+/* Panel pixels to text-grid pixels.
+ *
+ * The two are the same thing on a rectangular panel. On a round one the grid
+ * is the square inside the circle, which leaves four crescents of glass that
+ * no character is drawn into -- and a tap there is clamped to the nearest
+ * cell rather than discarded.
+ *
+ * Discarding was the first attempt and it was wrong, for a reason that only
+ * a finger shows: the crescents are not bezel, they are live glass, and the
+ * button bar sits along the bottom edge of the square with seventy pixels of
+ * touchable nothing beneath it. Presses aimed at the bar landed at y=403 to
+ * 424 against a grid ending at 393 -- below the words, on the glass, ignored.
+ * Ten of twelve deliberate presses did nothing at all.
+ *
+ * There is no bezel to rest a thumb on here, so the objection that made
+ * rejecting look careful does not apply to this shape. */
 static bool to_grid_px(int *x, int *y)
 {
     int gx = *x - INSET_X;
     int gy = *y - INSET_Y;
-    if (gx < 0 || gy < 0 ||
-        gx >= COLS * OBSERVORE_FONT_W || gy >= ROWS * OBSERVORE_FONT_H) {
-        return false;
-    }
-    *x = gx;
-    *y = gy;
+    const int max_x = COLS * OBSERVORE_FONT_W - 1;
+    const int max_y = ROWS * OBSERVORE_FONT_H - 1;
+    *x = gx < 0 ? 0 : (gx > max_x ? max_x : gx);
+    *y = gy < 0 ? 0 : (gy > max_y ? max_y : gy);
     return true;
 }
 #endif
@@ -1421,7 +1430,8 @@ static void ui_task(void *arg)
 #endif
         xSemaphoreTake(s_lock, portMAX_DELAY);
 #if CONFIG_OBSERVORE_TOUCH
-        if (tapped && to_grid_px(&x, &y)) {
+        if (tapped) {
+            to_grid_px(&x, &y);
             handle_tap(x, y);
         }
         if (s_pressed >= 0 && esp_timer_get_time() > s_pressed_until_us) {

@@ -415,7 +415,12 @@ static bool sample(int *x, int *y)
     bool got = ft_read(FT_REG_TOUCHES, &touches, 1);
 #if CONFIG_OBSERVORE_TOUCH_LOG_RAW
     /* Bring-up: "nobody is touching it" and "the read failed" are the same
-     * silence otherwise, and telling them apart is most of the work. */
+     * silence otherwise, and telling them apart is most of the work.
+     *
+     * Worth knowing before reaching for either: this glass is capacitive, so
+     * a passive plastic stylus registers as nothing at all, correctly and
+     * for ever. Twenty-five taps of one went entirely unseen here while the
+     * driver reported reads succeeding and no fingers down. */
     static int64_t s_last_probe_us;
     int64_t now_probe = esp_timer_get_time();
     if (now_probe - s_last_probe_us > 2 * 1000 * 1000) {
