@@ -53,29 +53,32 @@
  * forgets it. See observore_track_status(). */
 #define OBSERVORE_SCORE_MAX               99
 
-/* The most the follower class may contribute at once.
+/* The most the follower class may contribute, together, ever.
  *
- * A follower is worth four points and may re-score every two minutes: two
- * points a minute, each, against a decay of one point a minute in total. So a
- * single persistent device pins the score at its ceiling in about ninety
- * minutes and eight do it in seven -- measured, not predicted, on a board in a
- * living room reading 98 with nothing in the table but followers. Alert became
- * the resting state of any populated place, and a level that is always on says
- * nothing.
+ * Five is the top of caution: a follower can make the device say "something
+ * unidentified is hanging about", and can never make it say "there is
+ * surveillance equipment here". Alert is reserved for things identified as
+ * what they are -- a body camera, a licence-plate reader, a tracker, a drone,
+ * a flood of deauthentication frames.
  *
- * Five is the top of caution, chosen against the level boundaries rather than
- * picked as a round number: six is where alert begins, so a cap of six would
- * have let a crowd reach exactly the level this exists to prevent. Presence can
- * raise caution and can never raise an alert. Anything that genuinely warrants alert --
- * a body camera, an ALPR, a deauth flood, a follower that survived rotating
- * its address -- scores outside this cap. */
+ * This took three attempts to get right, and the first two were wrong about
+ * what a follower means. Duration is not evidence: everybody in a restaurant
+ * has been near you for an hour. Rotation is not evidence either, which is the
+ * one that took hardware to see -- every modern phone rotates its Bluetooth
+ * address every quarter of an hour, so "survived a rotation" is not a device
+ * evading notice, it is a device behaving normally, and a house full of them
+ * put a board at score 17 and alert.
+ *
+ * What is left is that a follower is by definition UNIDENTIFIED. That is
+ * interesting, and worth listing, and worth a glance -- it is not worth an
+ * alarm, because the detector cannot say what it is. */
 #define OBSERVORE_FOLLOWER_SCORE_CAP      5
 
-/* A follower that has changed address and come back is different in kind from
- * one that has merely been in the room a while: it outlasted the single thing
- * meant to make it forgettable. Presence in a cafe is not evidence; surviving
- * a rotation is. Only the latter scores the full class weight, and it is not
- * subject to the cap above. */
+/* Within that cap a device that has merely been present counts one, and one
+ * that has survived rotating its address counts the class weight -- so a
+ * single such device reaches caution on its own rather than needing five
+ * companions. The ordering still says something; the ceiling is what stops it
+ * saying too much. */
 #define OBSERVORE_FOLLOWER_PRESENT_POINTS 1
 
 /* A device that has not been heard from in this long is evicted. */

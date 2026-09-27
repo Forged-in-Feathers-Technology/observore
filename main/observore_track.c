@@ -398,11 +398,14 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
         out->class_counts[e->cls]++;
 
         uint16_t points = e->points;
-        if (e->cls == OBSERVORE_CLASS_FOLLOWER && e->rotations == 0) {
-            /* Presence alone, and all of it together capped: a room full of
-             * people is not an emergency, and twelve of them are not twelve
-             * times one person. */
-            points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
+        if (e->cls == OBSERVORE_CLASS_FOLLOWER) {
+            /* The whole class is capped, rotation included. A follower is
+             * unidentified by definition, and the device should not raise an
+             * alarm about something it cannot name. See the cap for what two
+             * earlier attempts got wrong about this. */
+            if (e->rotations == 0) {
+                points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
+            }
             if (presence >= OBSERVORE_FOLLOWER_SCORE_CAP) {
                 continue;
             }

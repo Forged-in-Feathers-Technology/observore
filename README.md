@@ -247,13 +247,27 @@ table's own thirty-minute expiry is what brings it down, and is slow enough
 that nothing flickers. There is no accumulator, no decay and no per-device
 cooldown to tune — one device present fifty times is still one device.
 
-**Presence is capped.** A follower that has only been nearby counts one point,
-and all of them together count at most five — the top of caution, chosen
-against the level boundaries rather than as a round number, since six is where
-alert begins. Twelve strangers' phones in a café score five, not forty-eight.
-A follower that has **survived rotating its address** counts the full four and
-is outside the cap: it outlasted the one thing meant to make it forgettable,
-which is evidence, where sitting in a café is not.
+**Followers cannot raise an alert.** Together they contribute at most five —
+the top of caution — so the device can say "something unidentified is hanging
+about" and can never say "there is surveillance equipment here" on their
+account. Alert is reserved for things identified as what they are: a body
+camera, a licence-plate reader, a tracker, a drone, a flood of
+deauthentication frames.
+
+That ceiling took three attempts, and the first two were wrong about what a
+follower means. **Duration is not evidence** — everybody in a restaurant has
+been near you for an hour. **Rotation is not evidence either**, which took
+hardware to see: every modern phone changes its Bluetooth address every
+quarter of an hour, so "survived a rotation" describes a phone behaving
+normally, not a device evading notice. A house full of them put a board at
+seventeen and alert.
+
+What remains true is that a follower is, by definition, **unidentified**. That
+is worth listing and worth a glance. It is not worth an alarm, because the
+device cannot say what the thing is. Within the cap the ordering still holds —
+mere presence counts one, a rotation counts the class weight, so a single such
+device reaches caution on its own — but the ceiling is what stops it saying
+more than it knows.
 
 Sustained presence is not lost; it has moved to where it belongs. A device does
 not *become* a follower until it has been there five minutes. Duration decides

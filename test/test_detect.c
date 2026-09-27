@@ -482,29 +482,49 @@ static void test_a_crowd_is_not_an_emergency(void)
           "so a crowd never reads as an alert (level %s)",
           observore_level_name(st.level));
 
-    /* One of them rotates its address and comes back. That is different in
-     * kind, and it is not subject to the cap.
-     *
-     * On a clean table and in a tight window: the quantity being measured is a
-     * few points, decay removes one a minute, and a test that lets minutes
-     * pass between the two readings measures the decay instead. */
+    /* Rotation does not lift the ceiling either, which took hardware to
+     * learn: every modern phone rotates its Bluetooth address every quarter
+     * of an hour, so "survived a rotation" describes a phone behaving
+     * normally rather than a device evading notice. A house full of them put
+     * a board at seventeen and alert. */
     observore_track_init();
-    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x2C, 0xFE};
-    const uint8_t a1[6] = {0x7A, 0x01, 0x02, 0x03, 0x04, 0x05};
-    const uint8_t a2[6] = {0x7B, 0x06, 0x07, 0x08, 0x09, 0x0A};
-    observore_observation_t r1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -55,
-                                  .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
-    observore_observation_t r2 = r1; r2.mac = a2;
-    for (int t = 0; t <= 310; t += 100) {
-        observore_track_observe(&r1, SECS(t));
+    for (int i = 0; i < 5; i++) {
+        uint8_t a1[6] = {0x7A, 0x01, 0x02, 0x03, 0x04, (uint8_t)i};
+        uint8_t a2[6] = {0x7B, 0x06, 0x07, 0x08, 0x09, (uint8_t)i};
+        uint8_t shape[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x40 + i), 0xFE};
+        observore_observation_t r1 = {.mac = a1, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                      .addr_random = true, .adv = shape, .adv_len = sizeof(shape)};
+        observore_observation_t r2 = r1; r2.mac = a2;
+        for (int t = 0; t <= 310; t += 100) {
+            observore_track_observe(&r1, SECS(t));
+        }
+        observore_track_observe(&r2, SECS(330));   /* quiet 20s: a rotation */
     }
-    observore_track_status(&st, SECS(324));
-    uint16_t before = st.score;
-    observore_track_observe(&r2, SECS(325));      /* quiet 15s: a rotation */
-    observore_track_status(&st, SECS(325));
-    CHECK(st.score >= before + 2,
-          "surviving a rotation is worth more than being present (%u -> %u)",
-          before, st.score);
+    observore_track_status(&st, SECS(340));
+    CHECK(st.score <= OBSERVORE_FOLLOWER_SCORE_CAP,
+          "five rotated followers are still capped at %u, got %u",
+          OBSERVORE_FOLLOWER_SCORE_CAP, st.score);
+    CHECK(st.level != OBSERVORE_LEVEL_ALERT,
+          "and cannot raise an alert (level %s)", observore_level_name(st.level));
+
+    /* What an alert is for: something identified as what it is. */
+    observore_track_init();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x09, 0x08, 0x07};
+    uint8_t plain[] = {0x02, 0x01, 0x06};
+    observore_observation_t cam = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                   .adv = plain, .adv_len = sizeof(plain)};
+    observore_track_observe(&cam, SECS(0));
+    uint8_t findmy[31] = {0};
+    findmy[0] = 0x1E; findmy[1] = 0xFF; findmy[2] = 0x4C; findmy[3] = 0x00;
+    findmy[4] = 0x12; findmy[5] = 0x19; findmy[6] = 0x10;
+    const uint8_t tag[6] = {0x4A, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B};
+    observore_observation_t trk = {.mac = tag, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                   .addr_random = true, .adv = findmy, .adv_len = sizeof(findmy)};
+    observore_track_observe(&trk, SECS(1));
+    observore_track_status(&st, SECS(1));
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT,
+          "a body camera and a tracker together is what alert is for (score %u)",
+          st.score);
 }
 
 static void test_scoring(void)
