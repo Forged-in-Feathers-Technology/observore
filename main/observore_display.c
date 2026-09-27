@@ -202,6 +202,26 @@ static inline uint16_t px(uint16_t c) { return (uint16_t)((c << 8) | (c >> 8)); 
 /* Black the whole panel, corners included, in strips one glyph tall. Uses a
  * temporary buffer rather than a static one: this runs once, and on the board
  * that needs it there are eight megabytes of PSRAM to borrow it from. */
+#if CONFIG_OBSERVORE_TOUCH
+/* Panel pixels to text-grid pixels. The two are the same thing on a
+ * rectangular panel. On a round one the grid is inset, and the corners
+ * outside it belong to no row: a tap there is answered by ignoring it rather
+ * than by clamping it onto the nearest button, which is what a clamp would
+ * silently do to a thumb resting on the bezel. */
+static bool to_grid_px(int *x, int *y)
+{
+    int gx = *x - INSET_X;
+    int gy = *y - INSET_Y;
+    if (gx < 0 || gy < 0 ||
+        gx >= COLS * OBSERVORE_FONT_W || gy >= ROWS * OBSERVORE_FONT_H) {
+        return false;
+    }
+    *x = gx;
+    *y = gy;
+    return true;
+}
+#endif
+
 static void clear_panel(void)
 {
     uint16_t *strip = heap_caps_malloc(CLEAR_STRIP_BYTES, MALLOC_CAP_DMA);
@@ -1401,7 +1421,7 @@ static void ui_task(void *arg)
 #endif
         xSemaphoreTake(s_lock, portMAX_DELAY);
 #if CONFIG_OBSERVORE_TOUCH
-        if (tapped) {
+        if (tapped && to_grid_px(&x, &y)) {
             handle_tap(x, y);
         }
         if (s_pressed >= 0 && esp_timer_get_time() > s_pressed_until_us) {

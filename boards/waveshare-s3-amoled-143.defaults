@@ -1,8 +1,8 @@
 # Waveshare ESP32-S3-Touch-AMOLED-1.43 -- a round 1.43" AMOLED on an S3 with
 # 16 MB flash and 8 MB octal PSRAM.
 #
-# The panel is driven now. The touch controller and the motion sensor are
-# still present and still idle.
+# The panel and the touch controller are both driven now. The motion sensor
+# and the clock are still present and still idle.
 #
 # Everything here was read off the board rather than out of a datasheet --
 # esptool for the silicon, and the factory demo's own boot log and app image
@@ -60,9 +60,15 @@ CONFIG_OBSERVORE_DISPLAY_QSPI_D3=14
 CONFIG_OBSERVORE_DISPLAY_MHZ=40
 CONFIG_OBSERVORE_DISPLAY_BL=-1
 CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
-# The touch controller is an FT3168 at 0x38 on I2C SDA 47 / SCL 48. Not
-# driven yet: the existing touch code speaks XPT2046 over SPI.
-# CONFIG_OBSERVORE_TOUCH is not set
+# Capacitive touch: an FT3168 at 0x38, sharing the board's I2C bus with the
+# motion sensor and the clock. No interrupt line is wired to it, so the poll
+# is unconditional -- cheap, because a read is two short I2C transfers rather
+# than the four SPI conversions a resistive panel needs.
+CONFIG_OBSERVORE_TOUCH=y
+CONFIG_OBSERVORE_TOUCH_FT3168=y
+CONFIG_OBSERVORE_TOUCH_SDA=47
+CONFIG_OBSERVORE_TOUCH_SCL=48
+CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x38
 
 # No user LED on this board. The panel is the indicator.
 CONFIG_OBSERVORE_LED_NONE=y

@@ -8,7 +8,11 @@
 #include <stdlib.h>
 
 #include "driver/gpio.h"
+#if CONFIG_OBSERVORE_TOUCH_FT3168
+#include "driver/i2c_master.h"
+#else
 #include "driver/spi_master.h"
+#endif
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
@@ -81,7 +85,9 @@ static const char *TAG = "observore.touch";
  * once a touch had been logged, which is a margin in name only. */
 #define TASK_STACK 3072
 
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
 static spi_device_handle_t s_dev;
+#endif
 static bool s_ready;
 static int64_t s_task_started_us;
 
@@ -98,6 +104,8 @@ static int     s_tap_x, s_tap_y;
 #define UNLOCK() xSemaphoreGive(s_lock)
 
 static void touch_task(void *arg);
+
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
 
 static int read_channel(uint8_t cmd)
 {
@@ -146,7 +154,7 @@ static int pressure(void)
     return z1 + 4095 - z2;
 }
 
-void observore_touch_init(void)
+static bool backend_init(void)
 {
     /* PENIRQ: low while the panel is touched. Polling this costs one register
      * read, so the SPI bus stays idle until there is something to read. */
@@ -174,7 +182,7 @@ void observore_touch_init(void)
     err = spi_bus_initialize(host, &bus, SPI_DMA_DISABLED);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI bus: %s", esp_err_to_name(err));
-        return;
+        return false;
     }
 #endif
 
@@ -187,25 +195,14 @@ void observore_touch_init(void)
     err = spi_bus_add_device(host, &dev, &s_dev);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI device: %s", esp_err_to_name(err));
-        return;
+        return false;
     }
-
-    s_lock = xSemaphoreCreateMutex();
-    if (!s_lock) {
-        ESP_LOGE(TAG, "no memory for the touch lock");
-        return;
-    }
-    s_ready = true;
-    if (xTaskCreate(touch_task, "touch", TASK_STACK, NULL, 4, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "could not start the touch task");
-        s_ready = false;
-        return;
-    }
-    ESP_LOGI(TAG, "XPT2046 ready on SPI%d (irq %d)%s", TOUCH_HOST + 1,
+    ESP_LOGI(TAG, "XPT2046 on SPI%d (irq %d)%s", TOUCH_HOST + 1,
              CONFIG_OBSERVORE_TOUCH_IRQ,
              CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
-    s_task_started_us = esp_timer_get_time();
+    return true;
 }
+
 
 /* Raw ADC counts to screen pixels.
  *
@@ -302,6 +299,171 @@ static bool sample(int *x, int *y)
 #endif
     to_screen(raw_x, raw_y, x, y);
     return true;
+}
+
+#else  /* CONFIG_OBSERVORE_TOUCH_FT3168 */
+
+/* The capacitive half.
+ *
+ * Almost nothing above applies: the controller does the work a resistive
+ * panel leaves to the host. It reports how many fingers are down and where
+ * each one is, in panel pixels, so there is no pressure to threshold, no
+ * median to take and no calibration to get wrong -- the arithmetic that took
+ * two days and a wrongly accused ribbon cable on the Cheap Yellow Displays
+ * does not exist here. */
+
+/* Three chips share these two wires: this controller, a motion sensor and a
+ * clock. Whether each is present is asked once at startup and said out loud,
+ * because "the panel is not answering" and "the panel is not there" are
+ * different problems that look identical in a log mentioning neither.
+ *
+ * Asked with a one-byte read rather than i2c_master_probe(), which on this
+ * board reports a timeout for every address including the ones that answer
+ * a read perfectly well. A scan that lies about an empty bus is worse than
+ * no scan: it sends you looking at the wiring. */
+#define FT_SCAN_FIRST 0x08
+#define FT_SCAN_LAST  0x77
+
+/* Registers, from Waveshare's own driver rather than from a datasheet nobody
+ * has: 0x02 holds the number of fingers down, and 0x03 begins four bytes of
+ * position -- twelve bits of X then twelve of Y, high nibble first. */
+#define FT_REG_TOUCHES 0x02
+#define FT_REG_XY      0x03
+
+static i2c_master_bus_handle_t s_bus;
+static i2c_master_dev_handle_t s_touch;
+
+/* Two hundred milliseconds for two bytes, which looks absurd and is not.
+ * The timeout covers waiting for the transaction to complete, and on a board
+ * whose real work is two radios the completion can sit behind them: at 50 ms
+ * every read in the poll loop failed while the same read at startup, before
+ * the radios were busy, succeeded. Measured, not chosen. It costs nothing
+ * when nothing goes wrong, because a read that works returns in microseconds. */
+static bool ft_read(uint8_t reg, uint8_t *buf, size_t len)
+{
+    return i2c_master_transmit_receive(s_touch, &reg, 1, buf, len,
+                                       pdMS_TO_TICKS(200)) == ESP_OK;
+}
+
+/* One byte from register zero, which every chip on this bus answers. */
+static bool addr_answers(uint8_t addr)
+{
+    i2c_device_config_t cfg = {.dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                               .device_address  = addr,
+                               .scl_speed_hz    = 300 * 1000};
+    i2c_master_dev_handle_t dev = NULL;
+    if (i2c_master_bus_add_device(s_bus, &cfg, &dev) != ESP_OK) {
+        return false;
+    }
+    uint8_t reg = 0x00, val = 0;
+    bool ok = i2c_master_transmit_receive(dev, &reg, 1, &val, 1,
+                                          pdMS_TO_TICKS(200)) == ESP_OK;
+    i2c_master_bus_rm_device(dev);
+    return ok;
+}
+
+static bool backend_init(void)
+{
+    i2c_master_bus_config_t bus = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = CONFIG_OBSERVORE_TOUCH_SDA,
+        .scl_io_num = CONFIG_OBSERVORE_TOUCH_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    esp_err_t err = i2c_new_master_bus(&bus, &s_bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    char found[64] = {0};
+    size_t n = 0;
+    for (uint8_t addr = FT_SCAN_FIRST;
+         addr <= FT_SCAN_LAST && n + 6 < sizeof(found); addr++) {
+        if (addr_answers(addr)) {
+            n += (size_t)snprintf(found + n, sizeof(found) - n, " 0x%02X", addr);
+        }
+    }
+    ESP_LOGI(TAG, "I2C on sda %d / scl %d answered:%s",
+             CONFIG_OBSERVORE_TOUCH_SDA, CONFIG_OBSERVORE_TOUCH_SCL,
+             n ? found : " nothing");
+
+    i2c_device_config_t dev = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = CONFIG_OBSERVORE_TOUCH_I2C_ADDR,
+        .scl_speed_hz    = 300 * 1000,
+    };
+    err = i2c_master_bus_add_device(s_bus, &dev, &s_touch);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C device: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    /* Out of whatever low-power mode it woke in, the way the vendor does it. */
+    uint8_t wake[2] = {0x00, 0x00};
+    i2c_master_transmit(s_touch, wake, sizeof(wake), pdMS_TO_TICKS(50));
+
+    ESP_LOGI(TAG, "FT3168 at 0x%02X", CONFIG_OBSERVORE_TOUCH_I2C_ADDR);
+    return true;
+}
+
+static bool sample(int *x, int *y)
+{
+    uint8_t touches = 0;
+    bool got = ft_read(FT_REG_TOUCHES, &touches, 1);
+#if CONFIG_OBSERVORE_TOUCH_LOG_RAW
+    /* Bring-up: "nobody is touching it" and "the read failed" are the same
+     * silence otherwise, and telling them apart is most of the work. */
+    static int64_t s_last_probe_us;
+    int64_t now_probe = esp_timer_get_time();
+    if (now_probe - s_last_probe_us > 2 * 1000 * 1000) {
+        s_last_probe_us = now_probe;
+        ESP_LOGI(TAG, "probe read=%s fingers=%u", got ? "ok" : "failed", touches);
+    }
+#endif
+    if (!got || touches == 0) {
+        return false;
+    }
+    uint8_t buf[4];
+    if (!ft_read(FT_REG_XY, buf, sizeof(buf))) {
+        return false;
+    }
+    int px = ((buf[0] & 0x0F) << 8) | buf[1];
+    int py = ((buf[2] & 0x0F) << 8) | buf[3];
+    /* Already in panel pixels. A reading off the end of the glass is a read
+     * that collided with something, not a finger beyond the edge. */
+    if (px >= OBSERVORE_DISPLAY_W || py >= OBSERVORE_DISPLAY_H) {
+        return false;
+    }
+#if CONFIG_OBSERVORE_TOUCH_LOG_RAW
+    ESP_LOGI(TAG, "touch n=%u x=%3d y=%3d", touches, px, py);
+#endif
+    *x = px;
+    *y = py;
+    return true;
+}
+
+#endif  /* controller */
+
+void observore_touch_init(void)
+{
+    if (!backend_init()) {
+        return;
+    }
+    s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) {
+        ESP_LOGE(TAG, "no memory for the touch lock");
+        return;
+    }
+    s_ready = true;
+    if (xTaskCreate(touch_task, "touch", TASK_STACK, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "could not start the touch task");
+        s_ready = false;
+        return;
+    }
+    s_task_started_us = esp_timer_get_time();
 }
 
 static void touch_task(void *arg)

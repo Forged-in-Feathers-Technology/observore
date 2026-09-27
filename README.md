@@ -48,11 +48,21 @@ An eighth profile, `waveshare-s3-amoled-143`, exists but is **not shipped**:
 CI builds it so it cannot rot, and the browser flasher does not offer it.
 Waveshare's ESP32-S3-Touch-AMOLED-1.43 is a round 1.43" AMOLED on an S3 with
 16 MB of flash and 8 MB of octal PSRAM. The detector and the panel both work;
-the touch controller is an FT3168 on I2C where every other board here has a
-resistive XPT2046 over SPI, so tapping the glass does nothing yet, and that is
-why it is not offered for download. The board also carries a QMI8658 motion
+its touch controller is an FT3168 on I2C where every other board here has a
+resistive XPT2046 over SPI, so the driver carries two backends now. It is not
+offered for download yet because one unit has been tested. The board also
+carries a QMI8658 motion
 sensor and a PCF85063 clock, neither of which any other board here has; what
 to do with the first of those is the interesting part and is not written yet.
+
+**Capacitive touch** removes most of what the resistive path has to do. The
+FT3168 reports how many fingers are down and where each one is, already in
+panel pixels, so there is no pressure threshold, no median filter and no
+calibration: the two days of arithmetic and one wrongly accused ribbon cable
+that the Cheap Yellow Displays cost simply do not happen. It shares its two
+wires with the motion sensor and the clock, and the driver says which of the
+three answered at startup, because "the panel is not answering" and "the
+panel is not there" look identical in a log that mentions neither.
 
 **A round screen** is the first one here that is not a rectangle, and the text
 grid handles it by not trying to be clever. The largest square inside a circle
