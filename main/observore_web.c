@@ -656,13 +656,18 @@ static esp_err_t baseline_handler(httpd_req_t *req)
     snprintf(body, sizeof(body),
              "{\"ok\":true,\"seen\":%zu,\"added\":%zu,\"already\":%zu,"
              "\"by_name\":%zu,\"by_fingerprint\":%zu,\"by_mac\":%zu,"
-             "\"temporary\":%zu,\"no_room\":%zu,\"rules\":%zu}",
+             "\"temporary\":%zu,\"no_room\":%zu,\"protected\":%zu,"
+             "\"protected_class\":\"%s\",\"rules\":%zu}",
              b.seen, b.added, b.already, b.by_name, b.by_fingerprint, b.by_mac,
-             b.temporary, b.no_room, observore_mute_count());
+             b.temporary, b.no_room, b.protected_muted,
+             b.protected_muted ? observore_class_desc(
+                 (observore_class_t)b.protected_example)->name : "",
+             observore_mute_count());
     ESP_LOGI(TAG, "baseline: %zu seen, %zu muted (%zu by name, %zu by "
-                  "fingerprint, %zu by MAC of which %zu temporary), %zu no room",
+                  "fingerprint, %zu by MAC of which %zu temporary), %zu no "
+                  "room, %zu of a protected class",
              b.seen, b.added, b.by_name, b.by_fingerprint, b.by_mac,
-             b.temporary, b.no_room);
+             b.temporary, b.no_room, b.protected_muted);
     return send_json(req, body);
 }
 

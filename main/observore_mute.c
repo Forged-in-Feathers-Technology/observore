@@ -159,6 +159,32 @@ bool observore_mute_class_is_protected(observore_class_t cls)
     return observore_class_desc(cls)->protected_cls;
 }
 
+bool observore_mute_class_needs_address_rule(observore_class_t cls)
+{
+    /* Which classes may only ever be silenced one address at a time.
+     *
+     * A name rule matches as a substring and a fingerprint rule matches a
+     * shape, so either can silence devices that were never in the room. That
+     * is tolerable for street furniture and intolerable for the things this
+     * device exists to find: a body camera broadcasting "AXON BODY 3" would
+     * leave behind a rule that quiets every Axon Body 3 the owner ever walks
+     * past, not the one in front of them.
+     *
+     * The follower class is the exception, and it is the same trade the
+     * baseline has always made. "Follower" is a verdict about duration rather
+     * than identity -- a household phone sitting in its own kitchen for five
+     * minutes earns it -- so a rule specific enough to name that handset is
+     * the right answer, and a MAC rule on a rotating address would be gone
+     * within the hour, which is how the same phone came to be announced every
+     * day on the bench.
+     *
+     * Found the hard way: a Flipper Zero went unreported on two boards for a
+     * week because a baseline had turned "Flipper Arala75h" into a name rule,
+     * and the comment in baseline_one promised the opposite was happening. */
+    return observore_mute_class_is_protected(cls) &&
+           cls != OBSERVORE_CLASS_FOLLOWER;
+}
+
 /* Remember a shape as retired, and write it down. Called with the lock held.
  *
  * The list is small and oldest-out: sixteen shapes is far more than a room
@@ -619,7 +645,14 @@ static void baseline_one(const observore_event_t *e, observore_baseline_t *r)
      * SSID "42" silenced a hundred different addresses on the bench, every one
      * of them something whose name merely contained those two characters. */
     bool name_is_specific = strlen(e->detail) >= OBSERVORE_BASELINE_NAME_MIN;
-    if (e->detail[0] != '\0' && name_is_specific) {
+    /* Checked before anything else, because the previous order let a named
+     * device past the protection test entirely. */
+    bool address_only = observore_mute_class_needs_address_rule(e->cls);
+
+    if (address_only) {
+        rule.kind = OBSERVORE_MUTE_MAC;
+        memcpy(rule.mac, e->mac, OBSERVORE_MAC_LEN);
+    } else if (e->detail[0] != '\0' && name_is_specific) {
         rule.kind = OBSERVORE_MUTE_NAME;
         snprintf(rule.ssid, sizeof(rule.ssid), "%s", e->detail);
     } else if (shape_is_one_device &&
@@ -646,6 +679,14 @@ static void baseline_one(const observore_event_t *e, observore_baseline_t *r)
         return;
     }
     r->added++;
+    /* Said out loud rather than buried: silencing something the device exists
+     * to find is exactly the event a person needs to know happened. */
+    if (address_only) {
+        if (r->protected_muted == 0) {
+            r->protected_example = (uint8_t)e->cls;
+        }
+        r->protected_muted++;
+    }
     switch (rule.kind) {
         case OBSERVORE_MUTE_NAME:        r->by_name++; break;
         case OBSERVORE_MUTE_FINGERPRINT: r->by_fingerprint++; break;

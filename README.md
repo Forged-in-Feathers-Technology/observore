@@ -1109,7 +1109,7 @@ which is indistinguishable from a quiet room. It took two boards side by side
 to notice: one admitted eight thousand sightings, the other, two metres away,
 admitted six.
 
-Three things now stand between a baseline and that outcome.
+Four things now stand between a baseline and that outcome.
 
 A fingerprint rule is written **only for a shape carried by exactly one device
 in range at that moment**. Two devices sharing a shape means the shape is a
@@ -1122,6 +1122,23 @@ substrings, which is right when a person types one and wrong when a baseline
 takes whatever it hears: the SSID `42` silenced a hundred different addresses
 here, each one something whose name merely contained those two characters.
 
+**A protected class is silenced by address and nothing else**, and this one
+was learned late. Protection used to be checked only on the fingerprint
+branch, and the name branch ran first — so anything broadcasting a name of
+four characters or more walked straight past it, and the comment next to the
+code promised the opposite. A Flipper Zero went unreported on two boards for a
+week because a baseline had turned `Flipper Arala75h` into a name rule, and it
+took a third board with an empty rule table, hearing the same Flipper from the
+same desk, to see it. The cost of that bug scales badly: a body camera
+broadcasting `AXON BODY 3` would have left a substring rule quieting every
+Axon Body 3 the owner ever walked past. Trackers, body cameras, plate readers,
+drones, smart glasses, hunter gear and deauthentication floods now get a rule
+naming one address, which silences the device in front of you and nothing
+else. **And the baseline says when it has done it** — `baseline: 14 ignored,
+incl 1 hunter` on the glass, a `protected` count on `/api/baseline`, and a
+sentence in the console. Silencing the thing the device exists to find should
+never be something you discover a week later.
+
 And **every rule reports what it has actually done** — how many sightings it
 has discarded and how many distinct addresses it has covered, on `/api/mutes`
 and in the console beside the rule. A fingerprint rule that turns out to cover
@@ -1130,9 +1147,9 @@ the device stops honouring it and says so. That last one is the safety net for
 the case the first two cannot see: a shape shared with devices that were not
 in the room when the baseline was taken.
 
-One exception to the fingerprint rule above is made here, and only here. A
-`follower` on a rotating address gets a fingerprint rule from a baseline, where
-a console mute would refuse one. "Follower" is a verdict about how long
+One exception to both rules above is made here, and only here. A `follower`
+may be silenced by name, and one on a rotating address gets a fingerprint rule
+from a baseline where a console mute would refuse one. "Follower" is a verdict about how long
 something has been near you, not about what it is; in your own home the device
 that has been near you for five minutes is your phone, and a MAC rule for it
 dies at its next rotation — which is how the same handset ends up announced
@@ -1143,6 +1160,10 @@ too. Trackers, drones, body-worn cameras and the rest keep their protection,
 because they are classified by what they are, and a baseline does not change
 what they are. A `follower` that keeps a fixed address gets the MAC rule, which
 is both more specific and just as durable.
+
+Dismissing a finding by tapping it on the glass follows the same rule, for the
+same reason: the tap silences the body camera in front of you, not every one
+of that model you will ever walk past.
 
 Measured on real air: fourteen devices in range, all of them rotating their
 addresses, produced three name rules and ten fingerprint rules and **zero**
