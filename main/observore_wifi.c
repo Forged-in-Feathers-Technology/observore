@@ -2,6 +2,7 @@
 
 #include "observore_netcfg.h"
 #include "mdns.h"
+#include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_wifi.h"
 #include "observore_wps.h"
@@ -555,6 +556,17 @@ static void run_ap_scan(void)
     }
 
     int64_t now = esp_timer_get_time();
+    /* Access points are the only stationary things this device can see, so
+     * they are what tells it whether it has gone anywhere -- see
+     * observore_surroundings.h and the tailing class it guards. */
+    for (uint16_t i = 0; i < count; i++) {
+        const uint8_t *b = records[i].bssid;
+        uint32_t h = 2166136261u;
+        for (int k = 0; k < 6; k++) {
+            h = (h ^ b[k]) * 16777619u;
+        }
+        observore_surroundings_note(h ? h : 1u, now);
+    }
     for (uint16_t i = 0; i < count; i++) {
         observore_observation_t obs = {
             .mac     = records[i].bssid,

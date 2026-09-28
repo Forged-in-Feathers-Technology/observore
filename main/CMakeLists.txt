@@ -18,6 +18,7 @@ idf_component_register(
         "observore_touch.c"
         "observore_i2c.c"
         "observore_motion.c"
+        "observore_surroundings.c"
         "observore_ble.c"
         "observore_wifi.c"
         "observore_web.c"

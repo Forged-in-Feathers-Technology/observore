@@ -11,6 +11,7 @@
 #include "observore_version.h"
 #include "observore_heapwatch.h"
 #include "observore_mute.h"
+#include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
 #include "observore_util.h"
@@ -452,6 +453,101 @@ static void test_follower(void)
           OBSERVORE_FOLLOWER_PRESENT_POINTS, st.score);
 }
 
+
+
+static void test_a_journey_must_change_the_room(void)
+{
+    banner("a journey that did not go anywhere is not a journey");
+
+    /* Access points are the reference frame: stationary, plentiful, and
+     * already scanned. Carrying the board around one building leaves them
+     * all in earshot, which is exactly what made every follower in a house
+     * look like it had come along. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 9; ap++) {
+        observore_surroundings_note(ap, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    CHECK(observore_surroundings_marked() == 9, "nine access points marked, got %u",
+          (unsigned)observore_surroundings_marked());
+    CHECK(observore_surroundings_overlap_pct() == 0,
+          "none heard again yet, got %d", observore_surroundings_overlap_pct());
+
+    /* Walked to the kitchen: the same building answers. */
+    for (uint32_t ap = 1; ap <= 8; ap++) {
+        observore_surroundings_note(ap, SECS(60));
+    }
+    CHECK(observore_surroundings_overlap_pct() >= 80,
+          "the same place shares nearly all of them, got %d%%",
+          observore_surroundings_overlap_pct());
+
+    /* Went somewhere else: almost nothing from before is audible. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 9; ap++) {
+        observore_surroundings_note(ap, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    observore_surroundings_note(1, SECS(600));          /* one straggler */
+    for (uint32_t ap = 100; ap <= 112; ap++) {
+        observore_surroundings_note(ap, SECS(600));     /* all new */
+    }
+    int elsewhere = observore_surroundings_overlap_pct();
+    CHECK(elsewhere > 0 && elsewhere <= 33,
+          "somewhere else shares almost none, got %d%%", elsewhere);
+
+    /* Stale entries must not make a new place look familiar: an access point
+     * last heard an hour ago is not part of "here". */
+    observore_surroundings_reset();
+    observore_surroundings_note(7, SECS(0));
+    observore_surroundings_mark(SECS(4000), SECS(300));
+    CHECK(observore_surroundings_marked() == 0,
+          "an hour-old access point is not part of here, got %u",
+          (unsigned)observore_surroundings_marked());
+    CHECK(observore_surroundings_overlap_pct() == -1,
+          "and with nothing marked the answer is 'cannot say', got %d",
+          observore_surroundings_overlap_pct());
+
+    observore_surroundings_reset();
+}
+
+static void test_a_crowd_cannot_hide_a_finding(void)
+{
+    banner("the screen lists the heaviest first, not merely the newest");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* A body camera, seen once and then quiet. */
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x21, 0x22, 0x23};
+    uint8_t plain[] = {0x02, 0x01, 0x06};
+    observore_observation_t cam = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                   .adv = plain, .adv_len = sizeof(plain)};
+    observore_track_observe(&cam, SECS(0));
+
+    /* Then a roomful of newer, lighter things. Twelve rows on the glass and
+     * more devices than that in the table: with recency alone the camera
+     * falls off the bottom, which is how a crowd hides the one finding that
+     * matters. */
+    for (int i = 0; i < 14; i++) {
+        uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x60 + i), 0xFE};
+        uint8_t mac[6] = {0x70, 0x11, 0x22, 0x33, 0x44, (uint8_t)i};
+        observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                     .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+        for (int t = 100; t <= 410; t += 100) {
+            observore_track_observe(&o, SECS(t));
+        }
+    }
+
+    observore_event_t snap[12];
+    size_t n = observore_track_snapshot(snap, 12);
+    CHECK(n == 12, "the screen asks for twelve, got %u", (unsigned)n);
+    CHECK(snap[0].cls == OBSERVORE_CLASS_BODYCAM,
+          "the body camera is still first, an hour later and quiet (got %s)",
+          observore_class_desc(snap[0].cls)->name);
+
+    observore_track_init();
+}
 
 static void test_something_that_came_with_you(void)
 {
@@ -2506,6 +2602,8 @@ int main(void)
     test_follower();
     test_a_crowd_is_not_an_emergency();
     test_something_that_came_with_you();
+    test_a_journey_must_change_the_room();
+    test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();
     test_table_pressure();

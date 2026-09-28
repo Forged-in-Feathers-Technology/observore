@@ -339,12 +339,28 @@ no signature can produce: the classifier cannot see it, and the tracker
 promotes into it. Promotion is one-way, because something that has followed
 you once has not stopped having done so by going briefly quiet.
 
-A *journey* is sustained movement followed by settling — picked up, carried,
-put down — measured by the accelerometer on the one board that has one, and
-counted on arrival rather than departure. Fifteen seconds of carrying is the
-minimum, so knocking the desk does not let the device claim it has been
-somewhere. Nothing else uses the sensor: orientation tells you nothing about
-who is nearby, and a screen that rotates is a screen that draws when nobody
+A *journey* is sustained movement **that ended somewhere else**, and the
+second half of that sentence was missing at first. Fifteen seconds of
+carrying is the minimum, so a knocked desk does not count; but the
+accelerometer can only say the board moved, never that it went anywhere, and
+those are different questions. Carried around one house, it promoted every
+follower in the building — ten of them in one evening — because nothing had
+left: every device in range before was in range after.
+
+So the **access points decide**. They are stationary by definition, there are
+usually a dozen in earshot indoors, and the board already scans them every
+fifteen seconds. The set in range is remembered when the board is picked up
+and compared forty seconds after it settles: if more than a third of the old
+ones are still audible, this is the same place and the journey does not
+count, however far the thing was carried around it. Somewhere genuinely else
+shares almost none of them.
+
+Where there are no access points at all, nothing is counted and the log says
+so — "you went nowhere" and "you arrived" would both be inventions, and the
+quiet one is safer.
+
+Nothing else uses the accelerometer: orientation tells you nothing about who
+is nearby, and a screen that rotates is a screen that draws when nobody
 asked.
 
 The cost is stated plainly, because it will happen on the first walk: **your
@@ -355,6 +371,11 @@ baseline quiets it one address at a time.
 
 The seven boards with no accelerometer report zero journeys for ever, promote
 nothing, and behave exactly as they did.
+
+The screen lists the **heaviest finding first**, recency only breaking ties.
+That was recency alone until a crowd of promotions filled all twelve rows of
+a 466-pixel screen and a body camera would have gone off the bottom with
+everything else.
 
 - **0–2 clear** — nothing identified. LED winks once every 5 s (green)
 - **3–5 caution** — equipment that could watch. LED pulses once a second (amber)

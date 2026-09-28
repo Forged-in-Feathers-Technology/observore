@@ -466,11 +466,19 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
  * `max` -- the previous shape collected all 192 slots and then insertion-sorted
  * the lot so a caller could display forty, which meant shuffling megabytes of
  * 120-byte structs on a request the console makes every two seconds. */
-typedef enum { BY_NOTHING, BY_LAST_SEEN, BY_HITS } sort_key_t;
+typedef enum { BY_NOTHING, BY_LAST_SEEN, BY_HITS, BY_WEIGHT } sort_key_t;
 
 static bool precedes(const observore_event_t *a, const observore_event_t *b,
                      sort_key_t key)
 {
+    /* Weight first, recency as the tiebreak. The screen shows twelve rows of
+     * a table that holds far more, so what falls off the bottom matters: with
+     * recency alone, a crowd hides a finding. Ten promotions in one evening
+     * pushed everything else off a 466-pixel screen, and a body camera would
+     * have gone with them. */
+    if (key == BY_WEIGHT && a->points != b->points) {
+        return a->points > b->points;
+    }
     return (key == BY_HITS) ? a->hits > b->hits
                             : a->last_seen_us > b->last_seen_us;
 }
@@ -523,7 +531,7 @@ size_t observore_track_nearby(observore_event_t *out, size_t max)
 
 size_t observore_track_snapshot(observore_event_t *out, size_t max)
 {
-    return collect(out, max, 1, BY_LAST_SEEN);   /* newest first */
+    return collect(out, max, 1, BY_WEIGHT);   /* heaviest first, then newest */
 }
 
 size_t observore_track_forget_muted(void)
