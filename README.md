@@ -631,6 +631,39 @@ The password is write-only from outside the device: no API returns it, and the
 console never receives it, so the field stays blank even when a network is
 configured.
 
+### Nothing left behind
+
+The other local check guards a subtler thing than a leaked password: a commit
+that left part of itself behind.
+
+```bash
+tools/check_nothing_left_behind.sh            # list what is uncommitted
+tools/check_nothing_left_behind.sh --strict   # and fail
+```
+
+```bash
+printf '#!/bin/sh\nexec tools/check_nothing_left_behind.sh --strict\n' \
+  > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
+It exists because of one commit here. A feature was staged as `git add main
+boards README.md`, its test file was not on that list, and the feature reached
+`main` with none of its coverage. CI passed: it ran the old tests, they were
+green, and the checks that would have proved the new code works were never
+there to run. **A green tick reported the absence of a test as the success of
+one**, which is the most expensive kind of wrong a build can be.
+
+No amount of care fixes that, because the habit causing it — naming paths to
+`git add` — is fast precisely by being unexamined. So the check is mechanical:
+after a commit, is anything still uncommitted that looks like part of it? It
+deliberately ignores build output and scratch files, and deliberately notices
+an untracked file under `main/`, `test/`, `tools/` or `boards/` — a new module
+written, committed nowhere, and building fine locally because the file is on
+disk.
+
+It cannot run in CI, which is the point: CI only ever sees what was pushed,
+and this is a check about what was not.
+
 ## Building
 
 For a first run, follow [Getting started](#getting-started). This section is
