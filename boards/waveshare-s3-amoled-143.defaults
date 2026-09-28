@@ -38,16 +38,17 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # 41 columns by 20 rows, against 40x15 on the 2.8" boards -- and the 69- and
 # 73-pixel insets are the corners it may not be drawn into.
 #
-# The board ships with either of two controllers and Waveshare tells them
-# apart by reading register 0xDA: 0x86 an SH8601, 0xFF a CO5300. The factory
-# firmware on this unit logged 0xFF before it was overwritten, so this is a
-# CO5300 -- which also needs the six-pixel column offset below.
+# The board ships with either of two controllers, so the firmware asks which
+# one at boot -- register 0xDA over a bit-banged one-line SPI before the
+# driver takes the pins -- and picks the initialisation sequence and the
+# column offset from the answer. One image serves both, which is what a
+# download has to do. This unit answers 0xFF, a CO5300.
 CONFIG_OBSERVORE_DISPLAY=y
 CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED=y
+CONFIG_OBSERVORE_DISPLAY_PANEL_DETECT=y
 CONFIG_OBSERVORE_DISPLAY_CO5300=y
 CONFIG_OBSERVORE_DISPLAY_WIDTH=466
 CONFIG_OBSERVORE_DISPLAY_HEIGHT=466
-CONFIG_OBSERVORE_DISPLAY_X_OFFSET=6
 CONFIG_OBSERVORE_DISPLAY_INSET_X=69
 CONFIG_OBSERVORE_DISPLAY_INSET_Y=73
 CONFIG_OBSERVORE_DISPLAY_SCLK=10

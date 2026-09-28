@@ -201,21 +201,30 @@ config OBSERVORE_DISPLAY_QSPI_AMOLED
 
 endchoice
 
-config OBSERVORE_DISPLAY_CO5300
-    bool "The panel is a CO5300 rather than an SH8601"
+config OBSERVORE_DISPLAY_PANEL_DETECT
+    bool "Ask the panel which controller it is"
     depends on OBSERVORE_DISPLAY_QSPI_AMOLED
     default y
     help
-        Waveshare ships the 1.43" board with either controller and tells them
-        apart at runtime by bit-banging a read of register 0xDA: 0x86 is an
-        SH8601, 0xFF a CO5300.  Ours answered 0xFF.
+        Waveshare ships one product with either controller behind the glass,
+        and they need different initialisation: a CO5300 also starts six
+        pixels further along.  The wrong choice shows nothing at all, or an
+        image shifted sideways.
 
-        They need different initialisation and the CO5300 starts six pixels
-        further along, so the wrong choice shows either nothing at all or an
-        image shifted sideways by six pixels.  A build option rather than a
-        runtime probe, because the probe means driving the panel's pins by
-        hand before the driver owns them, and the failure here is obvious the
-        moment anybody looks at the screen.
+        With this on, the panel is asked before the driver takes its pins --
+        register 0xDA over a bit-banged one-line SPI, which answers 0x86 for
+        an SH8601 and 0xFF for a CO5300.  One image then serves both, which
+        is what a download has to do: a stranger cannot be expected to know
+        which revision arrived in the post, and a blank screen tells them
+        nothing.
+
+config OBSERVORE_DISPLAY_CO5300
+    bool "Assume a CO5300 rather than an SH8601"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default y
+    help
+        Which controller to use when detection is off, or when the read
+        gives an answer that names neither.  Ours answered 0xFF, a CO5300.
 
 
 config OBSERVORE_DISPLAY_WIDTH

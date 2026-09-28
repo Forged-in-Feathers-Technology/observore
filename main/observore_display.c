@@ -98,7 +98,11 @@ static const char *TAG = "observore.display";
  * clipped at the corners is worse than one that is smaller and whole. */
 #define INSET_X CONFIG_OBSERVORE_DISPLAY_INSET_X
 #define INSET_Y CONFIG_OBSERVORE_DISPLAY_INSET_Y
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#define X_OFF   s_x_off
+#else
 #define X_OFF   CONFIG_OBSERVORE_DISPLAY_X_OFFSET
+#endif
 #define COLS   ((DISP_W - 2 * INSET_X) / OBSERVORE_FONT_W)   /* 40 */
 #define ROWS   ((DISP_H - 2 * INSET_Y) / OBSERVORE_FONT_H)   /* 15 */
 
@@ -160,8 +164,7 @@ static unsigned s_cell_next;
  * zero so nothing is watched initialising), 0x29 display on, then 0x51 again
  * at full. The CO5300 wants 0xC4 set first and no tearing-effect line; the
  * SH8601 wants the TE configuration and no 0xC4. Neither list is guessed. */
-#if CONFIG_OBSERVORE_DISPLAY_CO5300
-static const sh8601_lcd_init_cmd_t PANEL_INIT_CMDS[] = {
+static const sh8601_lcd_init_cmd_t CO5300_INIT[] = {
     {0x11, (uint8_t []){0x00}, 0, 80},
     {0xC4, (uint8_t []){0x80}, 1, 0},
     {0x53, (uint8_t []){0x20}, 1, 1},
@@ -170,8 +173,7 @@ static const sh8601_lcd_init_cmd_t PANEL_INIT_CMDS[] = {
     {0x29, (uint8_t []){0x00}, 0, 10},
     {0x51, (uint8_t []){0xFF}, 1, 0},
 };
-#else
-static const sh8601_lcd_init_cmd_t PANEL_INIT_CMDS[] = {
+static const sh8601_lcd_init_cmd_t SH8601_INIT[] = {
     {0x11, (uint8_t []){0x00}, 0, 120},
     {0x44, (uint8_t []){0x01, 0xD1}, 2, 0},
     {0x35, (uint8_t []){0x00}, 1, 0},
@@ -180,12 +182,105 @@ static const sh8601_lcd_init_cmd_t PANEL_INIT_CMDS[] = {
     {0x29, (uint8_t []){0x00}, 0, 10},
     {0x51, (uint8_t []){0xFF}, 1, 0},
 };
-#endif
+
+/* What register 0xDA answers. 0xFF is also what a floating line reads as,
+ * which is why it is the fallback rather than the certain case: the vendor
+ * treats anything that is not an SH8601 as a CO5300, and so does this. */
+#define PANEL_ID_SH8601 0x86
+
+/* The CO5300 addresses a frame six pixels wider than the glass and starts it
+ * six along; the SH8601 does not. Decided with the controller, so it cannot
+ * disagree with the initialisation sequence. */
+static int s_x_off = CONFIG_OBSERVORE_DISPLAY_X_OFFSET;
+
 /* Brightness is a command here rather than a pin, so the levels are the
  * panel's own 0-255 rather than a PWM duty. Same four steps as everywhere
  * else, and they mean the same thing to a reader. */
 #define PANEL_BRIGHTNESS_CMD 0x51
-#endif
+
+#if CONFIG_OBSERVORE_DISPLAY_PANEL_DETECT
+/* Ask the panel what it is, before the SPI driver owns its pins.
+ *
+ * One product ships with either controller, which is fine for a board on a
+ * bench and not fine for a download: a stranger cannot be expected to know
+ * which revision arrived in the post, and the failure -- a blank screen, or
+ * an image six pixels sideways -- tells them nothing at all.
+ *
+ * So the pins are driven by hand for a moment. The panel understands a
+ * one-line SPI at reset regardless of which controller it is: a 0x03 read
+ * command, the register, then eight clocks with D0 turned around. This is
+ * Waveshare's own sequence, kept deliberately close to their code, timing
+ * and all -- it runs once, at boot, and costs half a second. */
+#define PIN_CS   CONFIG_OBSERVORE_DISPLAY_CS
+#define PIN_CLK  CONFIG_OBSERVORE_DISPLAY_SCLK
+#define PIN_D0   CONFIG_OBSERVORE_DISPLAY_QSPI_D0
+#define PIN_RST  CONFIG_OBSERVORE_DISPLAY_RST
+
+static void bb_send(uint8_t v)
+{
+    for (int i = 0; i < 8; i++) {
+        gpio_set_level(PIN_D0, (v & 0x80) ? 1 : 0);
+        v = (uint8_t)(v << 1);
+        gpio_set_level(PIN_CLK, 0);
+        gpio_set_level(PIN_CLK, 1);
+    }
+}
+
+static void bb_d0_input(bool in)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << PIN_D0,
+        .mode         = in ? GPIO_MODE_INPUT : GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+    };
+    gpio_config(&cfg);
+}
+
+static uint8_t panel_id(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << PIN_CS) | (1ULL << PIN_CLK) |
+                        (1ULL << PIN_D0) | (1ULL << PIN_RST),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+    };
+    if (gpio_config(&cfg) != ESP_OK) {
+        return 0;
+    }
+    /* The reset the controller needs before it will answer anything. */
+    gpio_set_level(PIN_CS, 0);
+    gpio_set_level(PIN_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    gpio_set_level(PIN_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    gpio_set_level(PIN_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    bb_send(0x03);            /* read */
+    bb_send(0x00);
+    bb_send(0xDA);            /* the identifier */
+    bb_send(0x00);
+
+    uint8_t id = 0;
+    for (int i = 0; i < 8; i++) {
+        gpio_set_level(PIN_CLK, 0);
+        bb_d0_input(true);
+        esp_rom_delay_us(1);
+        id = (uint8_t)((id << 1) | (gpio_get_level(PIN_D0) & 1));
+        bb_d0_input(false);
+        gpio_set_level(PIN_CLK, 1);
+        esp_rom_delay_us(1);
+    }
+    gpio_set_level(PIN_CS, 1);
+
+    /* Hand the pins back, so the SPI driver configures them from scratch. */
+    gpio_reset_pin(PIN_CS);
+    gpio_reset_pin(PIN_CLK);
+    gpio_reset_pin(PIN_D0);
+    return id;
+}
+#endif  /* PANEL_DETECT */
+#endif  /* QSPI_AMOLED */
 
 /* One row of glyph cells, which is how much of the panel is cleared at a
  * time. A round panel has corners the text grid never reaches, and an AMOLED
@@ -639,6 +734,18 @@ void observore_display_init(void)
     }
 
 #if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    /* Which controller is behind the glass, asked rather than assumed. The
+     * pins must be borrowed for this, so it happens before the SPI bus
+     * exists. */
+    bool co5300 = CONFIG_OBSERVORE_DISPLAY_CO5300;
+#if CONFIG_OBSERVORE_DISPLAY_PANEL_DETECT
+    uint8_t id = panel_id();
+    co5300 = (id != PANEL_ID_SH8601);
+    ESP_LOGI(TAG, "panel answered 0x%02X: %s", id,
+             co5300 ? "CO5300" : "SH8601");
+#endif
+    s_x_off = co5300 ? 6 : 0;
+
     /* Four data lines and no D/C pin: the command travels in the address
      * phase instead, which is what the QSPI flag below selects. */
     spi_bus_config_t bus = {
@@ -697,8 +804,9 @@ void observore_display_init(void)
 
 #if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
     sh8601_vendor_config_t vendor = {
-        .init_cmds = PANEL_INIT_CMDS,
-        .init_cmds_size = sizeof(PANEL_INIT_CMDS) / sizeof(PANEL_INIT_CMDS[0]),
+        .init_cmds = co5300 ? CO5300_INIT : SH8601_INIT,
+        .init_cmds_size = co5300 ? sizeof(CO5300_INIT) / sizeof(CO5300_INIT[0])
+                                 : sizeof(SH8601_INIT) / sizeof(SH8601_INIT[0]),
         .flags = { .use_qspi_interface = 1 },
     };
 #endif
@@ -749,7 +857,12 @@ void observore_display_init(void)
     if (xTaskCreate(ui_task, "ui", UI_STACK, NULL, 3, NULL) != pdPASS) {
         ESP_LOGE(TAG, "could not start the drawing task");
     }
+#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+    ESP_LOGI(TAG, "%s %dx%d, %d columns, x offset %d",
+             co5300 ? "CO5300" : "SH8601", DISP_W, DISP_H, COLS, s_x_off);
+#else
     ESP_LOGI(TAG, PANEL_NAME " %dx%d, %d columns", DISP_W, DISP_H, COLS);
+#endif
 }
 
 static const char *ago(int64_t us, char *buf, size_t len)

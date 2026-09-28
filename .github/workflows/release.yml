@@ -55,6 +55,13 @@ jobs:
           - board: cyd-3248s035r-st7796
             target: esp32
             profile: boards/cyd-3248s035r-st7796.defaults
+          # Ships now that the firmware asks the panel which controller it
+          # is.  Before that it could not: one product arrives with either of
+          # two, and an image that assumed one gave the other owner a blank
+          # screen and no way to know why.
+          - board: waveshare-s3-amoled-143
+            target: esp32s3
+            profile: boards/waveshare-s3-amoled-143.defaults
     steps:
       - uses: actions/checkout@v7
         with:
