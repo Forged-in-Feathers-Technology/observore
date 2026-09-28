@@ -3,7 +3,7 @@
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
-A passive counter-surveillance detector for seven ESP32 boards, in two
+A passive counter-surveillance detector for eight ESP32 boards, in two
 families: headless sensors — the [Seeed Studio XIAO
 ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/), the
 dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5) and
@@ -39,21 +39,23 @@ makes it fit on a chip with no PSRAM, and every memory problem this project has
 had was the TLS handshake behind a notification. A screen is a personal display,
 so the trade is a fair one.
 
-Three of the seven are these displays: the 2.8" board in its two panel
-revisions, and the 3.5". See [the screen](#the-screen) for what they
-can do and [boards, which are not the same as
+Four of the eight have screens: the 2.8" board in its two panel revisions,
+the 3.5", and the round one below. See [the screen](#the-screen) for what
+they can do and [boards, which are not the same as
 chips](#boards-which-are-not-the-same-as-chips) for the profiles.
 
-An eighth profile, `waveshare-s3-amoled-143`, exists but is **not shipped**:
-CI builds it so it cannot rot, and the browser flasher does not offer it.
-Waveshare's ESP32-S3-Touch-AMOLED-1.43 is a round 1.43" AMOLED on an S3 with
-16 MB of flash and 8 MB of octal PSRAM. The detector and the panel both work;
-its touch controller is an FT3168 on I2C where every other board here has a
-resistive XPT2046 over SPI, so the driver carries two backends now. It is not
-offered for download yet because one unit has been tested. The board also
-carries a QMI8658 motion
-sensor and a PCF85063 clock, neither of which any other board here has; what
-to do with the first of those is the interesting part and is not written yet.
+The eighth is different enough to describe separately. Waveshare's
+**ESP32-S3-Touch-AMOLED-1.43** is a round 1.43" AMOLED on an S3 with 16 MB of
+flash and 8 MB of octal PSRAM — capacitive touch rather than resistive, a
+hardware clock, and an **accelerometer**, which no other board here has. That
+last one is what makes the `tailing` class possible: it is the only board
+that can tell being carried from sitting still.
+
+One product ships with either of two panel controllers, so the firmware asks
+the panel which it is at boot rather than being built for one. That is what
+made it safe to offer for download — a stranger cannot know which revision
+arrived in the post, and the failure, a blank screen or an image six pixels
+sideways, would tell them nothing.
 
 **Capacitive touch** removes most of what the resistive path has to do, and
 adds one requirement instead: a bare finger, or a capacitive stylus. A
@@ -80,7 +82,7 @@ than one that is smaller and whole.
 
 ## Getting started
 
-You need one of the seven supported boards and a USB cable. The whole first run
+You need one of the eight supported boards and a USB cable. The whole first run
 takes about ten minutes, most of it waiting.
 
 The browser flasher detects the chip and offers the builds that fit it. There is
@@ -709,6 +711,13 @@ esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
     0x8000  partition-table-cyd-3248s035r-st7796.bin \
     0x10000 ota_data_initial-cyd-3248s035r-st7796.bin \
     0x20000 observore-cyd-3248s035r-st7796.bin
+
+# Waveshare ESP32-S3-Touch-AMOLED-1.43 (round, capacitive)
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
+    0x0     bootloader-waveshare-s3-amoled-143.bin \
+    0x8000  partition-table-waveshare-s3-amoled-143.bin \
+    0x10000 ota_data_initial-waveshare-s3-amoled-143.bin \
+    0x20000 observore-waveshare-s3-amoled-143.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
@@ -1848,7 +1857,7 @@ itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
 
-The board matters as much as the version. Two of the seven boards here are
+The board matters as much as the version. Two of the eight boards here are
 ESP32-C5s and two are the same classic ESP32 behind different glass, and none of
 those images are interchangeable, which is why the installer offers a picker
 rather than deciding from the chip. A device updating itself has the same
