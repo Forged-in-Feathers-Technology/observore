@@ -25,6 +25,7 @@ typedef enum {
     OBSERVORE_CLASS_HUNTER,           /* gear that transmits at other radios */
     OBSERVORE_CLASS_FIXTURE,          /* identified household equipment */
     OBSERVORE_CLASS_ACCESSORY,        /* consumer kit announcing itself to pair */
+    OBSERVORE_CLASS_TAILING,          /* a follower that came with you */
     OBSERVORE_CLASS_MAX
 } observore_class_t;
 
