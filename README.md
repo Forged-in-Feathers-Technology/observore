@@ -324,6 +324,36 @@ Sustained presence is not lost; it has moved to where it belongs. A device does
 not *become* a follower until it has been there five minutes. Duration decides
 what something is, and the score says what is here.
 
+### The one claim persistence cannot make
+
+**`tailing`** is a follower that was beside you before a journey and is still
+beside you after it. That is the distinction the whole scoring argument kept
+circling: a follower *in a room* is the room, because the neighbour's phone
+through a wall outlasts anything you can measure. A follower in two places,
+with a walk in between, is not the room — it came too.
+
+It scores six, so it alerts on its own, and it is the only class in the table
+no signature can produce: the classifier cannot see it, and the tracker
+promotes into it. Promotion is one-way, because something that has followed
+you once has not stopped having done so by going briefly quiet.
+
+A *journey* is sustained movement followed by settling — picked up, carried,
+put down — measured by the accelerometer on the one board that has one, and
+counted on arrival rather than departure. Fifteen seconds of carrying is the
+minimum, so knocking the desk does not let the device claim it has been
+somewhere. Nothing else uses the sensor: orientation tells you nothing about
+who is nearby, and a screen that rotates is a screen that draws when nobody
+asked.
+
+The cost is stated plainly, because it will happen on the first walk: **your
+own phone travels with you**, and a board that has not been told what is yours
+will report it as tailing. Take a baseline before setting off. That is also
+why the class is protected — a fingerprint rule may never silence it, and a
+baseline quiets it one address at a time.
+
+The seven boards with no accelerometer report zero journeys for ever, promote
+nothing, and behave exactly as they did.
+
 - **0–2 clear** — nothing identified. LED winks once every 5 s (green)
 - **3–5 caution** — equipment that could watch. LED pulses once a second (amber)
 - **6+ alert** — equipment that is watching. LED flutters (red)

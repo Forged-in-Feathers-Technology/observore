@@ -134,6 +134,14 @@ typedef struct {
 
 void observore_track_init(void);
 
+/* How many journeys the device has made, from the motion sensor.
+ *
+ * Pushed in rather than pulled, so the tracker depends on a number instead
+ * of on a sensor: the host tests drive this directly, and a board with no
+ * accelerometer simply never calls it and never promotes anything to
+ * OBSERVORE_CLASS_TAILING. */
+void observore_track_set_journeys(uint32_t journeys);
+
 /* Feed one raw observation in.  Handles classification, the follower
  * heuristic, deduplication and scoring.  Returns true when this observation
  * produced or updated a reportable device.  `now_us` is the monotonic clock

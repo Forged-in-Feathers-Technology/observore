@@ -16,6 +16,7 @@
 #include "observore_history.h"
 #include "observore_improv.h"
 #include "observore_led.h"
+#include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
@@ -309,6 +310,7 @@ void app_main(void)
     observore_runs_init();
     observore_display_init();
     observore_touch_init();
+    observore_motion_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.
@@ -348,6 +350,9 @@ void app_main(void)
     for (;;) {
         int64_t now = esp_timer_get_time();
         observore_track_tick(now);
+        /* What the accelerometer has counted, handed to the tracker as a
+         * number so it never has to know a sensor exists. */
+        observore_track_set_journeys(observore_motion_journeys());
 
         if (observore_display_take_baseline_request()) {
             s_baseline_requested = true;

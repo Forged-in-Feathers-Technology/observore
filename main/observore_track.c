@@ -22,10 +22,22 @@ typedef struct {
     /* Whether this device has already been handed to the notifier, so a
      * digest names it once rather than every cycle it remains in range. */
     bool          reported;
+    /* Which journey the device was on when this one became a follower. If
+     * the count has moved on since, the thing came with us. */
+    uint32_t      first_journey;
 } observore_slot_t;
 
 static observore_slot_t s_devices[OBSERVORE_MAX_DEVICES];
 static uint32_t     s_total_sightings;
+
+/* How many journeys the board has made, pushed in from the motion sensor.
+ * Zero for ever on the seven boards that cannot feel one. */
+static uint32_t     s_journeys;
+
+void observore_track_set_journeys(uint32_t journeys)
+{
+    s_journeys = journeys;
+}
 
 /* Devices announced recently, so that one which fades and returns is not
  * announced again. Keyed by address for a static one and by advert fingerprint
@@ -295,6 +307,7 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
         if (slot->ev.hits >= OBSERVORE_FOLLOWER_MIN_HITS &&
             span >= needed && close_enough) {
             slot->ev.cls = OBSERVORE_CLASS_FOLLOWER;
+            slot->first_journey = s_journeys;
             slot->ev.evidence = OBSERVORE_EVIDENCE_PERSISTENCE;
             slot->ev.points = observore_class_points(OBSERVORE_CLASS_FOLLOWER);
             snprintf(slot->ev.label, sizeof(slot->ev.label), "persistent %s",
@@ -314,6 +327,32 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
         slot->ev.addr_random && slot->ev.rotations > 0) {
         snprintf(slot->ev.label, sizeof(slot->ev.label), "rotated %ux, persists",
                  (unsigned)slot->ev.rotations);
+    }
+
+    /* Here before the journey, here after it.
+     *
+     * This is the one claim persistence alone could never support. A
+     * follower in a room is the room: the neighbour's phone through a wall
+     * outlasts anything, which is why the whole class is capped below the
+     * verdict. A follower that was beside you in two places, with a journey
+     * in between, is not the room -- it came too.
+     *
+     * Promotion is one-way. Something that has followed you once does not
+     * stop having done so because it is briefly quiet, and the table forgets
+     * it soon enough on its own. */
+    if (slot->classified && slot->ev.cls == OBSERVORE_CLASS_FOLLOWER &&
+        s_journeys > slot->first_journey) {
+        slot->ev.cls      = OBSERVORE_CLASS_TAILING;
+        slot->ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
+        slot->ev.points   = observore_class_points(OBSERVORE_CLASS_TAILING);
+        unsigned crossed = (unsigned)(s_journeys - slot->first_journey);
+        if (crossed == 1) {
+            snprintf(slot->ev.label, sizeof(slot->ev.label),
+                     "came with you");
+        } else {
+            snprintf(slot->ev.label, sizeof(slot->ev.label),
+                     "came with you, %u trips", crossed);
+        }
     }
 
     bool reportable = slot->classified;

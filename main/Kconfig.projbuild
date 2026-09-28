@@ -339,6 +339,48 @@ config OBSERVORE_DISPLAY_MIRROR_Y
     bool "Mirror Y"
     default n
 
+config OBSERVORE_I2C
+    bool "Shared I2C bus"
+    default n
+    help
+        One bus, several chips.  Selected by whatever needs it rather than
+        set by hand: the touch controller and the motion sensor on the round
+        board share two wires, and the driver refuses a second bus on the
+        same port.
+
+config OBSERVORE_I2C_SDA
+    int "I2C SDA GPIO"
+    depends on OBSERVORE_I2C
+    default 47
+
+config OBSERVORE_I2C_SCL
+    int "I2C SCL GPIO"
+    depends on OBSERVORE_I2C
+    default 48
+
+config OBSERVORE_MOTION
+    bool "Motion sensor (QMI8658)"
+    default n
+    select OBSERVORE_I2C
+    help
+        An accelerometer, used for one thing: telling being carried from
+        sitting still.  It is what makes the `tailing` class possible --
+        something that stays with you across a journey is following you,
+        where something that persists while the board sits on a desk is the
+        neighbourhood.  Without it, nothing is ever promoted to that class
+        and everything else behaves exactly as before.
+
+config OBSERVORE_MOTION_I2C_ADDR
+    hex "Motion sensor I2C address"
+    depends on OBSERVORE_MOTION
+    default 0x6B
+    help
+        0x6B on the board this was written for.  The part also answers at
+        0x6A depending on how its address pin is strapped, and asking the
+        wrong one produces a nack that looks exactly like a broken bus --
+        which cost an afternoon here.  The startup scan prints what actually
+        answered.
+
 config OBSERVORE_TOUCH
     bool "Touch panel"
     default n
@@ -363,6 +405,7 @@ config OBSERVORE_TOUCH_XPT2046
 
 config OBSERVORE_TOUCH_FT3168
     bool "FT3168, capacitive, over I2C"
+    select OBSERVORE_I2C
     help
         The controller on Waveshare's round AMOLED boards. Capacitive, which
         removes most of what the resistive path has to do: the chip reports

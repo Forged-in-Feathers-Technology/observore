@@ -2,7 +2,7 @@
 # 16 MB flash and 8 MB octal PSRAM.
 #
 # The panel and the touch controller are both driven now. The motion sensor
-# and the clock are still present and still idle.
+# and the clock: the first is driven now, the clock is not.
 #
 # Everything here was read off the board rather than out of a datasheet --
 # esptool for the silicon, and the factory demo's own boot log and app image
@@ -66,9 +66,15 @@ CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
 # than the four SPI conversions a resistive panel needs.
 CONFIG_OBSERVORE_TOUCH=y
 CONFIG_OBSERVORE_TOUCH_FT3168=y
-CONFIG_OBSERVORE_TOUCH_SDA=47
-CONFIG_OBSERVORE_TOUCH_SCL=48
+CONFIG_OBSERVORE_I2C_SDA=47
+CONFIG_OBSERVORE_I2C_SCL=48
 CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x38
+
+# The accelerometer, sharing those wires. The only sensor here that measures
+# the device rather than the room, and the reason this board is interesting:
+# something that stays with you across a journey is following you.
+CONFIG_OBSERVORE_MOTION=y
+CONFIG_OBSERVORE_MOTION_I2C_ADDR=0x6B
 
 # No user LED on this board. The panel is the indicator.
 CONFIG_OBSERVORE_LED_NONE=y

@@ -48,9 +48,17 @@
        text-transform: uppercase; letter-spacing: 0.06em; position: sticky; top: 0; }
   tr:last-child td { border-bottom: 0; }
   .tag { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--line); }
-  .t-bodycam, .t-alpr, .t-follower { color: var(--alert); border-color: var(--alert); }
-  .t-tracker, .t-drone, .t-smart-glasses { color: var(--caution); border-color: var(--caution); }
-  .t-camera, .t-fleet-telematics { color: var(--dim); }
+  /* The colours follow the weights: alert for a class that names an act,
+     caution for one that names a capability. `follower` was alert here and
+     is not any more -- the class is capped below the verdict, and a tag
+     screaming at you about the neighbour's phone is the same lie one layer
+     up. `tailing` takes its place, because that one did come with you. */
+  .t-bodycam, .t-alpr, .t-deauth-flood, .t-tailing {
+    color: var(--alert); border-color: var(--alert); }
+  .t-tracker, .t-drone, .t-smart-glasses, .t-hunter {
+    color: var(--caution); border-color: var(--caution); }
+  .t-follower, .t-camera, .t-fleet-telematics, .t-accessory,
+  .t-fixture, .t-peer-detector { color: var(--dim); }
   .dim { color: var(--dim); }
   .empty { padding: 28px; text-align: center; color: var(--dim); }
   button {

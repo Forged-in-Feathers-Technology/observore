@@ -9,7 +9,7 @@
 
 #include "driver/gpio.h"
 #if CONFIG_OBSERVORE_TOUCH_FT3168
-#include "driver/i2c_master.h"
+#include "observore_i2c.h"
 #else
 #include "driver/spi_master.h"
 #endif
@@ -312,98 +312,42 @@ static bool sample(int *x, int *y)
  * two days and a wrongly accused ribbon cable on the Cheap Yellow Displays
  * does not exist here. */
 
-/* Three chips share these two wires: this controller, a motion sensor and a
- * clock. Whether each is present is asked once at startup and said out loud,
- * because "the panel is not answering" and "the panel is not there" are
- * different problems that look identical in a log mentioning neither.
- *
- * Asked with a one-byte read rather than i2c_master_probe(), which on this
- * board reports a timeout for every address including the ones that answer
- * a read perfectly well. A scan that lies about an empty bus is worse than
- * no scan: it sends you looking at the wiring. */
-#define FT_SCAN_FIRST 0x08
-#define FT_SCAN_LAST  0x77
-
 /* Registers, from Waveshare's own driver rather than from a datasheet nobody
  * has: 0x02 holds the number of fingers down, and 0x03 begins four bytes of
  * position -- twelve bits of X then twelve of Y, high nibble first. */
 #define FT_REG_TOUCHES 0x02
 #define FT_REG_XY      0x03
 
-static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_touch;
 
-/* Two hundred milliseconds for two bytes, which looks absurd and is not.
- * The timeout covers waiting for the transaction to complete, and on a board
- * whose real work is two radios the completion can sit behind them: at 50 ms
- * every read in the poll loop failed while the same read at startup, before
- * the radios were busy, succeeded. Measured, not chosen. It costs nothing
- * when nothing goes wrong, because a read that works returns in microseconds. */
 static bool ft_read(uint8_t reg, uint8_t *buf, size_t len)
 {
-    return i2c_master_transmit_receive(s_touch, &reg, 1, buf, len,
-                                       pdMS_TO_TICKS(200)) == ESP_OK;
-}
-
-/* One byte from register zero, which every chip on this bus answers. */
-static bool addr_answers(uint8_t addr)
-{
-    i2c_device_config_t cfg = {.dev_addr_length = I2C_ADDR_BIT_LEN_7,
-                               .device_address  = addr,
-                               .scl_speed_hz    = 300 * 1000};
-    i2c_master_dev_handle_t dev = NULL;
-    if (i2c_master_bus_add_device(s_bus, &cfg, &dev) != ESP_OK) {
-        return false;
-    }
-    uint8_t reg = 0x00, val = 0;
-    bool ok = i2c_master_transmit_receive(dev, &reg, 1, &val, 1,
-                                          pdMS_TO_TICKS(200)) == ESP_OK;
-    i2c_master_bus_rm_device(dev);
-    return ok;
+    return observore_i2c_read(s_touch, reg, buf, len);
 }
 
 static bool backend_init(void)
 {
-    i2c_master_bus_config_t bus = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = CONFIG_OBSERVORE_TOUCH_SDA,
-        .scl_io_num = CONFIG_OBSERVORE_TOUCH_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    esp_err_t err = i2c_new_master_bus(&bus, &s_bus);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "I2C bus: %s", esp_err_to_name(err));
+    if (!observore_i2c_bus()) {
         return false;
     }
 
-    char found[64] = {0};
-    size_t n = 0;
-    for (uint8_t addr = FT_SCAN_FIRST;
-         addr <= FT_SCAN_LAST && n + 6 < sizeof(found); addr++) {
-        if (addr_answers(addr)) {
-            n += (size_t)snprintf(found + n, sizeof(found) - n, " 0x%02X", addr);
-        }
-    }
+    /* Three chips share these two wires -- this controller, a motion sensor
+     * and a clock -- and which of them answered is said out loud, because
+     * "the panel is not answering" and "the panel is not there" look
+     * identical in a log mentioning neither. */
+    char found[64];
+    observore_i2c_scan(found, sizeof(found));
     ESP_LOGI(TAG, "I2C on sda %d / scl %d answered:%s",
-             CONFIG_OBSERVORE_TOUCH_SDA, CONFIG_OBSERVORE_TOUCH_SCL,
-             n ? found : " nothing");
+             CONFIG_OBSERVORE_I2C_SDA, CONFIG_OBSERVORE_I2C_SCL,
+             found[0] ? found : " nothing");
 
-    i2c_device_config_t dev = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = CONFIG_OBSERVORE_TOUCH_I2C_ADDR,
-        .scl_speed_hz    = 300 * 1000,
-    };
-    err = i2c_master_bus_add_device(s_bus, &dev, &s_touch);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "I2C device: %s", esp_err_to_name(err));
+    s_touch = observore_i2c_device(CONFIG_OBSERVORE_TOUCH_I2C_ADDR, 300 * 1000);
+    if (!s_touch) {
         return false;
     }
 
     /* Out of whatever low-power mode it woke in, the way the vendor does it. */
-    uint8_t wake[2] = {0x00, 0x00};
-    i2c_master_transmit(s_touch, wake, sizeof(wake), pdMS_TO_TICKS(50));
+    observore_i2c_write(s_touch, 0x00, 0x00);
 
     ESP_LOGI(TAG, "FT3168 at 0x%02X", CONFIG_OBSERVORE_TOUCH_I2C_ADDR);
     return true;

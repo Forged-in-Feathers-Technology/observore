@@ -453,6 +453,21 @@ static const observore_class_desc_t CLASS_DESC[OBSERVORE_CLASS_MAX] = {
      * used to arrive as a tracker worth three points, which is how a crowded
      * cafe reads as four trackers and how a person learns to stop believing
      * the score. One point keeps it visible without letting it escalate. */
+    /* A follower that was here before a journey and is here after it. The
+     * only class in this table that no signature can produce: it is a fact
+     * about two places and the road between them, and the tracker promotes
+     * into it rather than the classifier.
+     *
+     * Six, so it alerts alone, because it names an act in the way a body
+     * camera does. "Unidentified" is why a follower is capped below the
+     * verdict; "unidentified and it came with me" is a different claim
+     * entirely, and it is the one this project was built to make.
+     *
+     * Protected, and the cost is stated: your own phone travels with you, so
+     * on a board that has not been told what is yours it will be reported.
+     * Baselining is the answer, and a baseline silences it by address, one
+     * device at a time. */
+    [OBSERVORE_CLASS_TAILING]          = {"tailing",           OBSERVORE_SCORE_ALERT, OBSERVORE_URGENCY_URGENT, true },
     [OBSERVORE_CLASS_ACCESSORY]        = {"accessory",        1,                      OBSERVORE_URGENCY_LOW,   false},
 };
 
