@@ -452,6 +452,81 @@ static void test_follower(void)
           OBSERVORE_FOLLOWER_PRESENT_POINTS, st.score);
 }
 
+
+static void test_something_that_came_with_you(void)
+{
+    banner("a follower that crosses a journey is tailing, and alerts");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+    observore_track_set_journeys(0);
+
+    uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x31, 0xFE};
+    const uint8_t mac[6] = {0x50, 0x01, 0x02, 0x03, 0x04, 0x05};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                 .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&o, SECS(t));
+    }
+    observore_event_t snap[8];
+    size_t n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "it starts as an ordinary follower");
+
+    observore_status_t st;
+    observore_track_status(&st, SECS(320));
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR,
+          "which cannot move the verdict, journey or no journey (level %s)",
+          observore_level_name(st.level));
+
+    /* The board is carried somewhere, and the same device is there too. */
+    observore_track_set_journeys(1);
+    observore_track_observe(&o, SECS(400));
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_TAILING,
+          "after a journey it is tailing, not merely persistent");
+    CHECK(strcmp(snap[0].label, "came with you") == 0,
+          "and says so plainly (got \"%s\")", snap[0].label);
+
+    observore_track_status(&st, SECS(400));
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT,
+          "one device that came with you is an alert on its own (score %u)",
+          st.score);
+
+    /* The failure that would make this useless: everything in the room is
+     * not suddenly following you because the room moved. A device first
+     * heard after the journey has crossed nothing. */
+    uint8_t adv2[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x32, 0xFE};
+    const uint8_t mac2[6] = {0x51, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E};
+    observore_observation_t o2 = {.mac = mac2, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                  .addr_random = true, .adv = adv2, .adv_len = sizeof(adv2)};
+    for (int t = 400; t <= 710; t += 100) {
+        observore_track_observe(&o2, SECS(t));
+    }
+    n = observore_track_snapshot(snap, 8);
+    for (size_t i = 0; i < n; i++) {
+        if (memcmp(snap[i].mac, mac2, 6) == 0) {
+            CHECK(snap[i].cls == OBSERVORE_CLASS_FOLLOWER,
+                  "a device met after the journey is only a follower (got %s)",
+                  observore_class_desc(snap[i].cls)->name);
+        }
+    }
+
+    /* And a board that cannot feel a journey never promotes anything, which
+     * is every board but one. */
+    observore_track_init();
+    observore_track_set_journeys(0);
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&o, SECS(t));
+    }
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "with no motion sensor, nothing is ever tailing");
+
+    observore_track_set_journeys(0);
+}
+
 static void test_a_crowd_is_not_an_emergency(void)
 {
     banner("a room full of people must not raise an alert");
@@ -2430,6 +2505,7 @@ int main(void)
     test_ssid();
     test_follower();
     test_a_crowd_is_not_an_emergency();
+    test_something_that_came_with_you();
     test_scoring();
     test_rssi_floor();
     test_table_pressure();
