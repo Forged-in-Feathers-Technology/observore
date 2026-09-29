@@ -546,6 +546,32 @@ static void test_a_crowd_cannot_hide_a_finding(void)
           "the body camera is still first, an hour later and quiet (got %s)",
           observore_class_desc(snap[0].cls)->name);
 
+    /* And a follower must not outrank identified equipment, which it did on
+     * the first attempt: the class carries four points in the table while
+     * contributing at most the cap to a score, so sorting on the raw number
+     * put a screenful of unidentified phones above a Flipper. Seen on
+     * hardware after a trip -- nine devices, and the list showed followers. */
+    observore_track_init();
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x00, 0x01};
+    const uint8_t fmac[6] = {0x80, 0xE1, 0x27, 0x44, 0x55, 0x66};
+    observore_observation_t hunter = {.mac = fmac, .src = OBSERVORE_SRC_BLE,
+                                      .rssi = -60, .adv = flip,
+                                      .adv_len = sizeof(flip)};
+    observore_track_observe(&hunter, SECS(0));
+    for (int i = 0; i < 4; i++) {
+        uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x80 + i), 0xFE};
+        uint8_t mac[6] = {0x90, 0x11, 0x22, 0x33, 0x44, (uint8_t)i};
+        observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                     .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+        for (int t = 100; t <= 410; t += 100) {
+            observore_track_observe(&o, SECS(t));
+        }
+    }
+    n = observore_track_snapshot(snap, 12);
+    CHECK(n >= 5 && snap[0].cls == OBSERVORE_CLASS_HUNTER,
+          "the Flipper is listed above four fresher followers (got %s)",
+          n ? observore_class_desc(snap[0].cls)->name : "nothing");
+
     observore_track_init();
 }
 

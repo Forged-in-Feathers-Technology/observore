@@ -422,6 +422,19 @@ static bool    s_baseline_request;
 #define ARM_TIMEOUT_US (5 * 1000000)
 static int     s_armed_row = -1;      /* watch page: the finding being ignored */
 static int64_t s_armed_until_us;
+/* The baseline button, armed the same way.
+ *
+ * It was one tap, acting immediately, on the most destructive thing this
+ * device can do: a baseline silences everything in range at once, and a
+ * mistaken one can hide exactly what the device exists to find. Dismissing a
+ * single finding already needed two taps, and the console already asks for
+ * confirmation -- the glass was the one path with no guard, on the action
+ * that deserved it most.
+ *
+ * Hit twice by accident in one day on a board with no case yet, the second
+ * time as its owner left an office, which silenced the population there and
+ * quietly invalidated the journey it was carried on. */
+static int64_t s_baseline_armed_until_us;
 static bool    s_install_armed;
 static int64_t s_install_armed_until_us;
 #endif
@@ -1535,6 +1548,13 @@ static void handle_tap(int x, int y)
         case 1:
             /* The main loop owns the memory a baseline needs, so this only
              * asks. It says so on the screen, and says again when it is done. */
+            if (esp_timer_get_time() >= s_baseline_armed_until_us) {
+                s_baseline_armed_until_us = esp_timer_get_time() + ARM_TIMEOUT_US;
+                snprintf(s_notice, sizeof(s_notice), " tap again to baseline");
+                s_notice_until_us = s_baseline_armed_until_us;
+                break;
+            }
+            s_baseline_armed_until_us = 0;
             s_baseline_request = true;
             snprintf(s_notice, sizeof(s_notice), " baseline requested");
             s_notice_until_us = esp_timer_get_time() + 8 * 1000000;

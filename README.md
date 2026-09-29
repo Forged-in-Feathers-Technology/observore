@@ -1329,7 +1329,14 @@ each one ended.
 The address is there because on a board like this there is nowhere else to
 read it: the device prints it to serial at boot and nothing else shows it, so
 a console you cannot find is a console you do not have. The password is a
-different matter and is still never drawn. **baseline** does what holding the button
+different matter and is still never drawn. **baseline** asks twice — the first tap shows `tap again to baseline`, and it
+forgets after five seconds. A baseline is the most destructive thing this
+device does, silencing everything in range at once, and it was the one path
+with no guard: dismissing a single finding already took two taps and the
+console already asks for confirmation. It was hit twice by accident in one day
+on a board with no case, the second time while leaving an office, which
+silenced the population there and invalidated the journey the board was being
+carried on. It does what holding the button
 does, and says so on the screen; the work happens in the main loop, which can
 be most of a minute away inside a scan. **light** steps the backlight through
 four levels and remembers the choice, because a 2.8" panel at full brightness
