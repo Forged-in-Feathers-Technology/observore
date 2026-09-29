@@ -29,3 +29,14 @@ uint32_t observore_motion_journeys(void);
 
 /* False where there is no sensor, which is every board but one. */
 bool observore_motion_available(void);
+
+/* How much of the surroundings from before the last journey was still in
+ * earshot after it, as a percentage, or -1 if that question has not been
+ * asked yet.
+ *
+ * On the screen and on /api/status because the verdict was otherwise a log
+ * line and nothing else: a trip's evidence scrolled past while the board was
+ * in a pocket, and by the time it was plugged in again only the consequences
+ * were visible. The number is the difference between "the gate worked" and
+ * "the gate was too strict", and there is no recovering it afterwards. */
+int observore_motion_last_overlap_pct(void);

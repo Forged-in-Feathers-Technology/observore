@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_auth.h"
@@ -189,6 +190,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
         ",\"reset_reason\":\"%s\",\"notifier\":%s"
         ",\"bright\":%d,\"bright_now\":%d,\"bright_steps\":%d"
+        ",\"motion\":{\"sensor\":%s,\"carried\":%s,\"journeys\":%u"
+        ",\"last_overlap_pct\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -219,7 +222,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         , observore_display_brightness(),
         observore_display_brightness_effective(),
         observore_display_has_light_sensor() ? OBSERVORE_BRIGHT_STEPS + 1
-                                            : OBSERVORE_BRIGHT_STEPS);
+                                            : OBSERVORE_BRIGHT_STEPS,
+        observore_motion_available() ? "true" : "false",
+        observore_motion_moving() ? "true" : "false",
+        (unsigned)observore_motion_journeys(),
+        observore_motion_last_overlap_pct());
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",

@@ -83,6 +83,7 @@ static i2c_master_dev_handle_t s_dev;
 static volatile bool     s_moving;
 static volatile uint32_t s_journeys;
 static volatile bool     s_available;
+static volatile int      s_last_overlap = -1;
 
 static bool read_accel(int *mg)
 {
@@ -158,6 +159,7 @@ static void motion_task(void *arg)
             if (arrival_due_us && now >= arrival_due_us && !s_moving) {
                 arrival_due_us = 0;
                 int overlap = observore_surroundings_overlap_pct();
+                s_last_overlap = overlap;
                 if (overlap < 0) {
                     /* Nothing to compare against. Saying "you went nowhere"
                      * and saying "you arrived" are both inventions here, and
@@ -208,6 +210,7 @@ void observore_motion_init(void)
 bool observore_motion_moving(void)     { return s_moving; }
 uint32_t observore_motion_journeys(void) { return s_journeys; }
 bool observore_motion_available(void)  { return s_available; }
+int observore_motion_last_overlap_pct(void) { return s_last_overlap; }
 
 #else
 
@@ -215,5 +218,6 @@ void observore_motion_init(void) {}
 bool observore_motion_moving(void) { return false; }
 uint32_t observore_motion_journeys(void) { return 0; }
 bool observore_motion_available(void) { return false; }
+int observore_motion_last_overlap_pct(void) { return -1; }
 
 #endif

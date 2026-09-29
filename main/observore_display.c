@@ -49,6 +49,7 @@
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 
+#include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
@@ -1035,6 +1036,33 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
             snprintf(text, sizeof(text), " light    %s",
                      set >= 0 && set < 4 ? names[set] : "?");
         }
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+#endif
+
+#if CONFIG_OBSERVORE_MOTION
+    /* Only where there is a sensor to report. Three facts in one row: whether
+     * it is being carried now, how many journeys have counted, and what the
+     * last one measured -- which is the number that says whether a trip was
+     * judged to have gone anywhere. */
+    if (observore_motion_available()) {
+        int ov = observore_motion_last_overlap_pct();
+        uint32_t trips = observore_motion_journeys();
+        char trip_s[8], tail[20];
+        snprintf(trip_s, sizeof(trip_s), "%lu", (unsigned long)trips);
+        if (ov < 0) {
+            snprintf(tail, sizeof(tail), "no trip");
+        } else {
+            /* How much of the old place came back with it -- the number that
+             * says whether a trip counted, and the one worth reading off the
+             * glass after one. */
+            snprintf(tail, sizeof(tail), "%d%% same", ov > 100 ? 100 : ov);
+        }
+        /* Every field bounded, because the row has to fit a 41-column grid
+         * and the compiler is right to insist rather than trust me. */
+        snprintf(text, sizeof(text), " motion  %.7s %.4s trip%.1s %.9s",
+                 observore_motion_moving() ? "carried" : "still",
+                 trip_s, trips == 1 ? "" : "s", tail);
         line(r++, text, C_WHITE, C_BLACK);
     }
 #endif
