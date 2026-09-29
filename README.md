@@ -57,6 +57,14 @@ made it safe to offer for download — a stranger cannot know which revision
 arrived in the post, and the failure, a blank screen or an image six pixels
 sideways, would tell them nothing.
 
+**Brightness is a command rather than a pin** on this panel, and over four
+data lines a command does not travel as itself: with no D/C line the opcode
+goes in the address phase, so a write is `0x02`, the register, a pad byte,
+packed into one 32-bit word. Sending the bare register is ignored silently —
+which is what shipped at first, so the brightness button cycled four
+settings, saved each to NVS, redrew the screen and changed nothing. The panel
+sat at full brightness through every soak run on this board.
+
 **Capacitive touch** removes most of what the resistive path has to do, and
 adds one requirement instead: a bare finger, or a capacitive stylus. A
 passive plastic one registers as nothing at all, correctly and permanently,

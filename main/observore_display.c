@@ -620,10 +620,19 @@ static void bl_apply(void)
     }
 #if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
     /* No backlight to dim: an AMOLED lights each pixel itself, and the panel
-     * scales them for us. The same four steps, sent as a command. */
+     * scales them for us. The same four steps, sent as a command.
+     *
+     * Over four data lines the command does not travel as itself. There is no
+     * D/C pin, so the opcode goes in the address phase: a write is 0x02, then
+     * the register, then a pad byte, packed into the 32-bit command word the
+     * IO layer sends. Sending a bare 0x51 is silently ignored by the panel,
+     * which is exactly what it did -- the initialisation sequence worked
+     * because the driver wraps its own commands this way, and mine did not,
+     * so the brightness button cycled four settings and changed nothing. */
     if (s_io) {
         uint8_t duty = BL_LEVELS[level];
-        esp_lcd_panel_io_tx_param(s_io, PANEL_BRIGHTNESS_CMD, &duty, 1);
+        int cmd = (int)((0x02u << 24) | ((uint32_t)PANEL_BRIGHTNESS_CMD << 8));
+        esp_lcd_panel_io_tx_param(s_io, cmd, &duty, 1);
     }
 #else
     ledc_set_duty(BL_MODE, BL_CHANNEL, BL_LEVELS[level]);
