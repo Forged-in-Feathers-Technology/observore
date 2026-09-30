@@ -565,7 +565,7 @@ static void run_ap_scan(void)
         for (int k = 0; k < 6; k++) {
             h = (h ^ b[k]) * 16777619u;
         }
-        observore_surroundings_note(h ? h : 1u, now);
+        observore_surroundings_note(h ? h : 1u, records[i].rssi, now);
     }
     for (uint16_t i = 0; i < count; i++) {
         observore_observation_t obs = {

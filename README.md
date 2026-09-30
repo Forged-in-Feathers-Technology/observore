@@ -358,10 +358,22 @@ left: every device in range before was in range after.
 So the **access points decide**. They are stationary by definition, there are
 usually a dozen in earshot indoors, and the board already scans them every
 fifteen seconds. The set in range is remembered when the board is picked up
-and compared forty seconds after it settles: if more than a third of the old
-ones are still audible, this is the same place and the journey does not
-count, however far the thing was carried around it. Somewhere genuinely else
-shares almost none of them.
+and compared forty seconds after it settles, in two ways, because one of them
+is not enough.
+
+**Which ones are still there.** A third or fewer surviving means somewhere
+else. In a town this is decisive: walk two streets and almost nothing
+overlaps.
+
+**How much fainter they have become.** Membership fails in the countryside,
+where the only access points for half a mile are the ones in your own house
+and they still reach the outbuildings. A barn at the end of a driveway kept
+**80%** of them, so the journey did not count — correct by the rule and wrong
+about the world. The same access points, all of them much fainter, is
+distance: twelve decibels of median fade counts as having gone somewhere,
+which is roughly four times as far away and far more than a person shifts by
+turning round. A median rather than a mean, so one access point going quiet
+behind a tractor cannot carry the answer.
 
 Where there are no access points at all, nothing is counted and the log says
 so — "you went nowhere" and "you arrived" would both be inventions, and the

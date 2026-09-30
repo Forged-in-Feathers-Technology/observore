@@ -22,9 +22,10 @@
 /* Forget everything. */
 void observore_surroundings_reset(void);
 
-/* An access point was just seen. `hash` identifies it -- a BSSID reduced to
- * 32 bits, since nothing here needs to name one, only to recognise it. */
-void observore_surroundings_note(uint32_t hash, int64_t now_us);
+/* An access point was just seen, and how loudly. `hash` identifies it -- a
+ * BSSID reduced to 32 bits, since nothing here needs to name one, only to
+ * recognise it. */
+void observore_surroundings_note(uint32_t hash, int rssi, int64_t now_us);
 
 /* Remember what is in earshot now, as the set to compare against later.
  * Access points heard longer ago than `max_age_us` are left out: a stale
@@ -38,3 +39,18 @@ int observore_surroundings_overlap_pct(void);
 
 /* How many access points were in the marked set. */
 size_t observore_surroundings_marked(void);
+
+/* How much fainter the access points from before have become, in decibels,
+ * across those heard at both ends. Positive means quieter than before.
+ *
+ * Membership alone cannot answer "did I go anywhere" in the countryside: the
+ * only access points for half a mile may be the ones in your own house, and
+ * they still reach the barn. Eighty percent of them were still audible from
+ * a barn down the driveway, so the journey did not count -- correct by the
+ * rule and wrong about the world. The same access points, all of them much
+ * fainter, is distance.
+ *
+ * Returns INT_MIN when too few were heard at both ends to say. The median
+ * rather than the mean, because one access point going quiet behind a
+ * tractor should not carry the answer. */
+int observore_surroundings_faded_db(void);

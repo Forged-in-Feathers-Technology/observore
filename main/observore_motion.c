@@ -1,9 +1,12 @@
 #include "observore_motion.h"
 
+#include <limits.h>
+
 #include "sdkconfig.h"
 
 #if CONFIG_OBSERVORE_MOTION
 
+#include <limits.h>
 #include <stdlib.h>
 
 #include "esp_log.h"
@@ -71,6 +74,20 @@ static const char *TAG = "observore.motion";
  * straight back. */
 #define ARRIVED_OVERLAP_PCT 33
 
+/* Or the same access points, all of them much fainter.
+ *
+ * Membership alone cannot answer "did I go anywhere" in the countryside,
+ * where the only access points for half a mile are the ones in your own
+ * house and they still reach the outbuildings. A barn down a driveway kept
+ * eighty percent of them and the journey did not count -- correct by the
+ * rule, wrong about the world.
+ *
+ * Twelve decibels is roughly four times the distance in open air and far
+ * more than a person shifts by turning round or putting the thing on a
+ * different shelf. Taken as a median across the access points heard at both
+ * ends, so one going quiet behind a tractor cannot carry the answer. */
+#define ARRIVED_FADE_DB 12
+
 /* Access points heard longer ago than this are not part of "here": a stale
  * entry from the place just left would make the new place look familiar. */
 #define SURROUNDINGS_AGE_US (5 * 60 * 1000000LL)
@@ -84,6 +101,7 @@ static volatile bool     s_moving;
 static volatile uint32_t s_journeys;
 static volatile bool     s_available;
 static volatile int      s_last_overlap = -1;
+static volatile int      s_last_faded = INT_MIN;
 
 static bool read_accel(int *mg)
 {
@@ -159,22 +177,29 @@ static void motion_task(void *arg)
             if (arrival_due_us && now >= arrival_due_us && !s_moving) {
                 arrival_due_us = 0;
                 int overlap = observore_surroundings_overlap_pct();
+                int faded   = observore_surroundings_faded_db();
                 s_last_overlap = overlap;
+                s_last_faded   = faded;
+                bool went = (overlap >= 0 && overlap <= ARRIVED_OVERLAP_PCT) ||
+                            (faded != INT_MIN && faded >= ARRIVED_FADE_DB);
                 if (overlap < 0) {
                     /* Nothing to compare against. Saying "you went nowhere"
                      * and saying "you arrived" are both inventions here, and
                      * the quiet one is the safer invention. */
                     ESP_LOGI(TAG, "carried, but no access points to judge by");
-                } else if (overlap <= ARRIVED_OVERLAP_PCT) {
+                } else if (went) {
                     s_journeys++;
                     counted = true;
-                    ESP_LOGI(TAG, "journey %u: somewhere else, %d%% of the "
-                                  "old access points still in earshot",
-                             (unsigned)s_journeys, overlap);
+                    ESP_LOGI(TAG, "journey %u: somewhere else -- %d%% of the "
+                                  "old access points still in earshot, and "
+                                  "those %d dB fainter",
+                             (unsigned)s_journeys, overlap,
+                             faded == INT_MIN ? 0 : faded);
                 } else {
                     ESP_LOGI(TAG, "carried, but the same place: %d%% of the "
-                                  "access points are the ones from before",
-                             overlap);
+                                  "access points are the ones from before, "
+                                  "and only %d dB fainter",
+                             overlap, faded == INT_MIN ? 0 : faded);
                 }
             }
         }
@@ -211,6 +236,7 @@ bool observore_motion_moving(void)     { return s_moving; }
 uint32_t observore_motion_journeys(void) { return s_journeys; }
 bool observore_motion_available(void)  { return s_available; }
 int observore_motion_last_overlap_pct(void) { return s_last_overlap; }
+int observore_motion_last_faded_db(void) { return s_last_faded; }
 
 #else
 
@@ -219,5 +245,6 @@ bool observore_motion_moving(void) { return false; }
 uint32_t observore_motion_journeys(void) { return 0; }
 bool observore_motion_available(void) { return false; }
 int observore_motion_last_overlap_pct(void) { return -1; }
+int observore_motion_last_faded_db(void) { return INT_MIN; }
 
 #endif
