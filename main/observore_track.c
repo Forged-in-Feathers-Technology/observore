@@ -345,6 +345,19 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
         slot->ev.cls      = OBSERVORE_CLASS_TAILING;
         slot->ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
         slot->ev.points   = observore_class_points(OBSERVORE_CLASS_TAILING);
+        /* Say it again, as the thing it has become.
+         *
+         * Findings are announced once, when first identified, and this one was
+         * already announced -- as a follower, which is what it was then. So
+         * the promotion produced no log line, no history entry and no
+         * notification: the single most important event this device can
+         * report was visible only to somebody looking at the screen at the
+         * time. On a headless board it reached nobody at all.
+         *
+         * The dedup above suppresses repeat followers and not this, because a
+         * follower returning is the same inference twice while this is a new
+         * claim about the same device. */
+        slot->reported = false;
         unsigned crossed = (unsigned)(s_journeys - slot->first_journey);
         if (crossed == 1) {
             snprintf(slot->ev.label, sizeof(slot->ev.label),

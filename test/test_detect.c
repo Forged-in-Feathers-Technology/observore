@@ -602,6 +602,16 @@ static void test_something_that_came_with_you(void)
           "which cannot move the verdict, journey or no journey (level %s)",
           observore_level_name(st.level));
 
+    /* Announced as a follower, which is what it is at this point. This drain
+     * is what the test was missing: without it the device had never been
+     * reported, so the check below passed whether or not the promotion
+     * re-announced anything. */
+    observore_event_t drained[4];
+    size_t d = observore_track_drain_new(drained, 4);
+    CHECK(d == 1 && drained[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "reported once as a follower (drained %u)", (unsigned)d);
+    CHECK(observore_track_drain_new(drained, 4) == 0, "and not twice");
+
     /* The board is carried somewhere, and the same device is there too. */
     observore_track_set_journeys(1);
     observore_track_observe(&o, SECS(400));
@@ -615,6 +625,18 @@ static void test_something_that_came_with_you(void)
     CHECK(st.level == OBSERVORE_LEVEL_ALERT,
           "one device that came with you is an alert on its own (score %u)",
           st.score);
+
+    /* And it is announced again, as what it has become. Findings are reported
+     * once when first identified, and this one had already been reported as a
+     * follower -- so the promotion reached the log, the history and the
+     * notifier not at all, and existed only on the screen of whoever happened
+     * to be watching. */
+    d = observore_track_drain_new(drained, 4);
+    CHECK(d == 1 && drained[0].cls == OBSERVORE_CLASS_TAILING,
+          "the promotion is announced again, as tailing (drained %u)",
+          (unsigned)d);
+    CHECK(observore_track_drain_new(drained, 4) == 0,
+          "and only once, not on every sighting afterwards");
 
     /* The failure that would make this useless: everything in the room is
      * not suddenly following you because the room moved. A device first
