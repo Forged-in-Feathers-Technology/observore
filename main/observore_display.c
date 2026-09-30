@@ -115,6 +115,9 @@ static const char *TAG = "observore.display";
 #define C_BLACK  0x0000
 #define C_WHITE  0xFFFF
 #define C_GREY   0x8410
+/* Brighter than C_GREY, for a dial rim that has to read as an edge rather
+ * than as a smudge: 0x8410 at this radius looked like a fault. */
+#define C_SILVER 0xC618
 #define C_GREEN  0x07E0
 #define C_AMBER  0xFD20
 #define C_RED    0xF800
@@ -644,6 +647,9 @@ static int ldr_level(void)
 #endif
 
 static void ui_task(void *arg);
+#if CONFIG_OBSERVORE_TOUCH
+static void draw_buttons(void);
+#endif
 
 static void bl_apply(void)
 {
@@ -1115,7 +1121,7 @@ static void draw_clockface(const observore_status_t *st)
     /* Black is genuinely off on this panel, so an unlit dial costs nothing
      * to show and little to leave on. */
     observore_watch_fill(&c, px(C_BLACK));
-    observore_watch_ring(&c, cx, cy, r, 3, px(C_GREY));
+    observore_watch_ring(&c, cx, cy, r, 5, px(C_SILVER));
 
     uint16_t mark = st->level == OBSERVORE_LEVEL_ALERT   ? px(C_RED)
                   : st->level == OBSERVORE_LEVEL_CAUTION ? px(C_AMBER)
@@ -1146,12 +1152,13 @@ static void draw_clockface(const observore_status_t *st)
                              3600, &mx, &my);
     observore_watch_hand_end(cx, cy, r - 40, lt.tm_sec, 60, &sx, &sy);
 
-    observore_watch_line(&c, cx, cy, hx, hy, 11, px(C_WHITE));
-    observore_watch_line(&c, cx, cy, mx, my, 7,  px(C_WHITE));
+    observore_watch_hand(&c, cx, cy, hx, hy, 26, 13, 5, px(C_WHITE));
+    observore_watch_hand(&c, cx, cy, mx, my, 30, 9,  3, px(C_WHITE));
     if (awake) {
-        observore_watch_line(&c, cx, cy, sx, sy, 3, mark);
+        observore_watch_hand(&c, cx, cy, sx, sy, 34, 3, 3, mark);
     }
-    observore_watch_disc(&c, cx, cy, 9, px(C_WHITE));
+    observore_watch_disc(&c, cx, cy, 10, px(C_WHITE));
+    observore_watch_disc(&c, cx, cy, 5,  px(C_BLACK));
 
     /* No time yet is said rather than drawn as midnight, which is what an
      * unset clock would otherwise claim with total confidence. */
@@ -1185,6 +1192,17 @@ static void draw_clockface(const observore_status_t *st)
         /* The buffer is reused on the next pass, so the panel has to be
          * finished with it first. */
         xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(100));
+    }
+
+    /* Awake, the face shows its buttons; idle, it does not.
+     *
+     * They work either way -- the taps were always live -- but an invisible
+     * control is not a control, and "how do I get back to the detector" is
+     * not a question a person should have to ask. Hiding them while idle is
+     * the point of the page: a bar reading page / baseline / light across a
+     * watch face gives the game away as surely as a warning banner would. */
+    if (awake) {
+        draw_buttons();
     }
     /* The text grid knows nothing about what just happened to the panel, so
      * every row is marked stale and will be redrawn when a page returns. */

@@ -113,6 +113,40 @@ void observore_watch_hand_end(int cx, int cy, int len, int units, int per_rev,
     if (y) { *y = cy - (len * cos_q(deg)) / 10000; }
 }
 
+void observore_watch_hand(const observore_canvas_t *c, int cx, int cy,
+                          int tipx, int tipy, int tail, int w_hub, int w_tip,
+                          uint16_t colour)
+{
+    /* Walked in segments from a point behind the centre out to the tip, each
+     * a little narrower than the last. Integer throughout: the widths are
+     * single digits and a watch hand does not need sub-pixel edges. */
+    const int steps = 12;
+    int dx = tipx - cx, dy = tipy - cy;
+
+    /* The counterweight, opposite the tip. */
+    if (tail > 0) {
+        int len = 1;
+        int mag = dx * dx + dy * dy;
+        while (len * len < mag) {
+            len++;          /* integer length, near enough for a direction */
+        }
+        if (len > 0) {
+            int bx = cx - (dx * tail) / len;
+            int by = cy - (dy * tail) / len;
+            observore_watch_line(c, cx, cy, bx, by, w_hub, colour);
+        }
+    }
+
+    for (int i = 0; i < steps; i++) {
+        int x0 = cx + (dx * i) / steps;
+        int y0 = cy + (dy * i) / steps;
+        int x1 = cx + (dx * (i + 1)) / steps;
+        int y1 = cy + (dy * (i + 1)) / steps;
+        int w  = w_hub - ((w_hub - w_tip) * i) / steps;
+        observore_watch_line(c, x0, y0, x1, y1, w, colour);
+    }
+}
+
 void observore_watch_glyph(const observore_canvas_t *c, int x, int y, char ch,
                            int scale, uint16_t colour)
 {

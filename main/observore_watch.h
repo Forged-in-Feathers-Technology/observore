@@ -43,6 +43,16 @@ void observore_watch_disc(const observore_canvas_t *c, int cx, int cy,
 void observore_watch_hand_end(int cx, int cy, int len, int units, int per_rev,
                               int *x, int *y);
 
+/* A watch hand: tapered from the hub to a point, with a counterweight
+ * behind the centre.
+ *
+ * A bare line from the middle to the rim reads as a diagram. The taper and
+ * the tail are most of what makes a dial look like a watch, and they cost a
+ * handful of segments. */
+void observore_watch_hand(const observore_canvas_t *c, int cx, int cy,
+                          int tipx, int tipy, int tail, int w_hub, int w_tip,
+                          uint16_t colour);
+
 /* One character from the project's font, scaled by an integer factor. */
 void observore_watch_glyph(const observore_canvas_t *c, int x, int y, char ch,
                            int scale, uint16_t colour);
