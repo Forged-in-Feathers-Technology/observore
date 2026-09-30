@@ -142,6 +142,26 @@ static const char *TAG = "observore.display";
 
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_panel_io_handle_t s_io;
+#if CONFIG_OBSERVORE_WATCHFACE
+/* Posted when the panel has finished with a buffer.
+ *
+ * esp_lcd_panel_draw_bitmap queues the transfer and returns; the DMA reads
+ * the buffer afterwards. Copying the next strip into the same buffer without
+ * waiting overwrites data still in flight, which is why parts of the watch
+ * face never arrived and the previous page showed through them in cyan. */
+static SemaphoreHandle_t s_blit_done;
+
+static bool blit_done(esp_lcd_panel_io_handle_t io,
+                      esp_lcd_panel_io_event_data_t *ev, void *ctx)
+{
+    (void)io; (void)ev; (void)ctx;
+    BaseType_t woken = pdFALSE;
+    if (s_blit_done) {
+        xSemaphoreGiveFromISR(s_blit_done, &woken);
+    }
+    return woken == pdTRUE;
+}
+#endif
 /* What is on the glass, so a redraw sends only the lines that changed. */
 static char     s_shown[ROWS][COLS + 1];
 static uint16_t s_shown_bg[ROWS];
@@ -821,6 +841,9 @@ void observore_display_init(void)
         .lcd_cmd_bits = 32,
         .lcd_param_bits = 8,
         .flags = { .quad_mode = true },
+#if CONFIG_OBSERVORE_WATCHFACE
+        .on_color_trans_done = blit_done,
+#endif
     };
 #else
     esp_lcd_panel_io_spi_config_t io_cfg = {
@@ -881,6 +904,9 @@ void observore_display_init(void)
     clear_panel();
 
 
+#if CONFIG_OBSERVORE_WATCHFACE
+    s_blit_done = xSemaphoreCreateBinary();
+#endif
     memset(s_shown, 0, sizeof(s_shown));
     s_ready = true;
     for (int r = 0; r < ROWS; r++) {
@@ -1149,11 +1175,16 @@ static void draw_clockface(const observore_status_t *st)
         }
     }
     const int rows = CLEAR_STRIP_BYTES / (DISP_W * 2);
+    /* Anything posted by the text path before this is stale. */
+    while (xSemaphoreTake(s_blit_done, 0) == pdTRUE) { }
     for (int y = 0; y < DISP_H; y += rows) {
         int h = (y + rows <= DISP_H) ? rows : DISP_H - y;
         memcpy(strip, &s_fb[(size_t)y * DISP_W], (size_t)h * DISP_W * 2);
         esp_lcd_panel_draw_bitmap(s_panel, X_OFF, y, X_OFF + DISP_W, y + h,
                                   strip);
+        /* The buffer is reused on the next pass, so the panel has to be
+         * finished with it first. */
+        xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(100));
     }
     /* The text grid knows nothing about what just happened to the panel, so
      * every row is marked stale and will be redrawn when a page returns. */
