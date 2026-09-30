@@ -4,7 +4,12 @@
 #include <sys/time.h>
 
 #include "esp_log.h"
+#include <stdlib.h>
+#include <time.h>
+
 #include "esp_netif_sntp.h"
+
+#include "observore_rtc.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
 
@@ -27,6 +32,14 @@ static void on_sync(struct timeval *tv)
     if (observore_clock_iso(s_synced_at_us, when, sizeof(when))) {
         ESP_LOGI(TAG, "%s to %s", first ? "clock set" : "clock resynced", when);
     }
+
+    /* Hand it to the chip, which is the half of this pair that survives a
+     * reboot away from a network. The two correct each other in the direction
+     * that makes sense: the network is more accurate, the chip is more
+     * available. */
+    if (observore_rtc_available()) {
+        observore_rtc_write();
+    }
 }
 
 void observore_clock_init(void)
@@ -38,6 +51,11 @@ void observore_clock_init(void)
      * router's own NTP is reachable from inside that fence; a public pool
      * often is not.  The configured server remains as the fallback for
      * networks that hand out no NTP option. */
+    /* The timezone belongs to whoever reads a time, not to the time itself:
+     * everything stored stays UTC. This only affects what a person is shown. */
+    setenv("TZ", CONFIG_OBSERVORE_TZ, 1);
+    tzset();
+
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_OBSERVORE_NTP_SERVER);
     cfg.server_from_dhcp = true;
     cfg.renew_servers_after_new_IP = true;

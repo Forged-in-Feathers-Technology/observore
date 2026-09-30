@@ -74,6 +74,12 @@ CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x38
 # The accelerometer, sharing those wires. The only sensor here that measures
 # the device rather than the room, and the reason this board is interesting:
 # something that stays with you across a journey is following you.
+# The clock, on the same two wires. Without it the time comes only from the
+# network, so a board restarted away from home has none -- and its findings
+# are undated exactly when they matter most.
+CONFIG_OBSERVORE_RTC=y
+CONFIG_OBSERVORE_RTC_I2C_ADDR=0x51
+
 # The cell, divided by three into ADC1 channel 3 -- GPIO4. The only board
 # here that can measure its own battery.
 CONFIG_OBSERVORE_BATTERY=y

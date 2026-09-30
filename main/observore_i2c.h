@@ -33,6 +33,12 @@ bool observore_i2c_read(i2c_master_dev_handle_t dev, uint8_t reg,
 /* Write one register. */
 bool observore_i2c_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val);
 
+/* Write a register address followed by its bytes, in one transaction --
+ * which the clock needs, because setting its time one register at a time
+ * lets the seconds roll over in the middle of the write. */
+bool observore_i2c_write_bytes(i2c_master_dev_handle_t dev,
+                               const uint8_t *buf, size_t len);
+
 /* Which addresses answer a one-byte read, as a printable list into `out`.
  *
  * Done with a read rather than i2c_master_probe(), which on this board

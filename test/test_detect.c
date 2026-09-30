@@ -12,6 +12,7 @@
 #include "observore_heapwatch.h"
 #include "observore_mute.h"
 #include "observore_battery.h"
+#include "observore_rtc.h"
 #include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
@@ -456,6 +457,50 @@ static void test_follower(void)
 
 
 
+
+
+static void test_bcd(void)
+{
+    banner("the clock chip speaks BCD and nothing else here does");
+
+    CHECK(observore_bcd_to_dec(0x00) == 0, "0x00 is 0");
+    CHECK(observore_bcd_to_dec(0x09) == 9, "0x09 is 9");
+    CHECK(observore_bcd_to_dec(0x10) == 10, "0x10 is ten, not sixteen");
+    CHECK(observore_bcd_to_dec(0x59) == 59, "0x59 is 59");
+    CHECK(observore_dec_to_bcd(0) == 0x00, "0 is 0x00");
+    CHECK(observore_dec_to_bcd(9) == 0x09, "9 is 0x09");
+    CHECK(observore_dec_to_bcd(10) == 0x10, "ten is 0x10, not 0x0A");
+    CHECK(observore_dec_to_bcd(59) == 0x59, "59 is 0x59");
+
+    /* And the epoch arithmetic that replaced a missing timegm(). Checked
+     * against dates computed elsewhere rather than against itself. */
+    struct tm t0 = {.tm_year = 70, .tm_mon = 0, .tm_mday = 1};
+    CHECK(observore_timegm(&t0) == 0, "1970-01-01 is zero, got %lld",
+          (long long)observore_timegm(&t0));
+    struct tm t1 = {.tm_year = 126, .tm_mon = 8, .tm_mday = 29,
+                    .tm_hour = 12, .tm_min = 34, .tm_sec = 56};
+    CHECK(observore_timegm(&t1) == 1790685296LL,
+          "2026-09-29 12:34:56 UTC, got %lld", (long long)observore_timegm(&t1));
+    /* A leap day, which is where this arithmetic earns its keep. */
+    struct tm t2 = {.tm_year = 124, .tm_mon = 1, .tm_mday = 29};
+    struct tm t3 = {.tm_year = 124, .tm_mon = 2, .tm_mday = 1};
+    CHECK(observore_timegm(&t3) - observore_timegm(&t2) == 86400,
+          "2024-02-29 is one day before 2024-03-01");
+    /* And a century that is not a leap year. */
+    struct tm t4 = {.tm_year = 200, .tm_mon = 1, .tm_mday = 28};
+    struct tm t5 = {.tm_year = 200, .tm_mon = 2, .tm_mday = 1};
+    CHECK(observore_timegm(&t5) - observore_timegm(&t4) == 86400,
+          "2100 is not a leap year");
+
+    /* Round trip across every value the chip can hold, in one check. */
+    int bad = -1;
+    for (int i = 0; i < 100 && bad < 0; i++) {
+        if (observore_bcd_to_dec(observore_dec_to_bcd((uint8_t)i)) != i) {
+            bad = i;
+        }
+    }
+    CHECK(bad < 0, "every value 0-99 survives the round trip (failed at %d)", bad);
+}
 
 static void test_the_battery_curve(void)
 {
@@ -2690,6 +2735,7 @@ int main(void)
     test_something_that_came_with_you();
     test_a_journey_must_change_the_room();
     test_the_battery_curve();
+    test_bcd();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();

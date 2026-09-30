@@ -18,6 +18,7 @@
 #include "observore_led.h"
 #include "observore_battery.h"
 #include "observore_motion.h"
+#include "observore_rtc.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
@@ -313,6 +314,10 @@ void app_main(void)
     observore_touch_init();
     observore_motion_init();
     observore_battery_init();
+    /* Before the network, so a device restarted away from one still knows
+     * what time it is and its findings are dated. */
+    observore_rtc_init();
+    observore_rtc_read();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.

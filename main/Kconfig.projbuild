@@ -367,6 +367,31 @@ config OBSERVORE_I2C_SCL
     depends on OBSERVORE_I2C
     default 48
 
+config OBSERVORE_RTC
+    bool "Real-time clock (PCF85063)"
+    default n
+    select OBSERVORE_I2C
+    help
+        A clock that keeps time across a reboot without a network.  Without
+        one, the time comes only from SNTP -- which means only from home, so a
+        device restarted somewhere else has no idea what time it is and the
+        findings it records are undated.
+
+config OBSERVORE_RTC_I2C_ADDR
+    hex "Clock I2C address"
+    depends on OBSERVORE_RTC
+    default 0x51
+
+config OBSERVORE_TZ
+    string "Timezone, as a POSIX TZ string"
+    default "UTC0"
+    help
+        Applied when a person reads a time, never when one is written down:
+        logs, history and the clock chip all keep UTC, because a stored
+        timestamp that depends on where the reader was is a timestamp nobody
+        can compare.  "EST5EDT,M3.2.0,M11.1.0" for US Eastern,
+        "GMT0BST,M3.5.0/1,M10.5.0" for the UK.
+
 config OBSERVORE_BATTERY
     bool "Battery voltage sense"
     default n
