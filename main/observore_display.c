@@ -1586,6 +1586,23 @@ static void draw_current(void)
     if (!s_have_snap) {
         return;
     }
+#if CONFIG_OBSERVORE_WATCHFACE
+    /* Leaving the dial means clearing the whole panel, not just the rows.
+     *
+     * The text grid is the square inside the circle, so redrawing every row
+     * of it cannot touch the four crescents outside -- and that is exactly
+     * where the hour markers and the rim are drawn. Without this the
+     * findings page came back with a ring of amber ticks still around it,
+     * which is both untidy and, on a page meant to be read at a glance,
+     * actively misleading. */
+    static int s_drew_face;
+    if (s_drew_face && s_page != PAGE_CLOCK) {
+        s_drew_face = 0;
+        clear_panel();
+        memset(s_shown, 0, sizeof(s_shown));
+    }
+    s_drew_face = (s_page == PAGE_CLOCK);
+#endif
 #if CONFIG_OBSERVORE_TOUCH
     if (s_page == PAGE_WIFI) {
         draw_wifi();
