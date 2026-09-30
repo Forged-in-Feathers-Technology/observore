@@ -151,6 +151,118 @@ config OBSERVORE_PATROL_WINDOW_S
 
 menu "Display"
 
+# Peripherals that are not the panel.
+#
+# These lived inside "if OBSERVORE_DISPLAY" once, which cost every headless
+# board a build: CONFIG_OBSERVORE_TZ is read as a value rather than tested,
+# so on a board with no screen it was not merely false, it did not exist, and
+# the clock failed to compile. Nothing here depends on there being a display
+# -- a headless sensor can have a clock chip, a cell and an accelerometer as
+# easily as a round one can.
+
+config OBSERVORE_I2C
+    bool "Shared I2C bus"
+    default n
+    help
+        One bus, several chips.  Selected by whatever needs it rather than
+        set by hand: the touch controller and the motion sensor on the round
+        board share two wires, and the driver refuses a second bus on the
+        same port.
+
+config OBSERVORE_I2C_SDA
+    int "I2C SDA GPIO"
+    depends on OBSERVORE_I2C
+    default 47
+
+config OBSERVORE_I2C_SCL
+    int "I2C SCL GPIO"
+    depends on OBSERVORE_I2C
+    default 48
+
+config OBSERVORE_WATCHFACE
+    bool "A watch face page"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default n
+    help
+        An analogue dial with hands, on the round panel.  It is a disguise as
+        much as a clock: a device carried in a pocket and glanced at is far
+        less conspicuous showing the time than showing a list of everybody's
+        Bluetooth addresses.
+
+        The threat level still reaches the wearer, as the colour of the hour
+        markers -- legible to somebody who knows what they mean and nothing at
+        all to somebody glancing over a shoulder.
+
+        Needs a frame buffer, which is why it is limited to the board with
+        eight megabytes of PSRAM: a dial has diagonals in it, and the text
+        grid the other boards draw with cannot.
+
+config OBSERVORE_RTC
+    bool "Real-time clock (PCF85063)"
+    default n
+    select OBSERVORE_I2C
+    help
+        A clock that keeps time across a reboot without a network.  Without
+        one, the time comes only from SNTP -- which means only from home, so a
+        device restarted somewhere else has no idea what time it is and the
+        findings it records are undated.
+
+config OBSERVORE_RTC_I2C_ADDR
+    hex "Clock I2C address"
+    depends on OBSERVORE_RTC
+    default 0x51
+
+config OBSERVORE_TZ
+    string "Timezone, as a POSIX TZ string"
+    default "UTC0"
+    help
+        Applied when a person reads a time, never when one is written down:
+        logs, history and the clock chip all keep UTC, because a stored
+        timestamp that depends on where the reader was is a timestamp nobody
+        can compare.  "EST5EDT,M3.2.0,M11.1.0" for US Eastern,
+        "GMT0BST,M3.5.0/1,M10.5.0" for the UK.
+
+config OBSERVORE_BATTERY
+    bool "Battery voltage sense"
+    default n
+    help
+        Where the cell is divided into an ADC pin.  None of the Cheap Yellow
+        Displays have this -- their battery connector charges a cell and
+        reports nothing, which is why "dim on battery, bright on USB" was
+        never possible there.
+
+config OBSERVORE_BATTERY_ADC_CHANNEL
+    int "ADC1 channel the divided cell arrives on"
+    depends on OBSERVORE_BATTERY
+    default 3
+    help
+        3 on the Waveshare AMOLED board, which is GPIO4 on an S3.  Taken from
+        the vendor's own example: their wiki says GPIO5, and it has also been
+        wrong about this board's touch pins and its panel power.
+
+config OBSERVORE_MOTION
+    bool "Motion sensor (QMI8658)"
+    default n
+    select OBSERVORE_I2C
+    help
+        An accelerometer, used for one thing: telling being carried from
+        sitting still.  It is what makes the `tailing` class possible --
+        something that stays with you across a journey is following you,
+        where something that persists while the board sits on a desk is the
+        neighbourhood.  Without it, nothing is ever promoted to that class
+        and everything else behaves exactly as before.
+
+config OBSERVORE_MOTION_I2C_ADDR
+    hex "Motion sensor I2C address"
+    depends on OBSERVORE_MOTION
+    default 0x6B
+    help
+        0x6B on the board this was written for.  The part also answers at
+        0x6A depending on how its address pin is strapped, and asking the
+        wrong one produces a nack that looks exactly like a broken bus --
+        which cost an afternoon here.  The startup scan prints what actually
+        answered.
+
 config OBSERVORE_DISPLAY
     bool "Panel over SPI"
     default n
@@ -347,109 +459,6 @@ config OBSERVORE_DISPLAY_MIRROR_X
 config OBSERVORE_DISPLAY_MIRROR_Y
     bool "Mirror Y"
     default n
-
-config OBSERVORE_I2C
-    bool "Shared I2C bus"
-    default n
-    help
-        One bus, several chips.  Selected by whatever needs it rather than
-        set by hand: the touch controller and the motion sensor on the round
-        board share two wires, and the driver refuses a second bus on the
-        same port.
-
-config OBSERVORE_I2C_SDA
-    int "I2C SDA GPIO"
-    depends on OBSERVORE_I2C
-    default 47
-
-config OBSERVORE_I2C_SCL
-    int "I2C SCL GPIO"
-    depends on OBSERVORE_I2C
-    default 48
-
-config OBSERVORE_WATCHFACE
-    bool "A watch face page"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
-    default n
-    help
-        An analogue dial with hands, on the round panel.  It is a disguise as
-        much as a clock: a device carried in a pocket and glanced at is far
-        less conspicuous showing the time than showing a list of everybody's
-        Bluetooth addresses.
-
-        The threat level still reaches the wearer, as the colour of the hour
-        markers -- legible to somebody who knows what they mean and nothing at
-        all to somebody glancing over a shoulder.
-
-        Needs a frame buffer, which is why it is limited to the board with
-        eight megabytes of PSRAM: a dial has diagonals in it, and the text
-        grid the other boards draw with cannot.
-
-config OBSERVORE_RTC
-    bool "Real-time clock (PCF85063)"
-    default n
-    select OBSERVORE_I2C
-    help
-        A clock that keeps time across a reboot without a network.  Without
-        one, the time comes only from SNTP -- which means only from home, so a
-        device restarted somewhere else has no idea what time it is and the
-        findings it records are undated.
-
-config OBSERVORE_RTC_I2C_ADDR
-    hex "Clock I2C address"
-    depends on OBSERVORE_RTC
-    default 0x51
-
-config OBSERVORE_TZ
-    string "Timezone, as a POSIX TZ string"
-    default "UTC0"
-    help
-        Applied when a person reads a time, never when one is written down:
-        logs, history and the clock chip all keep UTC, because a stored
-        timestamp that depends on where the reader was is a timestamp nobody
-        can compare.  "EST5EDT,M3.2.0,M11.1.0" for US Eastern,
-        "GMT0BST,M3.5.0/1,M10.5.0" for the UK.
-
-config OBSERVORE_BATTERY
-    bool "Battery voltage sense"
-    default n
-    help
-        Where the cell is divided into an ADC pin.  None of the Cheap Yellow
-        Displays have this -- their battery connector charges a cell and
-        reports nothing, which is why "dim on battery, bright on USB" was
-        never possible there.
-
-config OBSERVORE_BATTERY_ADC_CHANNEL
-    int "ADC1 channel the divided cell arrives on"
-    depends on OBSERVORE_BATTERY
-    default 3
-    help
-        3 on the Waveshare AMOLED board, which is GPIO4 on an S3.  Taken from
-        the vendor's own example: their wiki says GPIO5, and it has also been
-        wrong about this board's touch pins and its panel power.
-
-config OBSERVORE_MOTION
-    bool "Motion sensor (QMI8658)"
-    default n
-    select OBSERVORE_I2C
-    help
-        An accelerometer, used for one thing: telling being carried from
-        sitting still.  It is what makes the `tailing` class possible --
-        something that stays with you across a journey is following you,
-        where something that persists while the board sits on a desk is the
-        neighbourhood.  Without it, nothing is ever promoted to that class
-        and everything else behaves exactly as before.
-
-config OBSERVORE_MOTION_I2C_ADDR
-    hex "Motion sensor I2C address"
-    depends on OBSERVORE_MOTION
-    default 0x6B
-    help
-        0x6B on the board this was written for.  The part also answers at
-        0x6A depending on how its address pin is strapped, and asking the
-        wrong one produces a nack that looks exactly like a broken bus --
-        which cost an afternoon here.  The startup scan prints what actually
-        answered.
 
 config OBSERVORE_TOUCH
     bool "Touch panel"
