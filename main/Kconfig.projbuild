@@ -367,6 +367,24 @@ config OBSERVORE_I2C_SCL
     depends on OBSERVORE_I2C
     default 48
 
+config OBSERVORE_BATTERY
+    bool "Battery voltage sense"
+    default n
+    help
+        Where the cell is divided into an ADC pin.  None of the Cheap Yellow
+        Displays have this -- their battery connector charges a cell and
+        reports nothing, which is why "dim on battery, bright on USB" was
+        never possible there.
+
+config OBSERVORE_BATTERY_ADC_CHANNEL
+    int "ADC1 channel the divided cell arrives on"
+    depends on OBSERVORE_BATTERY
+    default 3
+    help
+        3 on the Waveshare AMOLED board, which is GPIO4 on an S3.  Taken from
+        the vendor's own example: their wiki says GPIO5, and it has also been
+        wrong about this board's touch pins and its panel power.
+
 config OBSERVORE_MOTION
     bool "Motion sensor (QMI8658)"
     default n

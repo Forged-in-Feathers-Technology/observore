@@ -16,6 +16,7 @@
 #include "observore_history.h"
 #include "observore_improv.h"
 #include "observore_led.h"
+#include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -311,6 +312,7 @@ void app_main(void)
     observore_display_init();
     observore_touch_init();
     observore_motion_init();
+    observore_battery_init();
     ESP_LOGI(TAG, "%zu mute rules loaded", observore_mute_count());
     /* Printed at boot, not only when the console comes up: you need it before
      * you can join, and the serial log is the one place it is safe to put it.

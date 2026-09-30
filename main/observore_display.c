@@ -49,6 +49,7 @@
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 
+#include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -1048,6 +1049,24 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         } else {
             snprintf(text, sizeof(text), " light    %s",
                      set >= 0 && set < 4 ? names[set] : "?");
+        }
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+#endif
+
+#if CONFIG_OBSERVORE_BATTERY
+    if (observore_battery_available()) {
+        int mv = observore_battery_mv();
+        int pct = observore_battery_pct_from_mv(mv);
+        if (mv > 0) {
+            /* Voltage as well as percent, because the percent comes off a
+             * coarse curve and the volts are what was measured. On USB this
+             * reads the charger rather than a discharging cell, which is why
+             * it does not claim to know which. */
+            snprintf(text, sizeof(text), " battery  %d.%02d V, about %d%%",
+                     mv / 1000, (mv % 1000) / 10, pct);
+        } else {
+            snprintf(text, sizeof(text), " battery  no reading");
         }
         line(r++, text, C_WHITE, C_BLACK);
     }

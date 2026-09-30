@@ -11,6 +11,7 @@
 #include "observore_version.h"
 #include "observore_heapwatch.h"
 #include "observore_mute.h"
+#include "observore_battery.h"
 #include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
@@ -454,6 +455,43 @@ static void test_follower(void)
 }
 
 
+
+
+static void test_the_battery_curve(void)
+{
+    banner("charge from voltage, on a curve rather than a straight line");
+
+    CHECK(observore_battery_pct_from_mv(4200) == 100, "4.20 V is full");
+    CHECK(observore_battery_pct_from_mv(4500) == 100, "and above it is still full");
+    CHECK(observore_battery_pct_from_mv(3300) == 0, "3.30 V is empty");
+    CHECK(observore_battery_pct_from_mv(3000) == 0, "and below it is still empty");
+    CHECK(observore_battery_pct_from_mv(-1) == -1, "no reading is not zero percent");
+
+    /* The flat middle is the whole reason this is a table. A cell at 3.80 V
+     * is a little under half, where a straight line from 3.3 to 4.2 would
+     * call it 55% -- optimistic by a tenth of a battery, in the span where a
+     * battery spends most of its life. */
+    int mid = observore_battery_pct_from_mv(3800);
+    CHECK(mid > 35 && mid < 50, "3.80 V is a little under half, got %d%%", mid);
+    int linear = (3800 - 3300) * 100 / (4200 - 3300);
+    CHECK(linear > mid + 5,
+          "and a straight line would have flattered it (%d%% vs %d%%)",
+          linear, mid);
+
+    /* Monotonic, which a hand-written table is not automatically. One check
+     * over the whole sweep rather than ninety, naming the first place it
+     * would go backwards. */
+    int prev = -1, bad_mv = 0;
+    for (int mv = 3300; mv <= 4200 && !bad_mv; mv += 10) {
+        int pct = observore_battery_pct_from_mv(mv);
+        if (pct < prev) {
+            bad_mv = mv;
+        }
+        prev = pct;
+    }
+    CHECK(bad_mv == 0, "charge must never fall as voltage rises (fell at %d mV)",
+          bad_mv);
+}
 
 static void test_a_journey_must_change_the_room(void)
 {
@@ -2651,6 +2689,7 @@ int main(void)
     test_a_crowd_is_not_an_emergency();
     test_something_that_came_with_you();
     test_a_journey_must_change_the_room();
+    test_the_battery_curve();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();

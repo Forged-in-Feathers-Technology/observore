@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -192,6 +193,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"bright\":%d,\"bright_now\":%d,\"bright_steps\":%d"
         ",\"motion\":{\"sensor\":%s,\"carried\":%s,\"journeys\":%u"
         ",\"last_overlap_pct\":%d}"
+        ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -226,7 +228,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_motion_available() ? "true" : "false",
         observore_motion_moving() ? "true" : "false",
         (unsigned)observore_motion_journeys(),
-        observore_motion_last_overlap_pct());
+        observore_motion_last_overlap_pct(),
+        observore_battery_available() ? "true" : "false",
+        observore_battery_mv(),
+        observore_battery_pct_from_mv(observore_battery_mv()));
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",

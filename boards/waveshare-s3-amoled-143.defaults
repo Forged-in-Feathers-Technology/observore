@@ -74,6 +74,11 @@ CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x38
 # The accelerometer, sharing those wires. The only sensor here that measures
 # the device rather than the room, and the reason this board is interesting:
 # something that stays with you across a journey is following you.
+# The cell, divided by three into ADC1 channel 3 -- GPIO4. The only board
+# here that can measure its own battery.
+CONFIG_OBSERVORE_BATTERY=y
+CONFIG_OBSERVORE_BATTERY_ADC_CHANNEL=3
+
 CONFIG_OBSERVORE_MOTION=y
 CONFIG_OBSERVORE_MOTION_I2C_ADDR=0x6B
 
