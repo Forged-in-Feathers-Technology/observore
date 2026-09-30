@@ -77,6 +77,16 @@ bool observore_i2c_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val)
                                pdMS_TO_TICKS(I2C_TIMEOUT_MS)) == ESP_OK;
 }
 
+bool observore_i2c_write_bytes(i2c_master_dev_handle_t dev,
+                               const uint8_t *buf, size_t len)
+{
+    if (!dev) {
+        return false;
+    }
+    return i2c_master_transmit(dev, buf, len,
+                               pdMS_TO_TICKS(I2C_TIMEOUT_MS)) == ESP_OK;
+}
+
 void observore_i2c_scan(char *out, size_t len)
 {
     size_t n = 0;

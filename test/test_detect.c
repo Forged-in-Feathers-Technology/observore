@@ -11,6 +11,10 @@
 #include "observore_version.h"
 #include "observore_heapwatch.h"
 #include "observore_mute.h"
+#include "observore_battery.h"
+#include "observore_rtc.h"
+#include "observore_watch.h"
+#include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
 #include "observore_util.h"
@@ -453,6 +457,251 @@ static void test_follower(void)
 }
 
 
+
+
+
+
+static void test_the_watch_hands_point_the_right_way(void)
+{
+    banner("a dial hand at twelve points up, not sideways");
+
+    int x = 0, y = 0;
+    /* Twelve o'clock is straight up, which on a screen is negative y. An
+     * off-by-a-quarter-turn here is the classic way to ship a clock that is
+     * ninety degrees out and looks plausible in a photograph. */
+    observore_watch_hand_end(100, 100, 50, 0, 12, &x, &y);
+    CHECK(x == 100 && y == 50, "twelve is straight up, got %d,%d", x, y);
+    observore_watch_hand_end(100, 100, 50, 3, 12, &x, &y);
+    CHECK(x == 150 && y == 100, "three is to the right, got %d,%d", x, y);
+    observore_watch_hand_end(100, 100, 50, 6, 12, &x, &y);
+    CHECK(x == 100 && y == 150, "six is down, got %d,%d", x, y);
+    observore_watch_hand_end(100, 100, 50, 9, 12, &x, &y);
+    CHECK(x == 50 && y == 100, "nine is to the left, got %d,%d", x, y);
+
+    /* Seconds use the same arithmetic with sixty to the turn. */
+    observore_watch_hand_end(0, 0, 100, 15, 60, &x, &y);
+    CHECK(x == 100 && y == 0, "fifteen seconds is to the right, got %d,%d", x, y);
+    observore_watch_hand_end(0, 0, 100, 30, 60, &x, &y);
+    CHECK(x == 0 && y == 100, "thirty seconds is down, got %d,%d", x, y);
+
+    /* Halfway between hours, which is where a real hour hand sits at half
+     * past and where a naive integer division puts it on the hour instead. */
+    observore_watch_hand_end(0, 0, 1000, 90, 720, &x, &y);
+    CHECK(x > 690 && x < 720 && y > -720 && y < -690,
+          "half past one is between one and two, got %d,%d", x, y);
+
+    /* Nothing may be written outside the canvas, whatever it is asked to
+     * draw: a hand longer than the dial is a mistake that should clip rather
+     * than corrupt whatever follows the buffer. */
+    static uint16_t px[32 * 32];
+    observore_canvas_t c = {.px = px, .w = 32, .h = 32};
+    observore_watch_fill(&c, 0x0000);
+    observore_watch_line(&c, 16, 16, 500, -400, 5, 0xFFFF);
+    observore_watch_disc(&c, 2, 2, 40, 0xFFFF);
+    observore_watch_ring(&c, 16, 16, 60, 4, 0xFFFF);
+    observore_watch_text(&c, 16, 16, "XII", 3, 0xFFFF);
+    CHECK(1, "drawing past the edges does not corrupt memory");
+}
+
+static void test_bcd(void)
+{
+    banner("the clock chip speaks BCD and nothing else here does");
+
+    CHECK(observore_bcd_to_dec(0x00) == 0, "0x00 is 0");
+    CHECK(observore_bcd_to_dec(0x09) == 9, "0x09 is 9");
+    CHECK(observore_bcd_to_dec(0x10) == 10, "0x10 is ten, not sixteen");
+    CHECK(observore_bcd_to_dec(0x59) == 59, "0x59 is 59");
+    CHECK(observore_dec_to_bcd(0) == 0x00, "0 is 0x00");
+    CHECK(observore_dec_to_bcd(9) == 0x09, "9 is 0x09");
+    CHECK(observore_dec_to_bcd(10) == 0x10, "ten is 0x10, not 0x0A");
+    CHECK(observore_dec_to_bcd(59) == 0x59, "59 is 0x59");
+
+    /* And the epoch arithmetic that replaced a missing timegm(). Checked
+     * against dates computed elsewhere rather than against itself. */
+    struct tm t0 = {.tm_year = 70, .tm_mon = 0, .tm_mday = 1};
+    CHECK(observore_timegm(&t0) == 0, "1970-01-01 is zero, got %lld",
+          (long long)observore_timegm(&t0));
+    struct tm t1 = {.tm_year = 126, .tm_mon = 8, .tm_mday = 29,
+                    .tm_hour = 12, .tm_min = 34, .tm_sec = 56};
+    CHECK(observore_timegm(&t1) == 1790685296LL,
+          "2026-09-29 12:34:56 UTC, got %lld", (long long)observore_timegm(&t1));
+    /* A leap day, which is where this arithmetic earns its keep. */
+    struct tm t2 = {.tm_year = 124, .tm_mon = 1, .tm_mday = 29};
+    struct tm t3 = {.tm_year = 124, .tm_mon = 2, .tm_mday = 1};
+    CHECK(observore_timegm(&t3) - observore_timegm(&t2) == 86400,
+          "2024-02-29 is one day before 2024-03-01");
+    /* And a century that is not a leap year. */
+    struct tm t4 = {.tm_year = 200, .tm_mon = 1, .tm_mday = 28};
+    struct tm t5 = {.tm_year = 200, .tm_mon = 2, .tm_mday = 1};
+    CHECK(observore_timegm(&t5) - observore_timegm(&t4) == 86400,
+          "2100 is not a leap year");
+
+    /* Round trip across every value the chip can hold, in one check. */
+    int bad = -1;
+    for (int i = 0; i < 100 && bad < 0; i++) {
+        if (observore_bcd_to_dec(observore_dec_to_bcd((uint8_t)i)) != i) {
+            bad = i;
+        }
+    }
+    CHECK(bad < 0, "every value 0-99 survives the round trip (failed at %d)", bad);
+}
+
+static void test_the_battery_curve(void)
+{
+    banner("charge from voltage, on a curve rather than a straight line");
+
+    CHECK(observore_battery_pct_from_mv(4200) == 100, "4.20 V is full");
+    CHECK(observore_battery_pct_from_mv(4500) == 100, "and above it is still full");
+    CHECK(observore_battery_pct_from_mv(3300) == 0, "3.30 V is empty");
+    CHECK(observore_battery_pct_from_mv(3000) == 0, "and below it is still empty");
+    CHECK(observore_battery_pct_from_mv(-1) == -1, "no reading is not zero percent");
+
+    /* The flat middle is the whole reason this is a table. A cell at 3.80 V
+     * is a little under half, where a straight line from 3.3 to 4.2 would
+     * call it 55% -- optimistic by a tenth of a battery, in the span where a
+     * battery spends most of its life. */
+    int mid = observore_battery_pct_from_mv(3800);
+    CHECK(mid > 35 && mid < 50, "3.80 V is a little under half, got %d%%", mid);
+    int linear = (3800 - 3300) * 100 / (4200 - 3300);
+    CHECK(linear > mid + 5,
+          "and a straight line would have flattered it (%d%% vs %d%%)",
+          linear, mid);
+
+    /* Monotonic, which a hand-written table is not automatically. One check
+     * over the whole sweep rather than ninety, naming the first place it
+     * would go backwards. */
+    int prev = -1, bad_mv = 0;
+    for (int mv = 3300; mv <= 4200 && !bad_mv; mv += 10) {
+        int pct = observore_battery_pct_from_mv(mv);
+        if (pct < prev) {
+            bad_mv = mv;
+        }
+        prev = pct;
+    }
+    CHECK(bad_mv == 0, "charge must never fall as voltage rises (fell at %d mV)",
+          bad_mv);
+}
+
+static void test_a_journey_must_change_the_room(void)
+{
+    banner("a journey that did not go anywhere is not a journey");
+
+    /* Access points are the reference frame: stationary, plentiful, and
+     * already scanned. Carrying the board around one building leaves them
+     * all in earshot, which is exactly what made every follower in a house
+     * look like it had come along. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 9; ap++) {
+        observore_surroundings_note(ap, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    CHECK(observore_surroundings_marked() == 9, "nine access points marked, got %u",
+          (unsigned)observore_surroundings_marked());
+    CHECK(observore_surroundings_overlap_pct() == 0,
+          "none heard again yet, got %d", observore_surroundings_overlap_pct());
+
+    /* Walked to the kitchen: the same building answers. */
+    for (uint32_t ap = 1; ap <= 8; ap++) {
+        observore_surroundings_note(ap, SECS(60));
+    }
+    CHECK(observore_surroundings_overlap_pct() >= 80,
+          "the same place shares nearly all of them, got %d%%",
+          observore_surroundings_overlap_pct());
+
+    /* Went somewhere else: almost nothing from before is audible. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 9; ap++) {
+        observore_surroundings_note(ap, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    observore_surroundings_note(1, SECS(600));          /* one straggler */
+    for (uint32_t ap = 100; ap <= 112; ap++) {
+        observore_surroundings_note(ap, SECS(600));     /* all new */
+    }
+    int elsewhere = observore_surroundings_overlap_pct();
+    CHECK(elsewhere > 0 && elsewhere <= 33,
+          "somewhere else shares almost none, got %d%%", elsewhere);
+
+    /* Stale entries must not make a new place look familiar: an access point
+     * last heard an hour ago is not part of "here". */
+    observore_surroundings_reset();
+    observore_surroundings_note(7, SECS(0));
+    observore_surroundings_mark(SECS(4000), SECS(300));
+    CHECK(observore_surroundings_marked() == 0,
+          "an hour-old access point is not part of here, got %u",
+          (unsigned)observore_surroundings_marked());
+    CHECK(observore_surroundings_overlap_pct() == -1,
+          "and with nothing marked the answer is 'cannot say', got %d",
+          observore_surroundings_overlap_pct());
+
+    observore_surroundings_reset();
+}
+
+static void test_a_crowd_cannot_hide_a_finding(void)
+{
+    banner("the screen lists the heaviest first, not merely the newest");
+
+    observore_mute_init();
+    observore_mute_clear();
+    observore_track_init();
+
+    /* A body camera, seen once and then quiet. */
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x21, 0x22, 0x23};
+    uint8_t plain[] = {0x02, 0x01, 0x06};
+    observore_observation_t cam = {.mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                   .adv = plain, .adv_len = sizeof(plain)};
+    observore_track_observe(&cam, SECS(0));
+
+    /* Then a roomful of newer, lighter things. Twelve rows on the glass and
+     * more devices than that in the table: with recency alone the camera
+     * falls off the bottom, which is how a crowd hides the one finding that
+     * matters. */
+    for (int i = 0; i < 14; i++) {
+        uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x60 + i), 0xFE};
+        uint8_t mac[6] = {0x70, 0x11, 0x22, 0x33, 0x44, (uint8_t)i};
+        observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -60,
+                                     .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+        for (int t = 100; t <= 410; t += 100) {
+            observore_track_observe(&o, SECS(t));
+        }
+    }
+
+    observore_event_t snap[12];
+    size_t n = observore_track_snapshot(snap, 12);
+    CHECK(n == 12, "the screen asks for twelve, got %u", (unsigned)n);
+    CHECK(snap[0].cls == OBSERVORE_CLASS_BODYCAM,
+          "the body camera is still first, an hour later and quiet (got %s)",
+          observore_class_desc(snap[0].cls)->name);
+
+    /* And a follower must not outrank identified equipment, which it did on
+     * the first attempt: the class carries four points in the table while
+     * contributing at most the cap to a score, so sorting on the raw number
+     * put a screenful of unidentified phones above a Flipper. Seen on
+     * hardware after a trip -- nine devices, and the list showed followers. */
+    observore_track_init();
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x00, 0x01};
+    const uint8_t fmac[6] = {0x80, 0xE1, 0x27, 0x44, 0x55, 0x66};
+    observore_observation_t hunter = {.mac = fmac, .src = OBSERVORE_SRC_BLE,
+                                      .rssi = -60, .adv = flip,
+                                      .adv_len = sizeof(flip)};
+    observore_track_observe(&hunter, SECS(0));
+    for (int i = 0; i < 4; i++) {
+        uint8_t adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, (uint8_t)(0x80 + i), 0xFE};
+        uint8_t mac[6] = {0x90, 0x11, 0x22, 0x33, 0x44, (uint8_t)i};
+        observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+                                     .addr_random = true, .adv = adv, .adv_len = sizeof(adv)};
+        for (int t = 100; t <= 410; t += 100) {
+            observore_track_observe(&o, SECS(t));
+        }
+    }
+    n = observore_track_snapshot(snap, 12);
+    CHECK(n >= 5 && snap[0].cls == OBSERVORE_CLASS_HUNTER,
+          "the Flipper is listed above four fresher followers (got %s)",
+          n ? observore_class_desc(snap[0].cls)->name : "nothing");
+
+    observore_track_init();
+}
+
 static void test_something_that_came_with_you(void)
 {
     banner("a follower that crosses a journey is tailing, and alerts");
@@ -480,6 +729,16 @@ static void test_something_that_came_with_you(void)
           "which cannot move the verdict, journey or no journey (level %s)",
           observore_level_name(st.level));
 
+    /* Announced as a follower, which is what it is at this point. This drain
+     * is what the test was missing: without it the device had never been
+     * reported, so the check below passed whether or not the promotion
+     * re-announced anything. */
+    observore_event_t drained[4];
+    size_t d = observore_track_drain_new(drained, 4);
+    CHECK(d == 1 && drained[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "reported once as a follower (drained %u)", (unsigned)d);
+    CHECK(observore_track_drain_new(drained, 4) == 0, "and not twice");
+
     /* The board is carried somewhere, and the same device is there too. */
     observore_track_set_journeys(1);
     observore_track_observe(&o, SECS(400));
@@ -493,6 +752,18 @@ static void test_something_that_came_with_you(void)
     CHECK(st.level == OBSERVORE_LEVEL_ALERT,
           "one device that came with you is an alert on its own (score %u)",
           st.score);
+
+    /* And it is announced again, as what it has become. Findings are reported
+     * once when first identified, and this one had already been reported as a
+     * follower -- so the promotion reached the log, the history and the
+     * notifier not at all, and existed only on the screen of whoever happened
+     * to be watching. */
+    d = observore_track_drain_new(drained, 4);
+    CHECK(d == 1 && drained[0].cls == OBSERVORE_CLASS_TAILING,
+          "the promotion is announced again, as tailing (drained %u)",
+          (unsigned)d);
+    CHECK(observore_track_drain_new(drained, 4) == 0,
+          "and only once, not on every sighting afterwards");
 
     /* The failure that would make this useless: everything in the room is
      * not suddenly following you because the room moved. A device first
@@ -2506,6 +2777,11 @@ int main(void)
     test_follower();
     test_a_crowd_is_not_an_emergency();
     test_something_that_came_with_you();
+    test_a_journey_must_change_the_room();
+    test_the_battery_curve();
+    test_bcd();
+    test_the_watch_hands_point_the_right_way();
+    test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();
     test_table_pressure();

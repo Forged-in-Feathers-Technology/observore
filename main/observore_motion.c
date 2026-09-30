@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "observore_i2c.h"
+#include "observore_surroundings.h"
 
 static const char *TAG = "observore.motion";
 
@@ -51,10 +52,38 @@ static const char *TAG = "observore.motion";
  * must not make the device claim it has been somewhere. */
 #define JOURNEY_MS 15000
 
+/* And movement is not arrival.
+ *
+ * The first version counted a journey from the accelerometer alone, which is
+ * how carrying the board around one house promoted every follower in the
+ * building: nothing had gone anywhere, and every device that was in range
+ * before was in range after. The sensor was right that it moved. It cannot
+ * know whether it went anywhere, and those are not the same question.
+ *
+ * So the access points decide. They are stationary by definition and the
+ * board already scans them every fifteen seconds; if most of the ones from
+ * before are still in earshot, this is the same place and the journey does
+ * not count, however far the thing was carried around it.
+ *
+ * A third of the old set surviving is the line. Somewhere genuinely else
+ * shares almost nothing; a different floor of one building shares a good
+ * deal, and calling that "you went somewhere" would bring the false alarms
+ * straight back. */
+#define ARRIVED_OVERLAP_PCT 33
+
+/* Access points heard longer ago than this are not part of "here": a stale
+ * entry from the place just left would make the new place look familiar. */
+#define SURROUNDINGS_AGE_US (5 * 60 * 1000000LL)
+
+/* After settling, the scan needs a moment to describe the new place before
+ * anyone asks it to. Two patrol scans' worth. */
+#define ARRIVAL_SETTLE_US (40 * 1000000LL)
+
 static i2c_master_dev_handle_t s_dev;
 static volatile bool     s_moving;
 static volatile uint32_t s_journeys;
 static volatile bool     s_available;
+static volatile int      s_last_overlap = -1;
 
 static bool read_accel(int *mg)
 {
@@ -83,6 +112,7 @@ static void motion_task(void *arg)
     int  resting = 1000;          /* slow average of the quiet magnitude */
     int  still_run = 0, moving_run = 0;
     int64_t moving_since_us = 0;
+    int64_t arrival_due_us = 0;
     bool counted = false;
 
     for (;;) {
@@ -109,20 +139,42 @@ static void motion_task(void *arg)
                 s_moving = true;
                 moving_since_us = now;
                 counted = false;
-                ESP_LOGI(TAG, "picked up");
+                /* What "here" was, before setting off. */
+                observore_surroundings_mark(now, SURROUNDINGS_AGE_US);
+                ESP_LOGI(TAG, "picked up (%u access points in earshot)",
+                         (unsigned)observore_surroundings_marked());
             } else if (s_moving && still_run >= STILL_SAMPLES) {
                 s_moving = false;
                 ESP_LOGI(TAG, "set down after %lld s",
                          (long long)((now - moving_since_us) / 1000000));
-                /* Counted on settling rather than on setting off: the claim
-                 * a device makes about crossing a journey is only worth
-                 * anything once the journey has ended somewhere else. */
+                /* Long enough to be a journey; whether it went anywhere is
+                 * asked once the scan has had time to describe where we are
+                 * now. */
                 if (!counted && now - moving_since_us >= JOURNEY_MS * 1000LL) {
+                    arrival_due_us = now + ARRIVAL_SETTLE_US;
+                }
+            }
+
+            /* Did we arrive somewhere, or merely stop? */
+            if (arrival_due_us && now >= arrival_due_us && !s_moving) {
+                arrival_due_us = 0;
+                int overlap = observore_surroundings_overlap_pct();
+                s_last_overlap = overlap;
+                if (overlap < 0) {
+                    /* Nothing to compare against. Saying "you went nowhere"
+                     * and saying "you arrived" are both inventions here, and
+                     * the quiet one is the safer invention. */
+                    ESP_LOGI(TAG, "carried, but no access points to judge by");
+                } else if (overlap <= ARRIVED_OVERLAP_PCT) {
                     s_journeys++;
                     counted = true;
-                    ESP_LOGI(TAG, "journey %u: carried for %lld s",
-                             (unsigned)s_journeys,
-                             (long long)((now - moving_since_us) / 1000000));
+                    ESP_LOGI(TAG, "journey %u: somewhere else, %d%% of the "
+                                  "old access points still in earshot",
+                             (unsigned)s_journeys, overlap);
+                } else {
+                    ESP_LOGI(TAG, "carried, but the same place: %d%% of the "
+                                  "access points are the ones from before",
+                             overlap);
                 }
             }
         }
@@ -158,6 +210,7 @@ void observore_motion_init(void)
 bool observore_motion_moving(void)     { return s_moving; }
 uint32_t observore_motion_journeys(void) { return s_journeys; }
 bool observore_motion_available(void)  { return s_available; }
+int observore_motion_last_overlap_pct(void) { return s_last_overlap; }
 
 #else
 
@@ -165,5 +218,6 @@ void observore_motion_init(void) {}
 bool observore_motion_moving(void) { return false; }
 uint32_t observore_motion_journeys(void) { return 0; }
 bool observore_motion_available(void) { return false; }
+int observore_motion_last_overlap_pct(void) { return -1; }
 
 #endif

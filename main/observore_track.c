@@ -345,6 +345,19 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
         slot->ev.cls      = OBSERVORE_CLASS_TAILING;
         slot->ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
         slot->ev.points   = observore_class_points(OBSERVORE_CLASS_TAILING);
+        /* Say it again, as the thing it has become.
+         *
+         * Findings are announced once, when first identified, and this one was
+         * already announced -- as a follower, which is what it was then. So
+         * the promotion produced no log line, no history entry and no
+         * notification: the single most important event this device can
+         * report was visible only to somebody looking at the screen at the
+         * time. On a headless board it reached nobody at all.
+         *
+         * The dedup above suppresses repeat followers and not this, because a
+         * follower returning is the same inference twice while this is a new
+         * claim about the same device. */
+        slot->reported = false;
         unsigned crossed = (unsigned)(s_journeys - slot->first_journey);
         if (crossed == 1) {
             snprintf(slot->ev.label, sizeof(slot->ev.label),
@@ -466,11 +479,39 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
  * `max` -- the previous shape collected all 192 slots and then insertion-sorted
  * the lot so a caller could display forty, which meant shuffling megabytes of
  * 120-byte structs on a request the console makes every two seconds. */
-typedef enum { BY_NOTHING, BY_LAST_SEEN, BY_HITS } sort_key_t;
+typedef enum { BY_NOTHING, BY_LAST_SEEN, BY_HITS, BY_WEIGHT } sort_key_t;
+
+/* What a device is worth for the purpose of ordering a list.
+ *
+ * Its class points, except for a follower -- which carries four in the table
+ * and can never contribute more than the class cap to a score. Sorting by the
+ * raw four put followers above trackers and above a Flipper, so a trip that
+ * found nine devices showed a screenful of unidentified phones with the
+ * identified equipment beneath them. Exactly the failure the weight ordering
+ * was added to prevent, one layer further in. */
+static uint16_t list_weight(const observore_event_t *e)
+{
+    if (e->cls == OBSERVORE_CLASS_FOLLOWER &&
+        e->points > OBSERVORE_FOLLOWER_SCORE_CAP) {
+        return OBSERVORE_FOLLOWER_SCORE_CAP;
+    }
+    return e->points;
+}
 
 static bool precedes(const observore_event_t *a, const observore_event_t *b,
                      sort_key_t key)
 {
+    /* Weight first, recency as the tiebreak. The screen shows twelve rows of
+     * a table that holds far more, so what falls off the bottom matters: with
+     * recency alone, a crowd hides a finding. Ten promotions in one evening
+     * pushed everything else off a 466-pixel screen, and a body camera would
+     * have gone with them. */
+    if (key == BY_WEIGHT) {
+        uint16_t wa = list_weight(a), wb = list_weight(b);
+        if (wa != wb) {
+            return wa > wb;
+        }
+    }
     return (key == BY_HITS) ? a->hits > b->hits
                             : a->last_seen_us > b->last_seen_us;
 }
@@ -523,7 +564,7 @@ size_t observore_track_nearby(observore_event_t *out, size_t max)
 
 size_t observore_track_snapshot(observore_event_t *out, size_t max)
 {
-    return collect(out, max, 1, BY_LAST_SEEN);   /* newest first */
+    return collect(out, max, 1, BY_WEIGHT);   /* heaviest first, then newest */
 }
 
 size_t observore_track_forget_muted(void)

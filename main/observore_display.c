@@ -44,11 +44,16 @@
 #include "observore_detect.h"
 #include "observore_font.h"
 #include <limits.h>
+#include <time.h>
 
 #include "esp_adc/adc_oneshot.h"
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 
+#include "observore_battery.h"
+#include "observore_clock.h"
+#include "observore_watch.h"
+#include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
@@ -110,6 +115,9 @@ static const char *TAG = "observore.display";
 #define C_BLACK  0x0000
 #define C_WHITE  0xFFFF
 #define C_GREY   0x8410
+/* Brighter than C_GREY, for a dial rim that has to read as an edge rather
+ * than as a smudge: 0x8410 at this radius looked like a fault. */
+#define C_SILVER 0xC618
 #define C_GREEN  0x07E0
 #define C_AMBER  0xFD20
 #define C_RED    0xF800
@@ -137,6 +145,26 @@ static const char *TAG = "observore.display";
 
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_panel_io_handle_t s_io;
+#if CONFIG_OBSERVORE_WATCHFACE
+/* Posted when the panel has finished with a buffer.
+ *
+ * esp_lcd_panel_draw_bitmap queues the transfer and returns; the DMA reads
+ * the buffer afterwards. Copying the next strip into the same buffer without
+ * waiting overwrites data still in flight, which is why parts of the watch
+ * face never arrived and the previous page showed through them in cyan. */
+static SemaphoreHandle_t s_blit_done;
+
+static bool blit_done(esp_lcd_panel_io_handle_t io,
+                      esp_lcd_panel_io_event_data_t *ev, void *ctx)
+{
+    (void)io; (void)ev; (void)ctx;
+    BaseType_t woken = pdFALSE;
+    if (s_blit_done) {
+        xSemaphoreGiveFromISR(s_blit_done, &woken);
+    }
+    return woken == pdTRUE;
+}
+#endif
 /* What is on the glass, so a redraw sends only the lines that changed. */
 static char     s_shown[ROWS][COLS + 1];
 static uint16_t s_shown_bg[ROWS];
@@ -403,7 +431,12 @@ static bool               s_have_snap;
 static bool               s_dirty;
 
 /* Which page, and which button is showing as pressed. */
-typedef enum { PAGE_WATCH = 0, PAGE_SYSTEM,
+typedef enum {
+#if CONFIG_OBSERVORE_WATCHFACE
+               /* First, so a glance shows a watch rather than a list. */
+               PAGE_CLOCK = 0,
+#endif
+               PAGE_WATCH,  PAGE_SYSTEM,
 #if CONFIG_OBSERVORE_TOUCH
                PAGE_WIFI,
 #endif
@@ -421,6 +454,19 @@ static bool    s_baseline_request;
 #define ARM_TIMEOUT_US (5 * 1000000)
 static int     s_armed_row = -1;      /* watch page: the finding being ignored */
 static int64_t s_armed_until_us;
+/* The baseline button, armed the same way.
+ *
+ * It was one tap, acting immediately, on the most destructive thing this
+ * device can do: a baseline silences everything in range at once, and a
+ * mistaken one can hide exactly what the device exists to find. Dismissing a
+ * single finding already needed two taps, and the console already asks for
+ * confirmation -- the glass was the one path with no guard, on the action
+ * that deserved it most.
+ *
+ * Hit twice by accident in one day on a board with no case yet, the second
+ * time as its owner left an office, which silenced the population there and
+ * quietly invalidated the journey it was carried on. */
+static int64_t s_baseline_armed_until_us;
 static bool    s_install_armed;
 static int64_t s_install_armed_until_us;
 #endif
@@ -601,6 +647,9 @@ static int ldr_level(void)
 #endif
 
 static void ui_task(void *arg);
+#if CONFIG_OBSERVORE_TOUCH
+static void draw_buttons(void);
+#endif
 
 static void bl_apply(void)
 {
@@ -620,10 +669,19 @@ static void bl_apply(void)
     }
 #if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
     /* No backlight to dim: an AMOLED lights each pixel itself, and the panel
-     * scales them for us. The same four steps, sent as a command. */
+     * scales them for us. The same four steps, sent as a command.
+     *
+     * Over four data lines the command does not travel as itself. There is no
+     * D/C pin, so the opcode goes in the address phase: a write is 0x02, then
+     * the register, then a pad byte, packed into the 32-bit command word the
+     * IO layer sends. Sending a bare 0x51 is silently ignored by the panel,
+     * which is exactly what it did -- the initialisation sequence worked
+     * because the driver wraps its own commands this way, and mine did not,
+     * so the brightness button cycled four settings and changed nothing. */
     if (s_io) {
         uint8_t duty = BL_LEVELS[level];
-        esp_lcd_panel_io_tx_param(s_io, PANEL_BRIGHTNESS_CMD, &duty, 1);
+        int cmd = (int)((0x02u << 24) | ((uint32_t)PANEL_BRIGHTNESS_CMD << 8));
+        esp_lcd_panel_io_tx_param(s_io, cmd, &duty, 1);
     }
 #else
     ledc_set_duty(BL_MODE, BL_CHANNEL, BL_LEVELS[level]);
@@ -755,7 +813,12 @@ void observore_display_init(void)
         .data2_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D2,
         .data3_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D3,
         .flags = SPICOMMON_BUSFLAG_QUAD,
-        .max_transfer_sz = CLEAR_STRIP_BYTES,
+        /* Room for several strips rather than exactly one. Sized to the strip
+         * with no headroom, a transfer that needs even a byte of framing has
+         * nowhere to put it, and the rows it could not send stay as they were
+         * -- which reads as horizontal banding across a redrawn frame rather
+         * than as an error anybody logs. */
+        .max_transfer_sz = CLEAR_STRIP_BYTES * 4,
     };
 #else
     spi_bus_config_t bus = {
@@ -784,6 +847,9 @@ void observore_display_init(void)
         .lcd_cmd_bits = 32,
         .lcd_param_bits = 8,
         .flags = { .quad_mode = true },
+#if CONFIG_OBSERVORE_WATCHFACE
+        .on_color_trans_done = blit_done,
+#endif
     };
 #else
     esp_lcd_panel_io_spi_config_t io_cfg = {
@@ -844,6 +910,9 @@ void observore_display_init(void)
     clear_panel();
 
 
+#if CONFIG_OBSERVORE_WATCHFACE
+    s_blit_done = xSemaphoreCreateBinary();
+#endif
     memset(s_shown, 0, sizeof(s_shown));
     s_ready = true;
     for (int r = 0; r < ROWS; r++) {
@@ -989,6 +1058,158 @@ static void draw_watch(const observore_status_t *st,
 /* The system page: what the device is, rather than what it sees. Everything
  * here is already on the console; the point is that it is legible without
  * one, which is the whole argument for the screen. */
+#if CONFIG_OBSERVORE_WATCHFACE
+/* The dial.
+ *
+ * Drawn into a buffer and blitted once a second, which costs about four
+ * hundred kilobytes a second over the bus and is why this exists only on the
+ * board with the PSRAM to hold it. A pocket watch with no seconds hand would
+ * be cheaper and would also look like a screenshot.
+ *
+ * The threat level is the colour of the hour markers and nothing else. That
+ * was a deliberate choice over a banner: the page's whole purpose is that a
+ * stranger glancing at it sees somebody checking the time, and a red warning
+ * across the face gives away precisely what the disguise was for. Somebody
+ * who knows the device reads amber markers instantly; nobody else reads
+ * anything. */
+static uint16_t *s_fb;
+/* When the face was last drawn, and until when it should keep a seconds hand.
+ *
+ * A dial redrawn every second pushes four hundred kilobytes a second at the
+ * panel in twenty-nine separate transfers, which tears visibly and costs
+ * power all day for a hand nobody is watching. So the face is still by
+ * default -- minute and hour only, redrawn when the minute changes, the way a
+ * pocket watch with no subsidiary seconds behaves -- and a tap wakes a
+ * seconds hand for fifteen seconds, for when somebody actually is looking. */
+static int     s_face_minute = -1;
+static int64_t s_face_awake_until_us;
+
+void observore_display_wake_face(void)
+{
+    s_face_awake_until_us = esp_timer_get_time() + 15 * 1000000;
+    s_face_minute = -1;
+}
+
+static void draw_clockface(const observore_status_t *st)
+{
+    if (!s_fb) {
+        s_fb = heap_caps_malloc((size_t)DISP_W * DISP_H * 2, MALLOC_CAP_SPIRAM);
+        if (!s_fb) {
+            ESP_LOGW(TAG, "no room for a watch face");
+            return;
+        }
+    }
+    time_t now = time(NULL);
+    struct tm lt;
+    localtime_r(&now, &lt);
+
+    /* The verdict's colour has to reach the wearer without waiting for the
+     * minute to turn, so a change of level redraws as well. */
+    static int s_face_level = -1;
+    bool awake = esp_timer_get_time() < s_face_awake_until_us;
+    if (!awake && lt.tm_min == s_face_minute && (int)st->level == s_face_level) {
+        return;                       /* nothing has moved that anybody can see */
+    }
+    s_face_minute = lt.tm_min;
+    s_face_level  = (int)st->level;
+
+    observore_canvas_t c = {.px = s_fb, .w = DISP_W, .h = DISP_H};
+
+    const int cx = DISP_W / 2, cy = DISP_H / 2;
+    const int r  = (DISP_W < DISP_H ? DISP_W : DISP_H) / 2 - 4;
+
+    /* Black is genuinely off on this panel, so an unlit dial costs nothing
+     * to show and little to leave on. */
+    observore_watch_fill(&c, px(C_BLACK));
+    observore_watch_ring(&c, cx, cy, r, 5, px(C_SILVER));
+
+    uint16_t mark = st->level == OBSERVORE_LEVEL_ALERT   ? px(C_RED)
+                  : st->level == OBSERVORE_LEVEL_CAUTION ? px(C_AMBER)
+                                                         : px(C_GREY);
+
+    /* Hour markers: longer at the quarters, and the colour carries the
+     * verdict. Minute ticks are deliberately absent -- at this radius they
+     * turn into a grey band. */
+    for (int h = 0; h < 12; h++) {
+        int x0, y0, x1, y1;
+        int len = (h % 3 == 0) ? 26 : 14;
+        observore_watch_hand_end(cx, cy, r - 8, h, 12, &x0, &y0);
+        observore_watch_hand_end(cx, cy, r - 8 - len, h, 12, &x1, &y1);
+        observore_watch_line(&c, x0, y0, x1, y1, (h % 3 == 0) ? 7 : 3, mark);
+    }
+
+    /* The date, where a pocket watch keeps it. */
+    char date[16];
+    strftime(date, sizeof(date), "%a %d %b", &lt);
+    observore_watch_text(&c, cx, cy + r / 2 - 8, date, 2, px(C_GREY));
+
+    /* Hands. The hour hand moves with the minutes, as a real one does, which
+     * is 720 positions round the dial rather than twelve. */
+    int hx, hy, mx, my, sx, sy;
+    observore_watch_hand_end(cx, cy, r - 130, lt.tm_hour % 12 * 60 + lt.tm_min,
+                             720, &hx, &hy);
+    observore_watch_hand_end(cx, cy, r - 70, lt.tm_min * 60 + lt.tm_sec,
+                             3600, &mx, &my);
+    observore_watch_hand_end(cx, cy, r - 40, lt.tm_sec, 60, &sx, &sy);
+
+    observore_watch_hand(&c, cx, cy, hx, hy, 26, 13, 5, px(C_WHITE));
+    observore_watch_hand(&c, cx, cy, mx, my, 30, 9,  3, px(C_WHITE));
+    if (awake) {
+        observore_watch_hand(&c, cx, cy, sx, sy, 34, 3, 3, mark);
+    }
+    observore_watch_disc(&c, cx, cy, 10, px(C_WHITE));
+    observore_watch_disc(&c, cx, cy, 5,  px(C_BLACK));
+
+    /* No time yet is said rather than drawn as midnight, which is what an
+     * unset clock would otherwise claim with total confidence. */
+    if (!observore_clock_valid()) {
+        observore_watch_text(&c, cx, cy - r / 2, "not set", 2, px(C_AMBER));
+    }
+
+    /* Out in strips through a small buffer in internal memory.
+     *
+     * The frame itself lives in PSRAM, which the SPI driver cannot DMA from:
+     * asked to send four hundred kilobytes it tries to allocate a private
+     * bounce buffer of the whole transfer and fails, once per frame, silently
+     * apart from two error lines. So the copy is explicit and bounded, and
+     * the strip is the same size the panel clear already uses. */
+    static uint16_t *strip;
+    if (!strip) {
+        strip = heap_caps_malloc(CLEAR_STRIP_BYTES, MALLOC_CAP_DMA);
+        if (!strip) {
+            ESP_LOGW(TAG, "no DMA buffer for the watch face");
+            return;
+        }
+    }
+    const int rows = CLEAR_STRIP_BYTES / (DISP_W * 2);
+    /* Anything posted by the text path before this is stale. */
+    while (xSemaphoreTake(s_blit_done, 0) == pdTRUE) { }
+    for (int y = 0; y < DISP_H; y += rows) {
+        int h = (y + rows <= DISP_H) ? rows : DISP_H - y;
+        memcpy(strip, &s_fb[(size_t)y * DISP_W], (size_t)h * DISP_W * 2);
+        esp_lcd_panel_draw_bitmap(s_panel, X_OFF, y, X_OFF + DISP_W, y + h,
+                                  strip);
+        /* The buffer is reused on the next pass, so the panel has to be
+         * finished with it first. */
+        xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(100));
+    }
+
+    /* Awake, the face shows its buttons; idle, it does not.
+     *
+     * They work either way -- the taps were always live -- but an invisible
+     * control is not a control, and "how do I get back to the detector" is
+     * not a question a person should have to ask. Hiding them while idle is
+     * the point of the page: a bar reading page / baseline / light across a
+     * watch face gives the game away as surely as a warning banner would. */
+    if (awake) {
+        draw_buttons();
+    }
+    /* The text grid knows nothing about what just happened to the panel, so
+     * every row is marked stale and will be redrawn when a page returns. */
+    memset(s_shown, 0, sizeof(s_shown));
+}
+#endif
+
 static void draw_system(const observore_status_t *st, int64_t now_us)
 {
     char text[COLS + 1], up[16];
@@ -1026,6 +1247,51 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
             snprintf(text, sizeof(text), " light    %s",
                      set >= 0 && set < 4 ? names[set] : "?");
         }
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+#endif
+
+#if CONFIG_OBSERVORE_BATTERY
+    if (observore_battery_available()) {
+        int mv = observore_battery_mv();
+        int pct = observore_battery_pct_from_mv(mv);
+        if (mv > 0) {
+            /* Voltage as well as percent, because the percent comes off a
+             * coarse curve and the volts are what was measured. On USB this
+             * reads the charger rather than a discharging cell, which is why
+             * it does not claim to know which. */
+            snprintf(text, sizeof(text), " battery  %d.%02d V, about %d%%",
+                     mv / 1000, (mv % 1000) / 10, pct);
+        } else {
+            snprintf(text, sizeof(text), " battery  no reading");
+        }
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+#endif
+
+#if CONFIG_OBSERVORE_MOTION
+    /* Only where there is a sensor to report. Three facts in one row: whether
+     * it is being carried now, how many journeys have counted, and what the
+     * last one measured -- which is the number that says whether a trip was
+     * judged to have gone anywhere. */
+    if (observore_motion_available()) {
+        int ov = observore_motion_last_overlap_pct();
+        uint32_t trips = observore_motion_journeys();
+        char trip_s[8], tail[20];
+        snprintf(trip_s, sizeof(trip_s), "%lu", (unsigned long)trips);
+        if (ov < 0) {
+            snprintf(tail, sizeof(tail), "no trip");
+        } else {
+            /* How much of the old place came back with it -- the number that
+             * says whether a trip counted, and the one worth reading off the
+             * glass after one. */
+            snprintf(tail, sizeof(tail), "%d%% same", ov > 100 ? 100 : ov);
+        }
+        /* Every field bounded, because the row has to fit a 41-column grid
+         * and the compiler is right to insist rather than trust me. */
+        snprintf(text, sizeof(text), " motion  %.7s %.4s trip%.1s %.9s",
+                 observore_motion_moving() ? "carried" : "still",
+                 trip_s, trips == 1 ? "" : "s", tail);
         line(r++, text, C_WHITE, C_BLACK);
     }
 #endif
@@ -1320,10 +1586,33 @@ static void draw_current(void)
     if (!s_have_snap) {
         return;
     }
+#if CONFIG_OBSERVORE_WATCHFACE
+    /* Leaving the dial means clearing the whole panel, not just the rows.
+     *
+     * The text grid is the square inside the circle, so redrawing every row
+     * of it cannot touch the four crescents outside -- and that is exactly
+     * where the hour markers and the rim are drawn. Without this the
+     * findings page came back with a ring of amber ticks still around it,
+     * which is both untidy and, on a page meant to be read at a glance,
+     * actively misleading. */
+    static int s_drew_face;
+    if (s_drew_face && s_page != PAGE_CLOCK) {
+        s_drew_face = 0;
+        clear_panel();
+        memset(s_shown, 0, sizeof(s_shown));
+    }
+    s_drew_face = (s_page == PAGE_CLOCK);
+#endif
 #if CONFIG_OBSERVORE_TOUCH
     if (s_page == PAGE_WIFI) {
         draw_wifi();
     } else
+#endif
+#if CONFIG_OBSERVORE_WATCHFACE
+    if (s_page == PAGE_CLOCK) {
+        draw_clockface(&s_snap_st);
+        return;
+    }
 #endif
     if (s_page == PAGE_SYSTEM) {
         draw_system(&s_snap_st, s_snap_now_us);
@@ -1463,6 +1752,15 @@ static void system_tap(int x, int y)
 /* One tap, routed by page. */
 static void handle_tap(int x, int y)
 {
+#if CONFIG_OBSERVORE_WATCHFACE
+    /* On the face, a tap that is not a button wakes the seconds hand: the
+     * gesture somebody makes when they actually want to read a watch. */
+    if (s_page == PAGE_CLOCK && button_at(x, y) < 0) {
+        observore_display_wake_face();
+        s_dirty = true;
+        return;
+    }
+#endif
     int b = button_at(x, y);
     if (b < 0) {
         /* Above the bar, each page decides for itself. */
@@ -1498,6 +1796,13 @@ static void handle_tap(int x, int y)
         case 1:
             /* The main loop owns the memory a baseline needs, so this only
              * asks. It says so on the screen, and says again when it is done. */
+            if (esp_timer_get_time() >= s_baseline_armed_until_us) {
+                s_baseline_armed_until_us = esp_timer_get_time() + ARM_TIMEOUT_US;
+                snprintf(s_notice, sizeof(s_notice), " tap again to baseline");
+                s_notice_until_us = s_baseline_armed_until_us;
+                break;
+            }
+            s_baseline_armed_until_us = 0;
             s_baseline_request = true;
             snprintf(s_notice, sizeof(s_notice), " baseline requested");
             s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
