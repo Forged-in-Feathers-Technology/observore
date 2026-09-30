@@ -21,6 +21,7 @@ idf_component_register(
         "observore_surroundings.c"
         "observore_battery.c"
         "observore_rtc.c"
+        "observore_watch.c"
         "observore_ble.c"
         "observore_wifi.c"
         "observore_web.c"

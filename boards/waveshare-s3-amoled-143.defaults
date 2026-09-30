@@ -74,6 +74,16 @@ CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x38
 # The accelerometer, sharing those wires. The only sensor here that measures
 # the device rather than the room, and the reason this board is interesting:
 # something that stays with you across a journey is following you.
+# A watch face, first in the page cycle: a device glanced at in a pocket is
+# far less conspicuous showing the time than showing a list of everybody's
+# Bluetooth addresses. The threat level still reaches the wearer, as the
+# colour of the hour markers.
+CONFIG_OBSERVORE_WATCHFACE=y
+
+# The zone the watch face reads in. Everything stored stays UTC -- a
+# timestamp that depends on where the reader was is one nobody can compare.
+CONFIG_OBSERVORE_TZ="EST5EDT,M3.2.0,M11.1.0"
+
 # The clock, on the same two wires. Without it the time comes only from the
 # network, so a board restarted away from home has none -- and its findings
 # are undated exactly when they matter most.

@@ -367,6 +367,24 @@ config OBSERVORE_I2C_SCL
     depends on OBSERVORE_I2C
     default 48
 
+config OBSERVORE_WATCHFACE
+    bool "A watch face page"
+    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    default n
+    help
+        An analogue dial with hands, on the round panel.  It is a disguise as
+        much as a clock: a device carried in a pocket and glanced at is far
+        less conspicuous showing the time than showing a list of everybody's
+        Bluetooth addresses.
+
+        The threat level still reaches the wearer, as the colour of the hour
+        markers -- legible to somebody who knows what they mean and nothing at
+        all to somebody glancing over a shoulder.
+
+        Needs a frame buffer, which is why it is limited to the board with
+        eight megabytes of PSRAM: a dial has diagonals in it, and the text
+        grid the other boards draw with cannot.
+
 config OBSERVORE_RTC
     bool "Real-time clock (PCF85063)"
     default n

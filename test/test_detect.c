@@ -13,6 +13,7 @@
 #include "observore_mute.h"
 #include "observore_battery.h"
 #include "observore_rtc.h"
+#include "observore_watch.h"
 #include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
@@ -458,6 +459,49 @@ static void test_follower(void)
 
 
 
+
+
+static void test_the_watch_hands_point_the_right_way(void)
+{
+    banner("a dial hand at twelve points up, not sideways");
+
+    int x = 0, y = 0;
+    /* Twelve o'clock is straight up, which on a screen is negative y. An
+     * off-by-a-quarter-turn here is the classic way to ship a clock that is
+     * ninety degrees out and looks plausible in a photograph. */
+    observore_watch_hand_end(100, 100, 50, 0, 12, &x, &y);
+    CHECK(x == 100 && y == 50, "twelve is straight up, got %d,%d", x, y);
+    observore_watch_hand_end(100, 100, 50, 3, 12, &x, &y);
+    CHECK(x == 150 && y == 100, "three is to the right, got %d,%d", x, y);
+    observore_watch_hand_end(100, 100, 50, 6, 12, &x, &y);
+    CHECK(x == 100 && y == 150, "six is down, got %d,%d", x, y);
+    observore_watch_hand_end(100, 100, 50, 9, 12, &x, &y);
+    CHECK(x == 50 && y == 100, "nine is to the left, got %d,%d", x, y);
+
+    /* Seconds use the same arithmetic with sixty to the turn. */
+    observore_watch_hand_end(0, 0, 100, 15, 60, &x, &y);
+    CHECK(x == 100 && y == 0, "fifteen seconds is to the right, got %d,%d", x, y);
+    observore_watch_hand_end(0, 0, 100, 30, 60, &x, &y);
+    CHECK(x == 0 && y == 100, "thirty seconds is down, got %d,%d", x, y);
+
+    /* Halfway between hours, which is where a real hour hand sits at half
+     * past and where a naive integer division puts it on the hour instead. */
+    observore_watch_hand_end(0, 0, 1000, 90, 720, &x, &y);
+    CHECK(x > 690 && x < 720 && y > -720 && y < -690,
+          "half past one is between one and two, got %d,%d", x, y);
+
+    /* Nothing may be written outside the canvas, whatever it is asked to
+     * draw: a hand longer than the dial is a mistake that should clip rather
+     * than corrupt whatever follows the buffer. */
+    static uint16_t px[32 * 32];
+    observore_canvas_t c = {.px = px, .w = 32, .h = 32};
+    observore_watch_fill(&c, 0x0000);
+    observore_watch_line(&c, 16, 16, 500, -400, 5, 0xFFFF);
+    observore_watch_disc(&c, 2, 2, 40, 0xFFFF);
+    observore_watch_ring(&c, 16, 16, 60, 4, 0xFFFF);
+    observore_watch_text(&c, 16, 16, "XII", 3, 0xFFFF);
+    CHECK(1, "drawing past the edges does not corrupt memory");
+}
 
 static void test_bcd(void)
 {
@@ -2736,6 +2780,7 @@ int main(void)
     test_a_journey_must_change_the_room();
     test_the_battery_curve();
     test_bcd();
+    test_the_watch_hands_point_the_right_way();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();
