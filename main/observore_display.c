@@ -1279,8 +1279,13 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         uint32_t trips = observore_motion_journeys();
         char trip_s[8], tail[20];
         snprintf(trip_s, sizeof(trip_s), "%lu", (unsigned long)trips);
+        int fade = observore_motion_last_faded_db();
         if (ov < 0) {
             snprintf(tail, sizeof(tail), "no trip");
+        } else if (fade != INT_MIN) {
+            /* Both halves of the question: how many of the old access points
+             * are still audible, and how much fainter they have become. */
+            snprintf(tail, sizeof(tail), "%d%% %ddB", ov > 100 ? 100 : ov, fade);
         } else {
             /* How much of the old place came back with it -- the number that
              * says whether a trip counted, and the one worth reading off the

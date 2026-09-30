@@ -14,6 +14,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_watch.h"
+#include <limits.h>
 #include "observore_surroundings.h"
 #include "observore_track.h"
 #include "observore_notify_fmt.h"
@@ -592,7 +593,7 @@ static void test_a_journey_must_change_the_room(void)
      * look like it had come along. */
     observore_surroundings_reset();
     for (uint32_t ap = 1; ap <= 9; ap++) {
-        observore_surroundings_note(ap, SECS(0));
+        observore_surroundings_note(ap, -50, SECS(0));
     }
     observore_surroundings_mark(SECS(1), SECS(300));
     CHECK(observore_surroundings_marked() == 9, "nine access points marked, got %u",
@@ -602,7 +603,7 @@ static void test_a_journey_must_change_the_room(void)
 
     /* Walked to the kitchen: the same building answers. */
     for (uint32_t ap = 1; ap <= 8; ap++) {
-        observore_surroundings_note(ap, SECS(60));
+        observore_surroundings_note(ap, -50, SECS(60));
     }
     CHECK(observore_surroundings_overlap_pct() >= 80,
           "the same place shares nearly all of them, got %d%%",
@@ -611,21 +612,79 @@ static void test_a_journey_must_change_the_room(void)
     /* Went somewhere else: almost nothing from before is audible. */
     observore_surroundings_reset();
     for (uint32_t ap = 1; ap <= 9; ap++) {
-        observore_surroundings_note(ap, SECS(0));
+        observore_surroundings_note(ap, -50, SECS(0));
     }
     observore_surroundings_mark(SECS(1), SECS(300));
-    observore_surroundings_note(1, SECS(600));          /* one straggler */
+    observore_surroundings_note(1, -50, SECS(600));          /* one straggler */
     for (uint32_t ap = 100; ap <= 112; ap++) {
-        observore_surroundings_note(ap, SECS(600));     /* all new */
+        observore_surroundings_note(ap, -50, SECS(600));     /* all new */
     }
     int elsewhere = observore_surroundings_overlap_pct();
     CHECK(elsewhere > 0 && elsewhere <= 33,
           "somewhere else shares almost none, got %d%%", elsewhere);
 
+    /* The countryside case, which membership alone gets wrong. Out where the
+     * only access points are your own house, a barn down the driveway keeps
+     * most of them -- 80% here, measured on real hardware -- and the journey
+     * did not count. The same access points, all of them much fainter, is
+     * distance. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 5; ap++) {
+        observore_surroundings_note(ap, -45, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    for (uint32_t ap = 1; ap <= 4; ap++) {
+        observore_surroundings_note(ap, -74, SECS(600));   /* 29 dB fainter */
+    }
+    CHECK(observore_surroundings_overlap_pct() >= 75,
+          "the barn still hears the house, got %d%%",
+          observore_surroundings_overlap_pct());
+    CHECK(observore_surroundings_faded_db() == 29,
+          "but they are 29 dB fainter, got %d",
+          observore_surroundings_faded_db());
+
+    /* Shifting the thing on a desk must not read as a journey. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 5; ap++) {
+        observore_surroundings_note(ap, -50, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    const int jitter[5] = {-53, -47, -50, -52, -48};
+    for (uint32_t ap = 1; ap <= 5; ap++) {
+        observore_surroundings_note(ap, jitter[ap - 1], SECS(60));
+    }
+    CHECK(observore_surroundings_faded_db() <= 3,
+          "ordinary jitter is not distance, got %d dB",
+          observore_surroundings_faded_db());
+
+    /* One access point behind a tractor cannot carry the answer: the median
+     * ignores it where a mean would not. */
+    observore_surroundings_reset();
+    for (uint32_t ap = 1; ap <= 5; ap++) {
+        observore_surroundings_note(ap, -50, SECS(0));
+    }
+    observore_surroundings_mark(SECS(1), SECS(300));
+    observore_surroundings_note(1, -95, SECS(60));      /* one lost */
+    for (uint32_t ap = 2; ap <= 5; ap++) {
+        observore_surroundings_note(ap, -50, SECS(60));
+    }
+    CHECK(observore_surroundings_faded_db() == 0,
+          "four unchanged outvote one, got %d dB",
+          observore_surroundings_faded_db());
+
+    /* Too few heard at both ends is "cannot say", not "nothing changed". */
+    observore_surroundings_reset();
+    observore_surroundings_note(1, -50, SECS(0));
+    observore_surroundings_mark(SECS(1), SECS(300));
+    observore_surroundings_note(1, -80, SECS(60));
+    CHECK(observore_surroundings_faded_db() == INT_MIN,
+          "one access point cannot answer it, got %d",
+          observore_surroundings_faded_db());
+
     /* Stale entries must not make a new place look familiar: an access point
      * last heard an hour ago is not part of "here". */
     observore_surroundings_reset();
-    observore_surroundings_note(7, SECS(0));
+    observore_surroundings_note(7, -50, SECS(0));
     observore_surroundings_mark(SECS(4000), SECS(300));
     CHECK(observore_surroundings_marked() == 0,
           "an hour-old access point is not part of here, got %u",

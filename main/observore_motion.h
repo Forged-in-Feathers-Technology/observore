@@ -40,3 +40,8 @@ bool observore_motion_available(void);
  * were visible. The number is the difference between "the gate worked" and
  * "the gate was too strict", and there is no recovering it afterwards. */
 int observore_motion_last_overlap_pct(void);
+
+/* And how much fainter they had become, in decibels, or INT_MIN if too few
+ * were heard at both ends to say. The second half of the same question:
+ * membership answers it in a town, loudness answers it in a field. */
+int observore_motion_last_faded_db(void);

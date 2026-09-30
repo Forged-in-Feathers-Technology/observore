@@ -192,7 +192,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"reset_reason\":\"%s\",\"notifier\":%s"
         ",\"bright\":%d,\"bright_now\":%d,\"bright_steps\":%d"
         ",\"motion\":{\"sensor\":%s,\"carried\":%s,\"journeys\":%u"
-        ",\"last_overlap_pct\":%d}"
+        ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
@@ -229,6 +229,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_motion_moving() ? "true" : "false",
         (unsigned)observore_motion_journeys(),
         observore_motion_last_overlap_pct(),
+        observore_motion_last_faded_db(),
         observore_battery_available() ? "true" : "false",
         observore_battery_mv(),
         observore_battery_pct_from_mv(observore_battery_mv()));
