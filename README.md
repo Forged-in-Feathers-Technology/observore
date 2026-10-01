@@ -1473,6 +1473,22 @@ has a panel but no touch — otherwise there would be no way to dim it. The
 panel is hidden entirely where there is no screen rather than shown as a
 control that refuses.
 
+**Wi-Fi buffers belong in PSRAM where there is any.** The round board's
+internal heap floor sat at about **three kilobytes**, reached during patrol
+and landing on nearly the same number across runs hours apart — the signature
+of a large allocation that only just fits, rather than of a leak. Patrol is
+when the sniffer is switched on and off every cycle and the driver takes its
+thirty-two dynamic receive buffers, out of internal memory, on a board with
+eight megabytes of PSRAM holding nothing but a watch face.
+
+Moving them raised the floor to **eighteen kilobytes**, six times the
+headroom, with no measurable cost to sniffing: 99.7% of frames still
+captured. It also made the largest free internal block *smaller*, which
+broke a different thing — the fifteen-kilobyte DMA buffer the panel clear
+allocated per call no longer fit. That buffer is allocated once at startup
+and shared now, which is better anyway: a block taken and released
+repeatedly is a block that fragments the heap it lives in.
+
 **On the 3.5" board's battery connector.** It charges a cell and reports
 nothing about it. The three ADC-capable pins the display and touch leave free
 were probed on a board running from a battery: 35 and 39 read zero, and 34

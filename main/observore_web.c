@@ -194,6 +194,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"motion\":{\"sensor\":%s,\"carried\":%s,\"journeys\":%u"
         ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
+        ",\"taps\":%u"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -232,7 +233,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_motion_last_faded_db(),
         observore_battery_available() ? "true" : "false",
         observore_battery_mv(),
-        observore_battery_pct_from_mv(observore_battery_mv()));
+        observore_battery_pct_from_mv(observore_battery_mv()),
+        (unsigned)observore_display_taps());
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
