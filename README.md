@@ -1341,7 +1341,16 @@ each one ended.
 The address is there because on a board like this there is nowhere else to
 read it: the device prints it to serial at boot and nothing else shows it, so
 a console you cannot find is a console you do not have. The password is a
-different matter and is still never drawn. **baseline** asks twice — the first tap shows `tap again to baseline`, and it
+different matter and is still never drawn. **clear ignores** is on the system page, beside the update actions, and asks
+twice like the baseline that usually created them. It exists because undoing
+a baseline previously needed a console, and the board that most needed it —
+a screen in a pocket with no network configured — had none: getting out of an
+accidental baseline meant flashing a one-shot firmware twice. A device that
+can silence a room with one tap should be able to unsilence it from the same
+glass. The label carries the count, because "clear ignores" with nothing to
+clear should not look like the same words hiding fifty-one rules.
+
+**baseline** asks twice — the first tap shows `tap again to baseline`, and it
 forgets after five seconds. A baseline is the most destructive thing this
 device does, silencing everything in range at once, and it was the one path
 with no guard: dismissing a single finding already took two taps and the

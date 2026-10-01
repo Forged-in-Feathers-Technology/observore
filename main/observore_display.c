@@ -467,6 +467,14 @@ static int64_t s_armed_until_us;
  * time as its owner left an office, which silenced the population there and
  * quietly invalidated the journey it was carried on. */
 static int64_t s_baseline_armed_until_us;
+/* Clearing every ignore rule, armed the same way.
+ *
+ * Undoing a baseline needed a console, and the board that most needed it --
+ * a screen in a pocket with no network configured -- had none. Getting out of
+ * an accidental baseline took flashing a one-shot firmware twice. The device
+ * that can silence a room with one tap should be able to unsilence it from
+ * the same glass. */
+static int64_t s_clear_armed_until_us;
 static bool    s_install_armed;
 static int64_t s_install_armed_until_us;
 #endif
@@ -1352,19 +1360,41 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
     /* Two actions, half the width each. Install only offers itself when there
      * is something to install, and says so while it waits for the second tap:
      * it stops the detector for minutes and then reboots it. */
-    char left[COLS], right[COLS];
-    snprintf(left, sizeof(left), "  check for updates");
+    char left[COLS], mid[COLS], right[COLS];
+    /* Three actions across a row that is thirteen columns wide on the 2.8"
+     * board and twenty on the 3.5". Labels that fit rather than labels that
+     * truncate: "check update" with the s cut off looks like a typo, and a
+     * clipped confirmation looks like a fault. */
+    const int third = COLS / 3;
+    const bool roomy = third >= 18;
+    snprintf(left, sizeof(left), roomy ? " check for updates" : " check ver");
     if (!observore_update_available()) {
-        snprintf(right, sizeof(right), "%s", "");
+        snprintf(mid, sizeof(mid), "%s", "");
     } else if (s_install_armed && esp_timer_get_time() < s_install_armed_until_us) {
-        snprintf(right, sizeof(right), "  install? tap again");
-    } else {
-        snprintf(right, sizeof(right), "  install %.12s",
+        snprintf(mid, sizeof(mid), roomy ? " install? tap again" : " install? y");
+    } else if (roomy) {
+        snprintf(mid, sizeof(mid), " install %.9s",
                  observore_update_latest_version());
+    } else {
+        snprintf(mid, sizeof(mid), " install");
     }
-    const int half = COLS / 2;
-    snprintf(text, sizeof(text), "%-*.*s%-*.*s", half, half, left,
-             COLS - half, COLS - half, right);
+    /* Third action: the way out of a baseline, which until now existed only
+     * in a console. The count is on the label because "clear ignores" with
+     * nothing to clear should look different from the same words hiding
+     * fifty-one rules. */
+    size_t muted = observore_mute_count();
+    if (muted == 0) {
+        snprintf(right, sizeof(right), " no ignores");
+    } else if (esp_timer_get_time() < s_clear_armed_until_us) {
+        snprintf(right, sizeof(right), roomy ? " clear %u? tap again"
+                                             : " clear %u? y", (unsigned)muted);
+    } else {
+        snprintf(right, sizeof(right), roomy ? " clear %u ignores"
+                                             : " clear %u", (unsigned)muted);
+    }
+    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s",
+             third, third, left, third, third, mid,
+             COLS - 2 * third, COLS - 2 * third, right);
     for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
         line(r, "", C_BLACK, C_GREY);
     }
@@ -1730,14 +1760,44 @@ static void system_tap(int x, int y)
     if (row < ACTION_TOP || row > ACTION_ROW) {
         return;
     }
-    bool right = (x / OBSERVORE_FONT_W) >= COLS / 2;
-    if (!right) {
+    int col = x / OBSERVORE_FONT_W;
+    const int third = COLS / 3;
+    int which = col / third;
+    if (which > 2) {
+        which = 2;
+    }
+    if (which == 0) {
         observore_update_check_now();
         snprintf(s_notice, sizeof(s_notice), " asking for a version check");
         s_notice_until_us = esp_timer_get_time() + 6 * 1000000;
         s_install_armed = false;
+        s_clear_armed_until_us = 0;
         return;
     }
+    if (which == 2) {
+        /* Clearing every ignore rule. Asked twice, like the baseline that
+         * usually created them: undoing a mistake should not be a tap away
+         * from making a different one. */
+        if (observore_mute_count() == 0) {
+            return;
+        }
+        s_install_armed = false;
+        if (esp_timer_get_time() >= s_clear_armed_until_us) {
+            s_clear_armed_until_us = esp_timer_get_time() + ARM_TIMEOUT_US;
+            return;
+        }
+        s_clear_armed_until_us = 0;
+        size_t had = observore_mute_count();
+        if (observore_mute_clear() == ESP_OK) {
+            snprintf(s_notice, sizeof(s_notice), " cleared %u ignore rules",
+                     (unsigned)had);
+        } else {
+            snprintf(s_notice, sizeof(s_notice), " could not clear them");
+        }
+        s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
+        return;
+    }
+    s_clear_armed_until_us = 0;
     if (!observore_update_available()) {
         return;
     }
