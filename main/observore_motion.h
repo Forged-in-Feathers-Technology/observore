@@ -27,6 +27,11 @@ bool observore_motion_moving(void);
  * claim about crossing that boundary, not about the instant of moving. */
 uint32_t observore_motion_journeys(void);
 
+/* True from the moment the board is picked up until the journey it might
+ * have made has been judged. The tracker uses this window to ask which
+ * devices were still beside it while it was elsewhere. */
+bool observore_motion_travelling(void);
+
 /* False where there is no sensor, which is every board but one. */
 bool observore_motion_available(void);
 

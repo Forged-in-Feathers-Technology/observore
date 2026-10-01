@@ -336,8 +336,21 @@ what something is, and the score says what is here.
 
 ### The one claim persistence cannot make
 
-**`tailing`** is a follower that was beside you before a journey and is still
-beside you after it. That is the distinction the whole scoring argument kept
+**`tailing`** is a follower that was beside you **while you were somewhere
+else** — not one that was present before a journey and present after it,
+which was the first attempt and which describes an entire household. A round
+trip comes home, and everything indoors is in range at both ends: one walk to
+a garden promoted twelve devices that had been sitting in the house for nine
+hours.
+
+So the evidence is presence *in between*, at strength. The board remembers
+how loudly it heard everything when it set off; while it is away, each
+sighting records the best that device manages; on arrival, anything heard at
+close to its old strength came too. Something carried along holds its signal.
+Something left behind either goes silent or arrives twenty decibels down and
+gets loud again only when you walk back through the door — which is the same
+fade test the access points use, pointed at the suspects instead of the
+surroundings. That is the distinction the whole scoring argument kept
 circling: a follower *in a room* is the room, because the neighbour's phone
 through a wall outlasts anything you can measure. A follower in two places,
 with a walk in between, is not the room — it came too.

@@ -22,9 +22,17 @@ typedef struct {
     /* Whether this device has already been handed to the notifier, so a
      * digest names it once rather than every cycle it remains in range. */
     bool          reported;
-    /* Which journey the device was on when this one became a follower. If
-     * the count has moved on since, the thing came with us. */
+    /* Which journey the device was on when this one became a follower. */
     uint32_t      first_journey;
+    /* Evidence gathered while the board was away from home.
+     *
+     * `away_rssi` is the strongest this device was heard while travelling,
+     * against `home_rssi`, the strongest it had managed before setting off.
+     * Something carried along holds its signal; something left behind either
+     * goes silent or arrives twenty decibels down. */
+    bool          heard_away;
+    int8_t        home_rssi;
+    int8_t        away_rssi;
 } observore_slot_t;
 
 static observore_slot_t s_devices[OBSERVORE_MAX_DEVICES];
@@ -34,9 +42,70 @@ static uint32_t     s_total_sightings;
  * Zero for ever on the seven boards that cannot feel one. */
 static uint32_t     s_journeys;
 
+/* How much fainter a device may be while away and still be said to have
+ * come along. A pocket moves a few decibels; a house left behind drops
+ * twenty or more, and most of it stops being heard at all. The same number
+ * as the access points use, for the same reason and with the same meaning. */
+#define OBSERVORE_TAILING_FADE_DB 12
+
+static bool s_travelling;
+
+void observore_track_set_travelling(bool travelling)
+{
+    if (travelling == s_travelling) {
+        return;
+    }
+    OBSERVORE_LOCK();
+    s_travelling = travelling;
+    if (travelling) {
+        /* Setting off: remember how loudly everything is heard from here,
+         * and forget whatever the last trip gathered. */
+        for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
+            if (!s_devices[i].in_use) {
+                continue;
+            }
+            s_devices[i].home_rssi  = s_devices[i].ev.rssi;
+            s_devices[i].away_rssi  = -128;
+            s_devices[i].heard_away = false;
+        }
+    }
+    OBSERVORE_UNLOCK();
+}
+
 void observore_track_set_journeys(uint32_t journeys)
 {
+    if (journeys == s_journeys) {
+        return;
+    }
+    OBSERVORE_LOCK();
     s_journeys = journeys;
+
+    /* Arrived somewhere. Whatever was beside us the whole way came too.
+     *
+     * Judged here rather than on the next sighting, because this is the
+     * moment the evidence is complete: the away window has closed and
+     * nothing more can be added to it. */
+    for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
+        observore_slot_t *slot = &s_devices[i];
+        if (!slot->in_use || !slot->classified ||
+            slot->ev.cls != OBSERVORE_CLASS_FOLLOWER) {
+            continue;
+        }
+        if (!slot->heard_away) {
+            continue;            /* never heard while we were away */
+        }
+        if (slot->home_rssi - slot->away_rssi >= OBSERVORE_TAILING_FADE_DB) {
+            continue;            /* heard, but far fainter: left behind */
+        }
+        slot->ev.cls      = OBSERVORE_CLASS_TAILING;
+        slot->ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
+        slot->ev.points   = observore_class_points(OBSERVORE_CLASS_TAILING);
+        snprintf(slot->ev.label, sizeof(slot->ev.label), "came with you");
+        /* Announced again, as what it has become: it was reported as a
+         * follower, which is what it was then. */
+        slot->reported = false;
+    }
+    OBSERVORE_UNLOCK();
 }
 
 /* Devices announced recently, so that one which fades and returns is not
@@ -329,43 +398,11 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
                  (unsigned)slot->ev.rotations);
     }
 
-    /* Here before the journey, here after it.
-     *
-     * This is the one claim persistence alone could never support. A
-     * follower in a room is the room: the neighbour's phone through a wall
-     * outlasts anything, which is why the whole class is capped below the
-     * verdict. A follower that was beside you in two places, with a journey
-     * in between, is not the room -- it came too.
-     *
-     * Promotion is one-way. Something that has followed you once does not
-     * stop having done so because it is briefly quiet, and the table forgets
-     * it soon enough on its own. */
-    if (slot->classified && slot->ev.cls == OBSERVORE_CLASS_FOLLOWER &&
-        s_journeys > slot->first_journey) {
-        slot->ev.cls      = OBSERVORE_CLASS_TAILING;
-        slot->ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
-        slot->ev.points   = observore_class_points(OBSERVORE_CLASS_TAILING);
-        /* Say it again, as the thing it has become.
-         *
-         * Findings are announced once, when first identified, and this one was
-         * already announced -- as a follower, which is what it was then. So
-         * the promotion produced no log line, no history entry and no
-         * notification: the single most important event this device can
-         * report was visible only to somebody looking at the screen at the
-         * time. On a headless board it reached nobody at all.
-         *
-         * The dedup above suppresses repeat followers and not this, because a
-         * follower returning is the same inference twice while this is a new
-         * claim about the same device. */
-        slot->reported = false;
-        unsigned crossed = (unsigned)(s_journeys - slot->first_journey);
-        if (crossed == 1) {
-            snprintf(slot->ev.label, sizeof(slot->ev.label),
-                     "came with you");
-        } else {
-            snprintf(slot->ev.label, sizeof(slot->ev.label),
-                     "came with you, %u trips", crossed);
-        }
+    /* Evidence for the journey, gathered as it happens: the strongest this
+     * device manages while the board is away from where it set off. */
+    if (s_travelling && obs->rssi > slot->away_rssi) {
+        slot->away_rssi  = (int8_t)obs->rssi;
+        slot->heard_away = true;
     }
 
     bool reportable = slot->classified;

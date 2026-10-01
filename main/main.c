@@ -359,6 +359,7 @@ void app_main(void)
         observore_track_tick(now);
         /* What the accelerometer has counted, handed to the tracker as a
          * number so it never has to know a sensor exists. */
+        observore_track_set_travelling(observore_motion_travelling());
         observore_track_set_journeys(observore_motion_journeys());
 
         if (observore_display_take_baseline_request()) {
