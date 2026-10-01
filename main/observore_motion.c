@@ -96,6 +96,20 @@ static const char *TAG = "observore.motion";
  * anyone asks it to. Two patrol scans' worth. */
 #define ARRIVAL_SETTLE_US (40 * 1000000LL)
 
+/* And while still walking, asked again every so often.
+ *
+ * Requiring the board to be set down and left still for the best part of a
+ * minute at the far end was my invention, and it cost a whole trip: a walk
+ * to a garden and back, with a pause too short to qualify, was judged only
+ * once -- on arriving home, where the access points were twenty-five
+ * decibels louder than the mark taken in the garden, so nothing counted at
+ * all.
+ *
+ * The fade test does not need stillness. The board is somewhere else the
+ * moment the access points say so, and a scan from the new place is all the
+ * evidence there is going to be. */
+#define TRAVELLING_CHECK_US (20 * 1000000LL)
+
 static i2c_master_dev_handle_t s_dev;
 static volatile bool     s_moving;
 static volatile uint32_t s_journeys;
@@ -132,6 +146,7 @@ static void motion_task(void *arg)
     int  still_run = 0, moving_run = 0;
     int64_t moving_since_us = 0;
     int64_t arrival_due_us = 0;
+    int64_t next_check_us = 0;
     bool counted = false;
 
     for (;;) {
@@ -161,6 +176,7 @@ static void motion_task(void *arg)
                 /* What "here" was, before setting off. */
                 observore_surroundings_mark(now, SURROUNDINGS_AGE_US);
                 s_travelling = true;
+                next_check_us = now + TRAVELLING_CHECK_US;
                 ESP_LOGI(TAG, "picked up (%u access points in earshot)",
                          (unsigned)observore_surroundings_marked());
             } else if (s_moving && still_run >= STILL_SAMPLES) {
@@ -172,6 +188,28 @@ static void motion_task(void *arg)
                  * now. */
                 if (!counted && now - moving_since_us >= JOURNEY_MS * 1000LL) {
                     arrival_due_us = now + ARRIVAL_SETTLE_US;
+                }
+            }
+
+            /* Walked far enough to be elsewhere, without stopping to
+             * prove it. */
+            if (!counted && s_moving && next_check_us && now >= next_check_us &&
+                now - moving_since_us >= JOURNEY_MS * 1000LL) {
+                next_check_us = now + TRAVELLING_CHECK_US;
+                int ov = observore_surroundings_overlap_pct();
+                int fd = observore_surroundings_faded_db();
+                if ((ov >= 0 && ov <= ARRIVED_OVERLAP_PCT) ||
+                    (fd != INT_MIN && fd >= ARRIVED_FADE_DB)) {
+                    s_last_overlap = ov;
+                    s_last_faded   = fd;
+                    s_journeys++;
+                    counted = true;
+                    arrival_due_us = 0;
+                    s_travelling = false;
+                    ESP_LOGI(TAG, "journey %u: somewhere else while still "
+                                  "walking -- %d%% of the old access points, "
+                                  "%d dB fainter",
+                             (unsigned)s_journeys, ov, fd);
                 }
             }
 

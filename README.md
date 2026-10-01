@@ -374,7 +374,7 @@ no signature can produce: the classifier cannot see it, and the tracker
 promotes into it. Promotion is one-way, because something that has followed
 you once has not stopped having done so by going briefly quiet.
 
-A *journey* is sustained movement **that ended somewhere else**, and the
+A *journey* is sustained movement **that reached somewhere else**, and the
 second half of that sentence was missing at first. Fifteen seconds of
 carrying is the minimum, so a knocked desk does not count; but the
 accelerometer can only say the board moved, never that it went anywhere, and
@@ -401,6 +401,15 @@ distance: twelve decibels of median fade counts as having gone somewhere,
 which is roughly four times as far away and far more than a person shifts by
 turning round. A median rather than a mean, so one access point going quiet
 behind a tractor cannot carry the answer.
+
+The question is asked every twenty seconds while walking as well as on
+settling, because standing still was never the point. Requiring the board to
+be set down and left for the best part of a minute at the far end cost a
+whole trip: a walk to a garden and back, with a pause too short to qualify,
+was judged only on arriving home — where the access points were
+twenty-five decibels *louder* than the mark taken in the garden, so nothing
+counted at all. The board is somewhere else the moment the access points say
+so.
 
 Where there are no access points at all, nothing is counted and the log says
 so — "you went nowhere" and "you arrived" would both be inventions, and the
