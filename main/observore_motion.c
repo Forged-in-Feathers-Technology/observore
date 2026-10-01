@@ -102,6 +102,7 @@ static volatile uint32_t s_journeys;
 static volatile bool     s_available;
 static volatile int      s_last_overlap = -1;
 static volatile int      s_last_faded = INT_MIN;
+static volatile bool     s_travelling;
 
 static bool read_accel(int *mg)
 {
@@ -159,6 +160,7 @@ static void motion_task(void *arg)
                 counted = false;
                 /* What "here" was, before setting off. */
                 observore_surroundings_mark(now, SURROUNDINGS_AGE_US);
+                s_travelling = true;
                 ESP_LOGI(TAG, "picked up (%u access points in earshot)",
                          (unsigned)observore_surroundings_marked());
             } else if (s_moving && still_run >= STILL_SAMPLES) {
@@ -176,6 +178,9 @@ static void motion_task(void *arg)
             /* Did we arrive somewhere, or merely stop? */
             if (arrival_due_us && now >= arrival_due_us && !s_moving) {
                 arrival_due_us = 0;
+                /* The away window closes here, whichever way the verdict
+                 * goes: the evidence is complete either way. */
+                s_travelling = false;
                 int overlap = observore_surroundings_overlap_pct();
                 int faded   = observore_surroundings_faded_db();
                 s_last_overlap = overlap;
@@ -233,6 +238,7 @@ void observore_motion_init(void)
 }
 
 bool observore_motion_moving(void)     { return s_moving; }
+bool observore_motion_travelling(void) { return s_travelling; }
 uint32_t observore_motion_journeys(void) { return s_journeys; }
 bool observore_motion_available(void)  { return s_available; }
 int observore_motion_last_overlap_pct(void) { return s_last_overlap; }
@@ -242,6 +248,7 @@ int observore_motion_last_faded_db(void) { return s_last_faded; }
 
 void observore_motion_init(void) {}
 bool observore_motion_moving(void) { return false; }
+bool observore_motion_travelling(void) { return false; }
 uint32_t observore_motion_journeys(void) { return 0; }
 bool observore_motion_available(void) { return false; }
 int observore_motion_last_overlap_pct(void) { return -1; }

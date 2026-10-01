@@ -798,9 +798,15 @@ static void test_something_that_came_with_you(void)
           "reported once as a follower (drained %u)", (unsigned)d);
     CHECK(observore_track_drain_new(drained, 4) == 0, "and not twice");
 
-    /* The board is carried somewhere, and the same device is there too. */
+    /* The board is carried somewhere -- and this device is still beside it
+     * at full strength while it is away, which is what "came with you"
+     * means. Presence before and after is not enough: a round trip returns
+     * home, where everything that never moved is in range at both ends. */
+    observore_track_set_travelling(true);
+    observore_track_observe(&o, SECS(360));      /* heard, still -55 dBm */
     observore_track_set_journeys(1);
-    observore_track_observe(&o, SECS(400));
+    observore_track_set_travelling(false);
+
     n = observore_track_snapshot(snap, 8);
     CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_TAILING,
           "after a journey it is tailing, not merely persistent");
@@ -812,17 +818,64 @@ static void test_something_that_came_with_you(void)
           "one device that came with you is an alert on its own (score %u)",
           st.score);
 
-    /* And it is announced again, as what it has become. Findings are reported
-     * once when first identified, and this one had already been reported as a
-     * follower -- so the promotion reached the log, the history and the
-     * notifier not at all, and existed only on the screen of whoever happened
-     * to be watching. */
     d = observore_track_drain_new(drained, 4);
     CHECK(d == 1 && drained[0].cls == OBSERVORE_CLASS_TAILING,
           "the promotion is announced again, as tailing (drained %u)",
           (unsigned)d);
     CHECK(observore_track_drain_new(drained, 4) == 0,
           "and only once, not on every sighting afterwards");
+
+    /* The house, which is what the first version of this promoted. One walk
+     * to a garden turned twelve devices that had sat indoors for nine hours
+     * into things that had followed somebody, because a round trip puts
+     * everything at home in range at both ends. */
+    observore_track_init();
+    observore_track_set_travelling(false);
+    observore_track_set_journeys(0);
+    uint8_t h_adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x44, 0xFE};
+    const uint8_t h_mac[6] = {0x52, 0x11, 0x22, 0x33, 0x44, 0x55};
+    observore_observation_t home = {.mac = h_mac, .src = OBSERVORE_SRC_BLE,
+                                    .rssi = -50, .addr_random = true,
+                                    .adv = h_adv, .adv_len = sizeof(h_adv)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&home, SECS(t));
+    }
+    observore_track_set_travelling(true);
+    /* Audible from the end of the garden, and much fainter for it. */
+    observore_observation_t faint = home;
+    faint.rssi = -78;
+    observore_track_observe(&faint, SECS(360));
+    observore_track_set_journeys(1);
+    observore_track_set_travelling(false);
+    /* Back indoors, loud again -- which is exactly what it looked like
+     * before, and must still not count. */
+    observore_track_observe(&home, SECS(420));
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "a device left at home is still only a follower (got %s)",
+          n ? observore_class_desc(snap[0].cls)->name : "nothing");
+
+    /* And one not heard at all while away cannot claim to have come. */
+    observore_track_init();
+    observore_track_set_travelling(false);
+    observore_track_set_journeys(0);
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&home, SECS(t));
+    }
+    observore_track_set_travelling(true);
+    observore_track_set_journeys(1);     /* silence throughout the trip */
+    observore_track_set_travelling(false);
+    observore_track_observe(&home, SECS(420));
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "silence while away is not evidence of having come along (got %s)",
+          n ? observore_class_desc(snap[0].cls)->name : "nothing");
+
+    observore_track_init();
+    observore_track_set_journeys(0);
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&o, SECS(t));
+    }
 
     /* The failure that would make this useless: everything in the room is
      * not suddenly following you because the room moved. A device first
