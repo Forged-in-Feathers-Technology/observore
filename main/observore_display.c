@@ -1103,11 +1103,6 @@ static uint16_t *s_fb;
 static int     s_face_minute = -1;
 static int64_t s_face_awake_until_us;
 
-uint32_t observore_display_taps(void)
-{
-    return s_taps;
-}
-
 void observore_display_wake_face(void)
 {
     s_face_awake_until_us = esp_timer_get_time() + 15 * 1000000;
@@ -1964,6 +1959,11 @@ bool observore_display_take_baseline_request(void)
     return got;
 }
 
+uint32_t observore_display_taps(void)
+{
+    return s_taps;
+}
+
 void observore_display_notice(const char *text, int seconds)
 {
     if (!s_lock) {
@@ -1979,6 +1979,7 @@ void observore_display_notice(const char *text, int seconds)
 #else /* no display on this board */
 
 void observore_display_notice(const char *text, int seconds) { (void)text; (void)seconds; }
+uint32_t observore_display_taps(void) { return 0; }
 void observore_display_init(void) {}
 /* No panel: the console hides the control rather than offering one that
  * refuses, which is what a negative level tells it. */
