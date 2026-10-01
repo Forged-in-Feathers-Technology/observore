@@ -29,6 +29,18 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
+# Let the Wi-Fi and lwIP buffers live in PSRAM.
+#
+# The internal heap floor on this board is about three kilobytes, hit during
+# patrol and landing on almost the same number across runs hours apart --
+# the signature of a large allocation that only just fits rather than of a
+# leak. Patrol is when the sniffer is switched on and off every cycle, and
+# the driver takes its dynamic receive buffers each time: thirty-two of them,
+# tens of kilobytes, out of internal memory.
+#
+# This board has eight megabytes of PSRAM doing nothing but holding a watch
+# face. The buffers can come from there, which is the whole reason to have it.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # The panel, from Waveshare's own ESP-IDF sources rather than the wiki page,
 # whose pin table contradicts itself. QSPI on SPI2: CS 9, clock 10, data

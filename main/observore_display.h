@@ -44,6 +44,11 @@ void observore_display_render(const observore_status_t *st,
 
 /* Show one line, in the attention colour, for a few seconds. For the result
  * of something the person standing at the device just did. */
+/* Taps the glass has reported since boot. Counted because a capacitive
+ * panel with no ground reference -- which is any battery-powered one --
+ * invents them, and a phantom tap presses real buttons. */
+uint32_t observore_display_taps(void);
+
 void observore_display_notice(const char *text, int seconds);
 
 /* Hold the backlight steady while something sensitive happens next to it.

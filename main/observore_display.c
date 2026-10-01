@@ -143,6 +143,16 @@ static const char *TAG = "observore.display";
 #define BAR_TOUCH_ROWS 3
 
 
+/* One DMA-capable strip, shared by everything that writes a block of pixels.
+ *
+ * Allocated once at startup rather than per call. Two reasons: a fifteen
+ * kilobyte internal allocation is a large ask on a board whose Wi-Fi buffers
+ * have just moved to PSRAM -- the largest free internal block is under twelve
+ * kilobytes once it is running, so the old per-call malloc would now fail --
+ * and a buffer that is taken and released repeatedly is a buffer that
+ * fragments the heap it lives in. */
+static uint16_t *s_strip;
+
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_panel_io_handle_t s_io;
 #if CONFIG_OBSERVORE_WATCHFACE
@@ -356,7 +366,7 @@ static bool to_grid_px(int *x, int *y)
 
 static void clear_panel(void)
 {
-    uint16_t *strip = heap_caps_malloc(CLEAR_STRIP_BYTES, MALLOC_CAP_DMA);
+    uint16_t *strip = s_strip;
     if (!strip) {
         ESP_LOGW(TAG, "no buffer to clear the panel with; corners may be stale");
         return;
@@ -366,7 +376,6 @@ static void clear_panel(void)
         int h = (y + OBSERVORE_FONT_H <= DISP_H) ? OBSERVORE_FONT_H : DISP_H - y;
         esp_lcd_panel_draw_bitmap(s_panel, X_OFF, y, X_OFF + DISP_W, y + h, strip);
     }
-    free(strip);
 }
 
 static void draw_glyph(int col, int row, char c, uint16_t fg, uint16_t bg)
@@ -453,6 +462,8 @@ static bool    s_baseline_request;
  * own, so a forgotten half-press does nothing. */
 #define ARM_TIMEOUT_US (5 * 1000000)
 static int     s_armed_row = -1;      /* watch page: the finding being ignored */
+/* How many taps the glass has reported since boot, phantom or otherwise. */
+static uint32_t s_taps;
 static int64_t s_armed_until_us;
 /* The baseline button, armed the same way.
  *
@@ -915,6 +926,14 @@ void observore_display_init(void)
                          CONFIG_OBSERVORE_DISPLAY_MIRROR_Y);
 #endif
     esp_lcd_panel_disp_on_off(s_panel, true);
+
+    /* Before anything draws, while the internal heap is still unfragmented
+     * and the radios have not taken their share -- and before the first
+     * clear, which is the first thing to need it. */
+    s_strip = heap_caps_malloc(CLEAR_STRIP_BYTES, MALLOC_CAP_DMA);
+    if (!s_strip) {
+        ESP_LOGW(TAG, "no DMA strip; full-panel writes will be skipped");
+    }
     clear_panel();
 
 
@@ -1181,13 +1200,10 @@ static void draw_clockface(const observore_status_t *st)
      * bounce buffer of the whole transfer and fails, once per frame, silently
      * apart from two error lines. So the copy is explicit and bounded, and
      * the strip is the same size the panel clear already uses. */
-    static uint16_t *strip;
+    uint16_t *strip = s_strip;
     if (!strip) {
-        strip = heap_caps_malloc(CLEAR_STRIP_BYTES, MALLOC_CAP_DMA);
-        if (!strip) {
-            ESP_LOGW(TAG, "no DMA buffer for the watch face");
-            return;
-        }
+        ESP_LOGW(TAG, "no DMA buffer for the watch face");
+        return;
     }
     const int rows = CLEAR_STRIP_BYTES / (DISP_W * 2);
     /* Anything posted by the text path before this is stale. */
@@ -1914,6 +1930,15 @@ static void ui_task(void *arg)
         xSemaphoreTake(s_lock, portMAX_DELAY);
 #if CONFIG_OBSERVORE_TOUCH
         if (tapped) {
+            /* Every tap, said once, at a level that survives a release build.
+             *
+             * A tap is rare, deliberate and interesting: on a device meant to
+             * sit unattended, somebody touching the glass is arguably a
+             * finding in itself. It is also the only way to tell a person
+             * from a phantom -- a capacitive panel on battery has no ground
+             * reference, and an ungrounded one invents touches. */
+            s_taps++;
+            ESP_LOGI(TAG, "tap at %d,%d (page %d)", x, y, (int)s_page);
             to_grid_px(&x, &y);
             handle_tap(x, y);
         }
@@ -1994,6 +2019,11 @@ bool observore_display_take_baseline_request(void)
     return got;
 }
 
+uint32_t observore_display_taps(void)
+{
+    return s_taps;
+}
+
 void observore_display_notice(const char *text, int seconds)
 {
     if (!s_lock) {
@@ -2009,6 +2039,7 @@ void observore_display_notice(const char *text, int seconds)
 #else /* no display on this board */
 
 void observore_display_notice(const char *text, int seconds) { (void)text; (void)seconds; }
+uint32_t observore_display_taps(void) { return 0; }
 void observore_display_init(void) {}
 /* No panel: the console hides the control rather than offering one that
  * refuses, which is what a negative level tells it. */
