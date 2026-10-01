@@ -350,7 +350,21 @@ close to its old strength came too. Something carried along holds its signal.
 Something left behind either goes silent or arrives twenty decibels down and
 gets loud again only when you walk back through the door — which is the same
 fade test the access points use, pointed at the suspects instead of the
-surroundings. That is the distinction the whole scoring argument kept
+surroundings.
+
+Not fading is necessary and is not sufficient, which took a second walk to
+learn: **a device that is faint everywhere has nothing to fade.** A
+neighbour's phone heard at −72 dBm from the house and −72 dBm from the garden
+passes a fade test perfectly and looks exactly like something in a pocket. So
+two more conditions, each answering a distinct way of being wrong:
+
+| | catches |
+|---|---|
+| within 12 dB of its old strength | the house, audible but distant |
+| heard at −70 dBm or better while away | things faint everywhere, which never fade |
+| heard at least five times while away | a stranger passed once in a lane |
+
+Together they say what the class claims: close by, the whole way. That is the distinction the whole scoring argument kept
 circling: a follower *in a room* is the room, because the neighbour's phone
 through a wall outlasts anything you can measure. A follower in two places,
 with a walk in between, is not the room — it came too.

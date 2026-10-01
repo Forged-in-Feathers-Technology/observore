@@ -803,7 +803,9 @@ static void test_something_that_came_with_you(void)
      * means. Presence before and after is not enough: a round trip returns
      * home, where everything that never moved is in range at both ends. */
     observore_track_set_travelling(true);
-    observore_track_observe(&o, SECS(360));      /* heard, still -55 dBm */
+    for (int t = 320; t <= 380; t += 10) {
+        observore_track_observe(&o, SECS(t));    /* heard throughout, -55 dBm */
+    }
     observore_track_set_journeys(1);
     observore_track_set_travelling(false);
 
@@ -844,7 +846,9 @@ static void test_something_that_came_with_you(void)
     /* Audible from the end of the garden, and much fainter for it. */
     observore_observation_t faint = home;
     faint.rssi = -78;
-    observore_track_observe(&faint, SECS(360));
+    for (int t = 320; t <= 380; t += 10) {
+        observore_track_observe(&faint, SECS(t));
+    }
     observore_track_set_journeys(1);
     observore_track_set_travelling(false);
     /* Back indoors, loud again -- which is exactly what it looked like
@@ -869,6 +873,50 @@ static void test_something_that_came_with_you(void)
     n = observore_track_snapshot(snap, 8);
     CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
           "silence while away is not evidence of having come along (got %s)",
+          n ? observore_class_desc(snap[0].cls)->name : "nothing");
+
+    /* The one the second walk found: a device that is faint everywhere.
+     * A neighbour's phone heard at -72 dBm from the house and -72 dBm from
+     * the garden has nothing to fade, so a rule that only measures change
+     * calls it a companion. */
+    observore_track_init();
+    observore_track_set_travelling(false);
+    observore_track_set_journeys(0);
+    uint8_t d_adv[] = {0x02, 0x01, 0x06, 0x03, 0x03, 0x45, 0xFE};
+    const uint8_t d_mac[6] = {0x53, 0x01, 0x02, 0x03, 0x04, 0x05};
+    observore_observation_t distant = {.mac = d_mac, .src = OBSERVORE_SRC_BLE,
+                                       .rssi = -72, .addr_random = true,
+                                       .adv = d_adv, .adv_len = sizeof(d_adv)};
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&distant, SECS(t));
+    }
+    observore_track_set_travelling(true);
+    for (int t = 320; t <= 380; t += 10) {
+        observore_track_observe(&distant, SECS(t));   /* unchanged, -72 */
+    }
+    observore_track_set_journeys(1);
+    observore_track_set_travelling(false);
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "faint everywhere is not in your pocket (got %s)",
+          n ? observore_class_desc(snap[0].cls)->name : "nothing");
+
+    /* And one heard a couple of times in passing has not travelled with
+     * anybody either. */
+    observore_track_init();
+    observore_track_set_travelling(false);
+    observore_track_set_journeys(0);
+    for (int t = 0; t <= 310; t += 100) {
+        observore_track_observe(&o, SECS(t));
+    }
+    observore_track_set_travelling(true);
+    observore_track_observe(&o, SECS(330));
+    observore_track_observe(&o, SECS(340));
+    observore_track_set_journeys(1);
+    observore_track_set_travelling(false);
+    n = observore_track_snapshot(snap, 8);
+    CHECK(n == 1 && snap[0].cls == OBSERVORE_CLASS_FOLLOWER,
+          "twice in passing is not all the way (got %s)",
           n ? observore_class_desc(snap[0].cls)->name : "nothing");
 
     observore_track_init();

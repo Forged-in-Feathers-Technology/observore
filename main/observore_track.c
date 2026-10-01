@@ -33,6 +33,7 @@ typedef struct {
     bool          heard_away;
     int8_t        home_rssi;
     int8_t        away_rssi;
+    uint16_t      away_hits;
 } observore_slot_t;
 
 static observore_slot_t s_devices[OBSERVORE_MAX_DEVICES];
@@ -66,6 +67,7 @@ void observore_track_set_travelling(bool travelling)
             }
             s_devices[i].home_rssi  = s_devices[i].ev.rssi;
             s_devices[i].away_rssi  = -128;
+            s_devices[i].away_hits  = 0;
             s_devices[i].heard_away = false;
         }
     }
@@ -93,6 +95,12 @@ void observore_track_set_journeys(uint32_t journeys)
         }
         if (!slot->heard_away) {
             continue;            /* never heard while we were away */
+        }
+        if (slot->away_hits < OBSERVORE_TAILING_MIN_HITS) {
+            continue;            /* heard in passing, not all the way */
+        }
+        if (slot->away_rssi < OBSERVORE_TAILING_NEAR_RSSI) {
+            continue;            /* audible, but never close to anybody */
         }
         if (slot->home_rssi - slot->away_rssi >= OBSERVORE_TAILING_FADE_DB) {
             continue;            /* heard, but far fainter: left behind */
@@ -400,8 +408,13 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 
     /* Evidence for the journey, gathered as it happens: the strongest this
      * device manages while the board is away from where it set off. */
-    if (s_travelling && obs->rssi > slot->away_rssi) {
-        slot->away_rssi  = (int8_t)obs->rssi;
+    if (s_travelling) {
+        if (obs->rssi > slot->away_rssi) {
+            slot->away_rssi = (int8_t)obs->rssi;
+        }
+        if (slot->away_hits < UINT16_MAX) {
+            slot->away_hits++;
+        }
         slot->heard_away = true;
     }
 

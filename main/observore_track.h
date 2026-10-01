@@ -37,6 +37,23 @@
  * addresses keep the wider floor; a Ring at the edge of range is still a Ring. */
 #define OBSERVORE_RANDOM_FOLLOWER_RSSI (-80)
 
+/* What "came with you" needs beyond not having faded.
+ *
+ * Not fading is necessary and is not sufficient: a device that is faint
+ * everywhere has nothing to fade. A neighbour's phone heard at -72 dBm from
+ * the house and -72 dBm from the garden passes a fade test perfectly, and
+ * looks exactly like something in a pocket to a rule that only measures
+ * change. Two walks produced five promotions, of which the two faintest had
+ * never been anywhere near anybody.
+ *
+ * So proximity as well: something carried is close, and -70 dBm is already
+ * generous for a phone in the other pocket or a bag. And repetition, because
+ * a thing that travelled with you is heard throughout the journey rather
+ * than once by chance -- which is what separates a companion from a stranger
+ * the board happened to pass. */
+#define OBSERVORE_TAILING_NEAR_RSSI (-70)
+#define OBSERVORE_TAILING_MIN_HITS  5
+
 /* How long a device stays "already announced" after it drops out of the
  * table. It is still tracked and still scored when it comes back -- the level
  * is honest -- but the digest does not repeat it. Six hours covers a device
