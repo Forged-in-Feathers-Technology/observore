@@ -68,6 +68,11 @@ jobs:
           - board: waveshare-s3-amoled-143
             target: esp32s3
             profile: boards/waveshare-s3-amoled-143.defaults
+          # Built but not shipped yet: one unit, and its touch calibration
+          # is still the default rather than a measurement from its panel.
+          - board: nm-cyd-c5
+            target: esp32c5
+            profile: boards/nm-cyd-c5.defaults
     steps:
       - uses: actions/checkout@v7
       - name: Build with ESP-IDF

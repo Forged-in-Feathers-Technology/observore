@@ -448,6 +448,20 @@ config OBSERVORE_DISPLAY_INVERT
         The ST7789 revision of the 2432S028R on the bench did not need it,
         despite reports that it does; the ILI9341 revision is not expected to
         either.
+config OBSERVORE_DISPLAY_SWAP_BYTES
+    bool "Swap the two bytes of each pixel"
+    default y
+    help
+        Each 16-bit pixel reaches the panel most significant byte first, and
+        the SPI path sends the host's bytes as they are, so the swap is done
+        in software.  Measured on a bench rather than taken from a datasheet:
+        without it on the Cheap Yellow Displays the green band came out red.
+
+        A panel that wants the other order shows colours that are wrong in a
+        particular way -- amber turns blue, red turns cyan -- while white and
+        black look perfectly correct, because those are symmetric and a swap
+        does nothing to them.
+
 config OBSERVORE_DISPLAY_BGR
     bool "Panel takes BGR order"
     default n
@@ -536,6 +550,17 @@ config OBSERVORE_TOUCH_CS
     int "Touch CS GPIO"
     depends on OBSERVORE_TOUCH_XPT2046
     default 33
+config OBSERVORE_TOUCH_POLLED
+    bool "The touch controller has no interrupt line"
+    depends on OBSERVORE_TOUCH_XPT2046
+    default n
+    help
+        Some boards do not route the controller's PENIRQ anywhere.  Without
+        it there is nothing to gate reads on, so the pressure channels are
+        read on every poll and the threshold decides -- which is what they
+        were always for.  The cost is constant traffic on a bus the panel
+        shares, so the poll is slower when nothing is touching.
+
 config OBSERVORE_TOUCH_IRQ
     int "Touch PENIRQ GPIO"
     depends on OBSERVORE_TOUCH_XPT2046

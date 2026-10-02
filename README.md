@@ -3,7 +3,7 @@
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
-A passive counter-surveillance detector for eight ESP32 boards, in two
+A passive counter-surveillance detector for nine ESP32 boards, in two
 families: headless sensors — the [Seeed Studio XIAO
 ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/), the
 dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5) and
@@ -43,6 +43,22 @@ Four of the eight have screens: the 2.8" board in its two panel revisions,
 the 3.5", and the round one below. See [the screen](#the-screen) for what
 they can do and [boards, which are not the same as
 chips](#boards-which-are-not-the-same-as-chips) for the profiles.
+
+A ninth profile, `nm-cyd-c5`, is built by CI and **not shipped yet**:
+RockBase's NM-CYD-C5 is a Cheap Yellow Display with an **ESP32-C5** behind
+it, and it is the first board here that both sees 5 GHz and has a screen to
+say so on — every other display board is a plain ESP32 that cannot sweep the
+upper band at all, and every board that could was headless.
+
+The same 2.8" ST7789 panel as the classic CYD and almost none of the same
+pins, taken from RockBase's own TFT_eSPI setup rather than from a
+description, which gave the display chip select as GPIO 3 where it is 23.
+Two things about it are genuinely different: the touch controller's
+interrupt line is not wired anywhere, so the XPT2046 driver gained a polled
+mode — the interrupt was only ever an optimisation, and the pressure
+threshold was always what decided — and the panel takes its pixels in the
+opposite byte order to the other ST7789 boards here, which took two readings
+to establish because each setting alone produces a plausible wrongness.
 
 The eighth is different enough to describe separately. Waveshare's
 **ESP32-S3-Touch-AMOLED-1.43** is a round 1.43" AMOLED on an S3 with 16 MB of

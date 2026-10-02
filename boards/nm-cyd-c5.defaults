@@ -1,0 +1,87 @@
+# RockBase NM-CYD-C5 -- a Cheap Yellow Display with an ESP32-C5 behind it.
+#
+# The first board here with both a screen and dual-band radio: every other
+# display board is a plain ESP32 that cannot see 5 GHz at all, and every
+# board that can was headless. A sniffer that sweeps both bands and shows
+# what it found on its own glass is a combination this project has not had.
+#
+# 16 MB flash, 8 MB PSRAM, native USB-Serial/JTAG, and the same 2.8" 320x240
+# ST7789 panel as the classic CYD -- but almost none of the same pins.
+#
+# Taken from RockBase's own TFT_eSPI setup and pin header rather than from a
+# summary: the first description found gave the display chip select as GPIO3,
+# and it is 23.
+#
+#   ST7789   MISO 2  MOSI 7  SCLK 6  CS 23  DC 24  backlight 25 (active high)
+#   XPT2046  shares that bus, CS 1, and its interrupt is not wired at all
+#   WS2812   27        BOOT 28        SD card CS 10
+#
+# The panel's reset is tied to the board's, so there is no pin to drive.
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_ST7789=y
+CONFIG_OBSERVORE_DISPLAY_WIDTH=320
+CONFIG_OBSERVORE_DISPLAY_HEIGHT=240
+CONFIG_OBSERVORE_DISPLAY_MISO=2
+CONFIG_OBSERVORE_DISPLAY_MOSI=7
+CONFIG_OBSERVORE_DISPLAY_SCLK=6
+CONFIG_OBSERVORE_DISPLAY_CS=23
+CONFIG_OBSERVORE_DISPLAY_DC=24
+CONFIG_OBSERVORE_DISPLAY_RST=-1
+CONFIG_OBSERVORE_DISPLAY_BL=25
+CONFIG_OBSERVORE_DISPLAY_MHZ=20
+# The vendor's setup turns inversion off, against the ST7789 CYDs which need
+# it on. Each of these is a build option because the failure it causes is
+# distinct and visible: a negative means this one is wrong.
+# CONFIG_OBSERVORE_DISPLAY_INVERT is not set
+# Red and blue in the host's order, unlike the classic CYDs.
+#
+# Settled by looking rather than reasoning, and it took two readings because
+# each setting alone produces a plausible-looking wrongness. With the swap on
+# and BGR on, amber came out blue; with the swap off and BGR on, amber came
+# out red and blue came out green. Only a red/blue swap turns amber blue;
+# only a byte swap on top of it turns blue into green. So the byte swap was
+# already happening in hardware, and asking for one in software was
+# cancelling it -- turning it off added a swap rather than removing one.
+# CONFIG_OBSERVORE_DISPLAY_BGR is not set
+CONFIG_OBSERVORE_DISPLAY_MIRROR_X=y
+# CONFIG_OBSERVORE_DISPLAY_MIRROR_Y is not set
+# No photoresistor on this board.
+CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
+
+# Touch shares the panel's bus, and its interrupt line goes nowhere -- the
+# vendor's own pin table prints "---" for it -- so the pressure channels are
+# read on every poll and the threshold decides.
+CONFIG_OBSERVORE_TOUCH=y
+CONFIG_OBSERVORE_TOUCH_XPT2046=y
+CONFIG_OBSERVORE_TOUCH_SHARED_BUS=y
+CONFIG_OBSERVORE_TOUCH_POLLED=y
+CONFIG_OBSERVORE_TOUCH_CS=1
+# Unverified: the calibration bounds below are the defaults, not measurements
+# from this panel. Wrong bounds put a press in the wrong row, which the
+# raw-logging option exists to fix on a bench.
+CONFIG_OBSERVORE_TOUCH_SWAP_XY=y
+
+# The addressable pixel the C5 boards carry, on the same pin as the DevKitC.
+CONFIG_OBSERVORE_LED_ADDRESSABLE=y
+CONFIG_OBSERVORE_LED_GPIO=27
+CONFIG_OBSERVORE_BUTTON_GPIO=28
+
+# Wi-Fi and lwIP buffers out of internal memory, which this board has very
+# little of to spare: eleven kilobytes free and a seven kilobyte floor on the
+# first run, against fifty on the classic CYD. Eight megabytes of PSRAM sit
+# behind it doing nothing.
+#
+# Deliberately not CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: on C5 revision v1.0 the
+# chip warns at boot that PSRAM contents are not encrypted, and TLS buffers
+# are the one thing that should not go there.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# A device with a display does not need to push notifications, and leaving
+# the notifier out is what keeps the TLS handshake off a board that has a
+# screen to say it on.
+# CONFIG_OBSERVORE_NOTIFIER is not set
+
+CONFIG_OBSERVORE_BOARD="nm-cyd-c5"

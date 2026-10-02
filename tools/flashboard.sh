@@ -28,7 +28,7 @@ cd "$(dirname "$0")/.."
 # source errors (SPI3_HOST undeclared, when the C5 has only SPI2).
 case "$BOARD" in
     cyd-*)                  TARGET=esp32   ;;
-    xiao-esp32c5|devkit-*)  TARGET=esp32c5 ;;
+    xiao-esp32c5|devkit-*|nm-cyd-c5) TARGET=esp32c5 ;;
     xiao-esp32c6)           TARGET=esp32c6 ;;
     xiao-esp32s3|waveshare-s3-*) TARGET=esp32s3 ;;
     *) echo "unknown board: $BOARD" >&2; exit 2 ;;
