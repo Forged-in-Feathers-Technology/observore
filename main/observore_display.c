@@ -330,7 +330,15 @@ static uint8_t panel_id(void)
  * path sends the host's bytes as they are, so the swap is done here. Measured
  * on the bench rather than taken from the data_endian field: without this the
  * green band came out red, and with inversion on top it came out cyan. */
+#if CONFIG_OBSERVORE_DISPLAY_SWAP_BYTES
+#if CONFIG_OBSERVORE_DISPLAY_SWAP_BYTES
 static inline uint16_t px(uint16_t c) { return (uint16_t)((c << 8) | (c >> 8)); }
+#else
+static inline uint16_t px(uint16_t c) { return c; }
+#endif
+#else
+static inline uint16_t px(uint16_t c) { return c; }
+#endif
 
 /* Black the whole panel, corners included, in strips one glyph tall. Uses a
  * temporary buffer rather than a static one: this runs once, and on the board

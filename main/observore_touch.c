@@ -156,6 +156,7 @@ static int pressure(void)
 
 static bool backend_init(void)
 {
+#if !CONFIG_OBSERVORE_TOUCH_POLLED
     /* PENIRQ: low while the panel is touched. Polling this costs one register
      * read, so the SPI bus stays idle until there is something to read. */
     gpio_config_t irq = {
@@ -163,6 +164,7 @@ static bool backend_init(void)
         .mode         = GPIO_MODE_INPUT,
     };
     gpio_config(&irq);
+#endif
 
     /* Some boards give the controller its own pins and some hang it off the
      * panel's bus with a second chip select. Sharing is not merely allowed --
@@ -197,9 +199,14 @@ static bool backend_init(void)
         ESP_LOGE(TAG, "SPI device: %s", esp_err_to_name(err));
         return false;
     }
+#if CONFIG_OBSERVORE_TOUCH_POLLED
+    ESP_LOGI(TAG, "XPT2046 on SPI%d (polled, no irq line)%s", TOUCH_HOST + 1,
+             CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
+#else
     ESP_LOGI(TAG, "XPT2046 on SPI%d (irq %d)%s", TOUCH_HOST + 1,
              CONFIG_OBSERVORE_TOUCH_IRQ,
              CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
+#endif
     return true;
 }
 
@@ -263,16 +270,29 @@ static bool sample(int *x, int *y)
     int64_t now_probe = esp_timer_get_time();
     if (now_probe - s_last_probe_us > 500 * 1000) {
         s_last_probe_us = now_probe;
+#if CONFIG_OBSERVORE_TOUCH_POLLED
+        int lvl = -1;
+#else
         int lvl = gpio_get_level(CONFIG_OBSERVORE_TOUCH_IRQ);
+#endif
         int z   = s_ready ? pressure() : -1;
         int rx  = s_ready ? median_channel(CMD_X)  : -1;
         int ry  = s_ready ? median_channel(CMD_Y)  : -1;
         ESP_LOGI(TAG, "probe irq=%d z=%4d x=%4d y=%4d", lvl, z, rx, ry);
     }
 #endif
+#if CONFIG_OBSERVORE_TOUCH_POLLED
+    /* No interrupt line on this board, so there is nothing to ask before
+     * reading. The pressure threshold decides, which is what it is for; the
+     * gate was only ever an optimisation. */
+    if (!s_ready) {
+        return false;
+    }
+#else
     if (!s_ready || gpio_get_level(CONFIG_OBSERVORE_TOUCH_IRQ) != 0) {
         return false;
     }
+#endif
     /* The backlight is a PWM whose switching sits inside the controller's
      * measuring band, so it is held steady across a measurement. Whether it
      * actually matters could not be settled on the bench: the panel there lost
