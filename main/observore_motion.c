@@ -110,13 +110,18 @@ static const char *TAG = "observore.motion";
  * evidence there is going to be. */
 #define TRAVELLING_CHECK_US (20 * 1000000LL)
 
+/* How long the far end lasts: the window in which a device has to be heard
+ * to be said to have come along. Long enough for several advert intervals
+ * from anything nearby, short enough to still be somewhere else. */
+#define FAR_END_US (30 * 1000000LL)
+
 static i2c_master_dev_handle_t s_dev;
 static volatile bool     s_moving;
 static volatile uint32_t s_journeys;
 static volatile bool     s_available;
 static volatile int      s_last_overlap = -1;
 static volatile int      s_last_faded = INT_MIN;
-static volatile bool     s_travelling;
+static volatile bool     s_at_far_end;
 
 static bool read_accel(int *mg)
 {
@@ -147,6 +152,7 @@ static void motion_task(void *arg)
     int64_t moving_since_us = 0;
     int64_t arrival_due_us = 0;
     int64_t next_check_us = 0;
+    int64_t far_end_until_us = 0;
     bool counted = false;
 
     for (;;) {
@@ -175,7 +181,6 @@ static void motion_task(void *arg)
                 counted = false;
                 /* What "here" was, before setting off. */
                 observore_surroundings_mark(now, SURROUNDINGS_AGE_US);
-                s_travelling = true;
                 next_check_us = now + TRAVELLING_CHECK_US;
                 ESP_LOGI(TAG, "picked up (%u access points in earshot)",
                          (unsigned)observore_surroundings_marked());
@@ -205,7 +210,8 @@ static void motion_task(void *arg)
                     s_journeys++;
                     counted = true;
                     arrival_due_us = 0;
-                    s_travelling = false;
+                    far_end_until_us = now + FAR_END_US;
+                    s_at_far_end = true;
                     ESP_LOGI(TAG, "journey %u: somewhere else while still "
                                   "walking -- %d%% of the old access points, "
                                   "%d dB fainter",
@@ -216,9 +222,7 @@ static void motion_task(void *arg)
             /* Did we arrive somewhere, or merely stop? */
             if (arrival_due_us && now >= arrival_due_us && !s_moving) {
                 arrival_due_us = 0;
-                /* The away window closes here, whichever way the verdict
-                 * goes: the evidence is complete either way. */
-                s_travelling = false;
+
                 int overlap = observore_surroundings_overlap_pct();
                 int faded   = observore_surroundings_faded_db();
                 s_last_overlap = overlap;
@@ -233,6 +237,8 @@ static void motion_task(void *arg)
                 } else if (went) {
                     s_journeys++;
                     counted = true;
+                    far_end_until_us = now + FAR_END_US;
+                    s_at_far_end = true;
                     ESP_LOGI(TAG, "journey %u: somewhere else -- %d%% of the "
                                   "old access points still in earshot, and "
                                   "those %d dB fainter",
@@ -246,6 +252,12 @@ static void motion_task(void *arg)
                 }
             }
         }
+        /* The far end has a length: whatever was beside the board during it
+         * came along, and the tracker is told when it closes. */
+        if (s_at_far_end && esp_timer_get_time() >= far_end_until_us) {
+            s_at_far_end = false;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
 }
@@ -276,7 +288,7 @@ void observore_motion_init(void)
 }
 
 bool observore_motion_moving(void)     { return s_moving; }
-bool observore_motion_travelling(void) { return s_travelling; }
+bool observore_motion_at_far_end(void) { return s_at_far_end; }
 uint32_t observore_motion_journeys(void) { return s_journeys; }
 bool observore_motion_available(void)  { return s_available; }
 int observore_motion_last_overlap_pct(void) { return s_last_overlap; }
@@ -286,7 +298,7 @@ int observore_motion_last_faded_db(void) { return s_last_faded; }
 
 void observore_motion_init(void) {}
 bool observore_motion_moving(void) { return false; }
-bool observore_motion_travelling(void) { return false; }
+bool observore_motion_at_far_end(void) { return false; }
 uint32_t observore_motion_journeys(void) { return 0; }
 bool observore_motion_available(void) { return false; }
 int observore_motion_last_overlap_pct(void) { return -1; }

@@ -1130,15 +1130,29 @@ static void draw_clockface(const observore_status_t *st)
     struct tm lt;
     localtime_r(&now, &lt);
 
-    /* The verdict's colour has to reach the wearer without waiting for the
-     * minute to turn, so a change of level redraws as well. */
-    static int s_face_level = -1;
+    /* What was last actually put on the glass. Redrawing only when the
+     * minute turns is right for a still face and wrong for everything else
+     * that changes what the face should look like.
+     *
+     * Two of those were missed. Coming back to this page within the same
+     * minute drew nothing at all, so the findings page stayed on the screen
+     * until the minute happened to turn -- which reads as a watch face that
+     * has stopped working. And when the fifteen seconds of wakefulness
+     * lapsed, the button bar and the seconds hand stayed drawn, because
+     * nothing redrew to take them away: a menu that would not go away.
+     *
+     * The rule is the same in all cases: redraw when what should be on the
+     * glass differs from what is. */
+    static int  s_face_level = -1;
+    static bool s_face_drew_awake;
     bool awake = esp_timer_get_time() < s_face_awake_until_us;
-    if (!awake && lt.tm_min == s_face_minute && (int)st->level == s_face_level) {
+    if (!awake && lt.tm_min == s_face_minute && (int)st->level == s_face_level &&
+        awake == s_face_drew_awake) {
         return;                       /* nothing has moved that anybody can see */
     }
-    s_face_minute = lt.tm_min;
-    s_face_level  = (int)st->level;
+    s_face_minute     = lt.tm_min;
+    s_face_level      = (int)st->level;
+    s_face_drew_awake = awake;
 
     observore_canvas_t c = {.px = s_fb, .w = DISP_W, .h = DISP_H};
 
@@ -1651,6 +1665,11 @@ static void draw_current(void)
         s_drew_face = 0;
         clear_panel();
         memset(s_shown, 0, sizeof(s_shown));
+    } else if (!s_drew_face && s_page == PAGE_CLOCK) {
+        /* Arriving at the face: whatever is on the glass belongs to another
+         * page, so the next draw must happen whether or not the minute has
+         * turned. */
+        s_face_minute = -1;
     }
     s_drew_face = (s_page == PAGE_CLOCK);
 #endif
