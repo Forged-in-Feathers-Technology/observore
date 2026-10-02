@@ -49,18 +49,21 @@ static uint32_t     s_journeys;
  * as the access points use, for the same reason and with the same meaning. */
 #define OBSERVORE_TAILING_FADE_DB 12
 
-static bool s_travelling;
+static bool s_at_far_end;
 
-void observore_track_set_travelling(bool travelling)
+void observore_track_set_at_far_end(bool at_far_end)
 {
-    if (travelling == s_travelling) {
+    if (at_far_end == s_at_far_end) {
         return;
     }
     OBSERVORE_LOCK();
-    s_travelling = travelling;
-    if (travelling) {
-        /* Setting off: remember how loudly everything is heard from here,
-         * and forget whatever the last trip gathered. */
+    s_at_far_end = at_far_end;
+
+    if (at_far_end) {
+        /* Arrived somewhere. Remember how loudly each device has ever
+         * managed to be heard -- which, for anything that lives in the
+         * house, is its strength at the house -- and start listening for
+         * which of them is here too. */
         for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
             if (!s_devices[i].in_use) {
                 continue;
@@ -70,23 +73,12 @@ void observore_track_set_travelling(bool travelling)
             s_devices[i].away_hits  = 0;
             s_devices[i].heard_away = false;
         }
-    }
-    OBSERVORE_UNLOCK();
-}
-
-void observore_track_set_journeys(uint32_t journeys)
-{
-    if (journeys == s_journeys) {
+        OBSERVORE_UNLOCK();
         return;
     }
-    OBSERVORE_LOCK();
-    s_journeys = journeys;
 
-    /* Arrived somewhere. Whatever was beside us the whole way came too.
-     *
-     * Judged here rather than on the next sighting, because this is the
-     * moment the evidence is complete: the away window has closed and
-     * nothing more can be added to it. */
+    /* The far end is over, so the evidence is complete. Whatever was beside
+     * the board while it was there came with it. */
     for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
         observore_slot_t *slot = &s_devices[i];
         if (!slot->in_use || !slot->classified ||
@@ -94,16 +86,16 @@ void observore_track_set_journeys(uint32_t journeys)
             continue;
         }
         if (!slot->heard_away) {
-            continue;            /* never heard while we were away */
+            continue;            /* not there at all */
         }
         if (slot->away_hits < OBSERVORE_TAILING_MIN_HITS) {
-            continue;            /* heard in passing, not all the way */
+            continue;            /* heard in passing, not throughout */
         }
         if (slot->away_rssi < OBSERVORE_TAILING_NEAR_RSSI) {
             continue;            /* audible, but never close to anybody */
         }
         if (slot->home_rssi - slot->away_rssi >= OBSERVORE_TAILING_FADE_DB) {
-            continue;            /* heard, but far fainter: left behind */
+            continue;            /* there, but far fainter: left behind */
         }
         slot->ev.cls      = OBSERVORE_CLASS_TAILING;
         slot->ev.evidence = OBSERVORE_EVIDENCE_BEHAVIOUR;
@@ -114,6 +106,11 @@ void observore_track_set_journeys(uint32_t journeys)
         slot->reported = false;
     }
     OBSERVORE_UNLOCK();
+}
+
+void observore_track_set_journeys(uint32_t journeys)
+{
+    s_journeys = journeys;
 }
 
 /* Devices announced recently, so that one which fades and returns is not
@@ -408,7 +405,7 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 
     /* Evidence for the journey, gathered as it happens: the strongest this
      * device manages while the board is away from where it set off. */
-    if (s_travelling) {
+    if (s_at_far_end) {
         if (obs->rssi > slot->away_rssi) {
             slot->away_rssi = (int8_t)obs->rssi;
         }

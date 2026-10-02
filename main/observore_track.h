@@ -159,16 +159,20 @@ void observore_track_init(void);
  * OBSERVORE_CLASS_TAILING. */
 void observore_track_set_journeys(uint32_t journeys);
 
-/* Whether the device is away from where it set off: true from the moment it
- * is picked up until the journey has been judged on arrival.
+/* Whether the board is at the far end of a journey: open once the
+ * surroundings confirm it is somewhere else, closed half a minute later.
  *
- * This is what makes "came with you" mean anything. Presence before and
- * after a journey describes an entire household -- a round trip leaves and
- * returns, and everything at home is in range at both ends, which is how one
- * walk to a garden promoted twelve devices that had been sitting in the
- * house for nine hours. What a device has to show is presence *in between*,
- * at full strength, while the board was somewhere else. */
-void observore_track_set_travelling(bool travelling);
+ * This is what makes "came with you" mean anything, and the timing is the
+ * whole of it. Presence before and after a journey describes an entire
+ * household, because a round trip comes home. Presence from the moment the
+ * board was picked up is no better: that window starts at the front door,
+ * surrounded by everything that lives in the house, and the strongest
+ * reading in it is taken on the way out -- which is how a garden walk
+ * promoted two kitchen devices that had never left.
+ *
+ * What a device has to show is presence *at the far end*: heard there,
+ * repeatedly, close by, and no fainter than it is at home. */
+void observore_track_set_at_far_end(bool at_far_end);
 
 /* Feed one raw observation in.  Handles classification, the follower
  * heuristic, deduplication and scoring.  Returns true when this observation

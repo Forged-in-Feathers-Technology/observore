@@ -27,10 +27,16 @@ bool observore_motion_moving(void);
  * claim about crossing that boundary, not about the instant of moving. */
 uint32_t observore_motion_journeys(void);
 
-/* True from the moment the board is picked up until the journey it might
- * have made has been judged. The tracker uses this window to ask which
- * devices were still beside it while it was elsewhere. */
-bool observore_motion_travelling(void);
+/* True only while the board is established as somewhere else: it opens when
+ * the surroundings confirm the journey and closes a short while later.
+ *
+ * Not while merely walking. The window used to open the moment the board was
+ * picked up -- at the front door, surrounded by everything that lives in the
+ * house -- and the tracker keeps the strongest reading from it, so a device
+ * in the kitchen was measured at full strength on the way out and looked as
+ * though it had never faded. Two of three promotions on a garden walk were
+ * household devices for exactly that reason. */
+bool observore_motion_at_far_end(void);
 
 /* False where there is no sensor, which is every board but one. */
 bool observore_motion_available(void);

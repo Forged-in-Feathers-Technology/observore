@@ -343,10 +343,16 @@ trip comes home, and everything indoors is in range at both ends: one walk to
 a garden promoted twelve devices that had been sitting in the house for nine
 hours.
 
-So the evidence is presence *in between*, at strength. The board remembers
-how loudly it heard everything when it set off; while it is away, each
-sighting records the best that device manages; on arrival, anything heard at
-close to its old strength came too. Something carried along holds its signal.
+So the evidence is presence **at the far end**, and the timing is the whole
+of it. The window opens when the access points confirm the board is somewhere
+else and closes half a minute later; only sightings inside it count.
+
+Opening it when the board was picked up was not good enough, which took a
+third walk to learn: that window starts at the front door, surrounded by
+everything that lives in the house, and the strongest reading in it is taken
+on the way out. A kitchen device measured at full strength while its owner
+was still in the kitchen looked as though it had never faded. Two of three
+promotions on a garden walk were household devices for exactly that reason. Something carried along holds its signal.
 Something left behind either goes silent or arrives twenty decibels down and
 gets loud again only when you walk back through the door — which is the same
 fade test the access points use, pointed at the suspects instead of the
