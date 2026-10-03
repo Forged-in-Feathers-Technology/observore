@@ -8,6 +8,8 @@
 
 #include <inttypes.h>
 
+#include "esp_ota_ops.h"
+
 #include "observore_auth.h"
 #include "observore_ble.h"
 #include <limits.h>
@@ -287,7 +289,27 @@ static void button_task(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Observore starting");
+    /* The banner names the build, not just the program.
+     *
+     * "Observore starting" was all it said, which meant the only ways to ask a
+     * running device what it was running were the HTTP API -- which needs the
+     * network up and the console password to hand -- and reading the app
+     * descriptor back out of flash with esptool.  Both were used, on a board
+     * sitting on the desk with a serial cable already attached to it, because
+     * the one place that should have answered did not.
+     *
+     * The partition is here for the same reason the version is.  Images built
+     * on ESP-IDF v5.5 hung between the PSRAM memory test and user code when
+     * booted from ota_1, so every over-the-air update rolled back and none
+     * ever took (see #79).  A device that has quietly fallen back to its
+     * previous slot looks identical to one that was never updated, and this
+     * line is the difference.
+     */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    ESP_LOGI(TAG, "Observore %s starting -- board %s, booted from %s",
+             observore_update_running_version(),
+             CONFIG_OBSERVORE_BOARD[0] ? CONFIG_OBSERVORE_BOARD : "default",
+             running ? running->label : "unknown");
 
     observore_track_init();
     observore_led_init();
