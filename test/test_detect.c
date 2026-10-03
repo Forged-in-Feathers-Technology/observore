@@ -920,6 +920,53 @@ static void test_calibration_recovers_the_sheet(void)
                                     W, H, true, NULL),
           "no output pointer is refused rather than written through");
 
+    /* Fitting stored bounds to what the controller can actually read.
+     *
+     * The case that matters is the one this board was found in: a calibration
+     * saved by the arithmetic #149 fixed, with a span wider than the whole
+     * converter. Keeping it across an upgrade would look exactly like the bug
+     * never being fixed. */
+    const int RAW_MAX = 4095;
+    observore_touchcal_t f;
+
+    /* A few counts past either end is ordinary, not broken. Extrapolating
+     * from inset targets assumes a linear sheet and near the bezel it is not
+     * quite, so these are clamped -- the sheet does stop there. */
+    f = (observore_touchcal_t){.lo_x = -8, .hi_x = 4100, .lo_y = 150, .hi_y = 3900};
+    CHECK(observore_touchcal_fit(&f, RAW_MAX), "a small overshoot is usable");
+    CHECK(f.lo_x == 0 && f.hi_x == RAW_MAX, "and is clamped to the range");
+    CHECK(f.lo_y == 150 && f.hi_y == 3900, "leaving the axis that fitted alone");
+
+    /* Bounds already inside the range are untouched, including the ones this
+     * board produced once the arithmetic was right. */
+    f = (observore_touchcal_t){.lo_x = 210, .hi_x = 3917, .lo_y = 172, .hi_y = 3782};
+    CHECK(observore_touchcal_fit(&f, RAW_MAX), "a real calibration is accepted");
+    CHECK(f.lo_x == 210 && f.hi_x == 3917 && f.lo_y == 172 && f.hi_y == 3782,
+          "and passes through unchanged");
+
+    /* Clamping can only narrow, so the floor is re-checked after it: bounds
+     * that were mostly outside the range come back as a sliver. */
+    f = (observore_touchcal_t){.lo_x = -4000, .hi_x = 50, .lo_y = 200, .hi_y = 3800};
+    CHECK(!observore_touchcal_fit(&f, RAW_MAX),
+          "bounds that clamp down to nothing are rejected");
+    CHECK(f.lo_x == -4000 && f.hi_x == 50, "and a rejection leaves them alone");
+
+    /* Deliberately NOT asserted here: that the bounds the #149 bug saved get
+     * rejected. They clamp to a full-range span and are indistinguishable from
+     * a real calibration that overshot -- which is why the stored calibration
+     * carries the version of the arithmetic that made it, and why this
+     * function is not where that decision lives. */
+    f = (observore_touchcal_t){.lo_x = 696, .hi_x = 3421, .lo_y = -56, .hi_y = 4175};
+    CHECK(observore_touchcal_fit(&f, RAW_MAX),
+          "bad-arithmetic bounds still fit the hardware, which is the point");
+
+    /* Degenerate inputs are refused rather than reasoned about. */
+    f = (observore_touchcal_t){.lo_x = 3000, .hi_x = 200, .lo_y = 200, .hi_y = 3800};
+    CHECK(!observore_touchcal_fit(&f, RAW_MAX), "inverted bounds are rejected");
+    CHECK(!observore_touchcal_fit(NULL, RAW_MAX), "no bounds is not a crash");
+    f = (observore_touchcal_t){.lo_x = 200, .hi_x = 3800, .lo_y = 200, .hi_y = 3800};
+    CHECK(!observore_touchcal_fit(&f, 10), "a converter smaller than the floor is rejected");
+
     /* Pressed in the opposite order -- bottom-right first -- still yields an
      * ordered sheet, because which corner was pressed first is not something
      * the mapping should care about. */
