@@ -62,6 +62,13 @@ jobs:
           - board: waveshare-s3-amoled-143
             target: esp32s3
             profile: boards/waveshare-s3-amoled-143.defaults
+          # Ships now that a panel can measure its own touch bounds. It was
+          # held back because the bounds in its profile are defaults rather
+          # than measurements -- and shipping any profile's bounds was really
+          # shipping one bench unit's, which on-device calibration retires.
+          - board: nm-cyd-c5
+            target: esp32c5
+            profile: boards/nm-cyd-c5.defaults
     steps:
       - uses: actions/checkout@v7
         with:

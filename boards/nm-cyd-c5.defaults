@@ -56,9 +56,11 @@ CONFIG_OBSERVORE_TOUCH_XPT2046=y
 CONFIG_OBSERVORE_TOUCH_SHARED_BUS=y
 CONFIG_OBSERVORE_TOUCH_POLLED=y
 CONFIG_OBSERVORE_TOUCH_CS=1
-# Unverified: the calibration bounds below are the defaults, not measurements
-# from this panel. Wrong bounds put a press in the wrong row, which the
-# raw-logging option exists to fix on a bench.
+# The bounds below are the defaults rather than measurements from this panel,
+# and that is no longer the problem it was: the `calibrate` action on the
+# system page measures the sheet in front of the owner and keeps the result in
+# NVS. These are a starting point. The crossing is not guessable that way, so
+# it is set here -- a left-right press swings raw Y, not raw X.
 CONFIG_OBSERVORE_TOUCH_SWAP_XY=y
 
 # The addressable pixel the C5 boards carry, on the same pin as the DevKitC.
