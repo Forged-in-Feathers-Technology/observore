@@ -2039,6 +2039,31 @@ from the board identifier compiled into the image. A build cut from a tag report
 that tag, `v0.5.0`; a build made after one reports what `git describe` says,
 `v0.5.0-3-gce8e56e`, which is a different thing and says so.
 
+**The boot banner says the same thing over the serial cable**, which is the
+one route that needs neither the network nor the console password:
+
+```
+I (2341) observore: Observore v0.12.0-2-gc139518-dirty starting -- board devkit-esp32c5, booted from ota_0
+```
+
+That is a real line from a bench build, which is why it reads
+`v0.12.0-2-gc139518-dirty` rather than a tag: two commits past `v0.12.0` with
+uncommitted changes in the tree. A board flashed from a release says `v0.12.0`
+and nothing else.
+
+It says only `Observore starting` in builds before this, and the gap was
+noticed the usual way: a board on the desk with a cable already attached to
+it, and the quickest answer to *what is on this thing* turning out to be
+reading the application descriptor back out of flash with `esptool`.
+
+The partition is there for the same reason the version is. Images built on
+ESP-IDF v5.5 hung between the PSRAM memory test and user code when booted
+from `ota_1`, so every over-the-air update rolled back and none ever took —
+and a device that has quietly fallen back to its previous slot looks exactly
+like one that was never updated. `booted from ota_0` after an update that
+reported success is the symptom, and nothing else on the device says it out
+loud.
+
 It also checks, once a day by default, whether a newer release has been
 published. The document it reads is `firmware/boards.json` — the same file the
 web flasher uses, so anything installable is by definition visible to the
