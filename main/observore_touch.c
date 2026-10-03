@@ -1,4 +1,5 @@
 #include "observore_tap.h"
+#include "observore_touchcal.h"
 #include "observore_touch.h"
 
 #include "sdkconfig.h"
@@ -64,6 +65,10 @@ static const char *TAG = "observore.touch";
  * measure across the sheet. Untouched it sits near zero; a deliberate press is
  * in the hundreds. */
 #define Z_THRESHOLD CONFIG_OBSERVORE_TOUCH_Z_MIN
+
+/* The largest reading the controller can return: the XPT2046's converter is
+ * twelve bits. Anything outside 0..RAW_MAX was computed, not measured. */
+#define RAW_MAX 4095
 
 
 /* Samples per axis per read. Resistive panels are noisy and a median throws
@@ -252,9 +257,33 @@ static int  s_lo_y = CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y;
 static int  s_hi_y = CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y;
 static bool s_calibrated;
 
-/* Four numbers, as they are stored. */
+/* Four numbers, as they are stored, and which arithmetic produced them.
+ *
+ * The version is here because of #149. Until that fix the calibration scaled
+ * each touch channel by the *other* axis's ratio, so every calibration saved
+ * before it is wrong -- and an upgrade that kept one would look exactly like
+ * the bug never being fixed, because the symptom is identical.
+ *
+ * The first attempt at healing that tried to recognise bad bounds by their
+ * values: a span wider than the converter can read, an endpoint below zero.
+ * That does not work, and the tests are what said so. A correct calibration
+ * extrapolates from inset targets assuming a linear sheet, and near the bezel
+ * the sheet is not quite linear, so it can legitimately overshoot both ends by
+ * a few counts -- which makes its span exceed the range too. One bench board's
+ * bad bounds were 136 counts over, well inside any tolerance wide enough to
+ * admit a real one. And on a panel whose usable range is narrower, the same
+ * bug produces bounds entirely inside 0..4095 and is undetectable by value at
+ * all.
+ *
+ * So this keys on provenance instead of trying to infer wrongness. A stored
+ * calibration says which arithmetic made it, and one that does not say, or
+ * says the old one, is discarded. Unversioned blobs are eight bytes and this
+ * is ten, so they fail the length check without needing a value in them. */
+#define TOUCH_CAL_VERSION 2
+
 typedef struct {
-    int16_t lo_x, hi_x, lo_y, hi_y;
+    uint16_t version;
+    int16_t  lo_x, hi_x, lo_y, hi_y;
 } touch_cal_t;
 
 static void cal_load(void)
@@ -265,15 +294,33 @@ static void cal_load(void)
     if (observore_nvs_read(&item, 1) != ESP_OK || !item.found) {
         return;
     }
-    /* A calibration that says the sheet has no extent is not a calibration;
-     * ignoring it falls back to the compiled bounds rather than dividing by
-     * nothing later. */
-    if (cal.hi_x - cal.lo_x < 100 || cal.hi_y - cal.lo_y < 100) {
-        ESP_LOGW(TAG, "stored calibration looks wrong; using the built-in one");
+    if (item.len != sizeof(cal) || cal.version != TOUCH_CAL_VERSION) {
+        ESP_LOGW(TAG, "stored calibration was written by an older build "
+                      "(%u bytes, version %u) -- using the built-in bounds. "
+                      "Run calibrate again.",
+                 (unsigned)item.len, (unsigned)cal.version);
         return;
     }
-    s_lo_x = cal.lo_x; s_hi_x = cal.hi_x;
-    s_lo_y = cal.lo_y; s_hi_y = cal.hi_y;
+    /* A calibration that says the sheet has no extent is not a calibration,
+     * and one the controller could not have produced is arithmetic rather than
+     * measurement. Either way the compiled bounds are the better answer: they
+     * are somebody else's measurements, which beats impossible ones.
+     *
+     * The second case is not hypothetical. Until #149 the calibration scaled
+     * each channel by the other axis's ratio, which over-corrected one of them
+     * past the end of the converter's range -- a bench board had y running
+     * from -56 to 4175 on a device that can only read 0 to 4095. Anybody who
+     * calibrated before that fix has such a mapping saved, and an upgrade that
+     * kept it would look exactly like the bug never being fixed. */
+    observore_touchcal_t fit = {cal.lo_x, cal.hi_x, cal.lo_y, cal.hi_y};
+    if (!observore_touchcal_fit(&fit, RAW_MAX)) {
+        ESP_LOGW(TAG, "stored calibration is not usable (x %d-%d, y %d-%d); "
+                      "using the built-in one -- run calibrate again",
+                 cal.lo_x, cal.hi_x, cal.lo_y, cal.hi_y);
+        return;
+    }
+    s_lo_x = fit.lo_x; s_hi_x = fit.hi_x;
+    s_lo_y = fit.lo_y; s_hi_y = fit.hi_y;
     s_calibrated = true;
     ESP_LOGI(TAG, "calibrated here: x %d-%d, y %d-%d",
              s_lo_x, s_hi_x, s_lo_y, s_hi_y);
@@ -281,15 +328,24 @@ static void cal_load(void)
 
 void observore_touch_set_bounds(int min_x, int max_x, int min_y, int max_y)
 {
-    if (max_x - min_x < 100 || max_y - min_y < 100) {
-        ESP_LOGW(TAG, "refusing a calibration with no extent");
+    /* The same judgement as on load, on the way in: nothing unusable should
+     * reach the flash in the first place, and a fresh calibration from a
+     * slightly non-linear panel gets clamped rather than refused. */
+    observore_touchcal_t fit = {min_x, max_x, min_y, max_y};
+    if (!observore_touchcal_fit(&fit, RAW_MAX)) {
+        ESP_LOGW(TAG, "refusing a calibration the controller could not have "
+                      "produced: x %d-%d, y %d-%d", min_x, max_x, min_y, max_y);
         return;
     }
+    min_x = fit.lo_x; max_x = fit.hi_x;
+    min_y = fit.lo_y; max_y = fit.hi_y;
+
     s_lo_x = min_x; s_hi_x = max_x;
     s_lo_y = min_y; s_hi_y = max_y;
     s_calibrated = true;
 
-    touch_cal_t cal = {(int16_t)min_x, (int16_t)max_x,
+    touch_cal_t cal = {TOUCH_CAL_VERSION,
+                       (int16_t)min_x, (int16_t)max_x,
                        (int16_t)min_y, (int16_t)max_y};
     observore_nvs_item_t item = {.key = "touchcal", .type = OBSERVORE_NVS_BLOB,
                                  .buf = &cal, .len = sizeof(cal)};
