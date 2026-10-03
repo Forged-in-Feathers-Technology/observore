@@ -1551,6 +1551,12 @@ cause. Anything added to a display build should be measured against the free
 heap reported during an uplink window, not during patrol, where there is
 twenty kilobytes more of it and nothing looks wrong.
 
+A figure to measure against, from a 2.8" CYD in the field running v0.11.0: an
+update check takes the internal low-water from **26,580 bytes to 12,936**, with
+the largest free block falling to 12,800. The check succeeds there, and the
+margin it succeeds by is about thirteen kilobytes. Patrol on the same board
+reports 48 KB free throughout and says nothing about any of this.
+
 Free heap is not the whole story either. A later build had 31 KB free and
 still could not check for updates, because the certificate check wanted a
 single contiguous block of 4,437 bytes for an RSA signature and the heap was

@@ -1,10 +1,19 @@
 # Observore partition table.
 #
-# OTA-shaped, deliberately, even though OTA is not implemented. The layout is
-# the part that is expensive to change later: the browser flasher writes the
-# partition table, so a device upgrading to a different layout would silently
-# lose whatever moved. Fixing the offsets now, while there are few devices,
-# costs nothing and means it never has to happen.
+# OTA-shaped, and OTA now uses it: the device checks for releases and installs
+# them into the other slot. This comment said "even though OTA is not
+# implemented" for several releases after that stopped being true, which is the
+# ordinary way a comment goes wrong -- it was accurate when written and nothing
+# brought the reader back to it.
+#
+# The layout is the part that is expensive to change later: the browser flasher
+# writes the partition table, so a device upgrading to a different layout would
+# silently lose whatever moved. Fixing the offsets early, while there were few
+# devices, cost nothing and means it never has to happen.
+#
+# Checked against a board in the field rather than assumed: a 2.8" CYD flashed
+# at v0.11.0 and never reflashed reports exactly this table, ota_1 included, so
+# the offsets have in fact held.
 #
 # Two offsets are the actual commitment, and only two:
 #
