@@ -180,3 +180,38 @@ int observore_watch_text(const observore_canvas_t *c, int cx, int y,
     }
     return w;
 }
+
+int observore_watch_dial_radius(int panel_w, int panel_h, int margin,
+                                int ring, int shift)
+{
+    int half = (panel_w < panel_h ? panel_w : panel_h) / 2;
+    /* The ring is drawn centred on the radius, so half of it sticks out. */
+    int r = half - margin - shift - (ring + 1) / 2;
+    return r > 0 ? r : 0;
+}
+
+void observore_watch_shift(unsigned step, int radius, int *dx, int *dy)
+{
+    /* Eight points on a circle, as sin and cos times a thousand, so the walk
+     * is integer arithmetic and the same on the host as on the device.
+     *
+     * A circle rather than a raster scan because consecutive positions are
+     * then adjacent: the dial moves about two pixels per step and never
+     * jumps across the face. A scan would snap from one edge to the other
+     * once a cycle, which is the one moment somebody would notice. */
+    static const int sin1000[8] = {0, 707, 1000,  707,    0, -707, -1000, -707};
+    static const int cos1000[8] = {1000, 707,  0, -707, -1000, -707,  0,   707};
+
+    if (radius < 0) {
+        radius = 0;
+    }
+    int i = (int)(step & 7u);
+
+    /* Rounded to nearest rather than truncated. At radius 3 the diagonals are
+     * 2.12 pixels, and truncation would make them 2 while the axes stay 3 --
+     * a visibly lopsided walk at the only radius this is used at. */
+    int sx = radius * sin1000[i];
+    int sy = radius * cos1000[i];
+    *dx =  (sx >= 0 ? sx + 500 : sx - 500) / 1000;
+    *dy = -((sy >= 0 ? sy + 500 : sy - 500) / 1000);
+}

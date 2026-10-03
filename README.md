@@ -1517,6 +1517,51 @@ Both confirmations lapse after five seconds and are cancelled by leaving the
 page, so a press nobody meant — a resistive panel under a sleeve, a board
 face-down on a desk — does nothing.
 
+### The pocket watch face
+
+On the round board the first page is a watch. Hour and minute hands, the date
+where a pocket watch keeps it, and a silver ring — and that is all it is until
+you touch it. The seconds hand and the button bar appear for fifteen seconds
+after a tap and then go away again, because a bar reading *page / baseline /
+light* across a watch face gives the game away as surely as a warning banner
+would.
+
+The verdict is there, but only as a **mark**: the twelve hour markers are grey
+while things are clear, amber at caution and red at alert. Nothing else on the
+page changes, there is no text, and a glance from across a room reads as
+somebody checking the time. A device whose screen announces that it has found
+a body camera is a device that announces it to the person wearing one.
+
+Minute ticks are deliberately absent — at this radius they turn into a grey
+band — and the hour hand moves with the minutes, as a real one does, which is
+720 positions round the dial rather than twelve. If the clock has never been
+set the face says `not set` rather than drawing midnight, which is what an
+unset clock would otherwise claim with total confidence.
+
+**The dial walks, slowly, so the panel does not keep it.** An AMOLED ages
+where it is lit, and this page is the one thing on the device that holds still
+indefinitely: a bright ring and twelve markers in the same pixels for as long
+as the device is on. So the whole face steps around a circle three pixels
+across, eight positions, one step a minute, which means no pixel holds a
+bright element for more than a few minutes at a time. The dial gives up three
+pixels of radius to pay for the room, out of 229.
+
+Three details make it invisible rather than merely present. The positions sit
+on a circle rather than a raster, so consecutive steps are adjacent and the
+dial never jumps across the face. The step comes from the clock rather than
+from a counter, so it is continuous across a reboot — a device restarted every
+morning would otherwise begin every day on the same eight pixels. And it is
+held still while the face is awake: the walk is about two pixels and nobody
+would call it wrong, but a dial that twitches while you are looking at it is a
+thing you would notice, and burn-in accrues over the hours when nobody is.
+
+The arithmetic for it lives in `observore_watch.c` beside the hands rather
+than in the display, so the host tests can hold it to the rule that matters:
+that the ring keeps its four-pixel margin at *every* step of the walk, not
+just at the one it happened to be drawn at on the bench. Checking only that
+the ring stays on the glass would have passed a dial that never paid for the
+walk at all — it would still have fitted, by one pixel, sitting on the bezel.
+
 ### Brightness that follows the room
 
 The Cheap Yellow Displays carry a photoresistor, and on the 3.5" board it is
