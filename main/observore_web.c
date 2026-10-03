@@ -832,6 +832,43 @@ static esp_err_t heap_handler(httpd_req_t *req)
     return send_json(req, body);
 }
 
+static esp_err_t census_handler(httpd_req_t *req)
+{
+    /* What the census knows, so that it can be judged before it is trusted.
+     *
+     * The address count is the number this exists to show. An identity seen
+     * under many addresses is ambiguous -- one device rotating, or several
+     * identical ones sharing an advert shape -- and nothing here can tell
+     * those apart. How often that happens is what decides whether suppression
+     * keyed on a fingerprint is viable at all, and it is invisible without
+     * this. */
+    const observore_census_entry_t *tab = NULL;
+    size_t n = observore_census_entries(&tab);
+    int day = observore_census_day(time(NULL));
+
+    char *body = s_body;
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, body, s_body_cap, 2);
+    observore_jb_printf(&jb,
+        "{\"day\":%d,\"min_days\":%d,\"window\":%d,\"addr_limit\":%d"
+        ",\"members\":[",
+        day, OBSERVORE_CENSUS_MIN_DAYS, OBSERVORE_CENSUS_WINDOW,
+        OBSERVORE_CENSUS_ADDRS);
+    for (size_t i = 0; i < n; i++) {
+        bool over = false;
+        int addrs = observore_census_addresses(tab[i].id, &over);
+        observore_jb_printf(&jb,
+            "%s{\"id\":\"%08lx\",\"days\":%d,\"household\":%s"
+            ",\"addresses\":%d,\"more\":%s,\"last_day\":%u}",
+            i ? "," : "", (unsigned long)tab[i].id,
+            observore_census_days_seen(tab[i].id, day),
+            observore_census_is_household(tab[i].id, day) ? "true" : "false",
+            addrs, over ? "true" : "false", (unsigned)tab[i].last_day);
+    }
+    observore_jb_close(&jb, "]}");
+    return send_json(req, body);
+}
+
 static esp_err_t update_handler(httpd_req_t *req)
 {
     esp_err_t err = observore_update_install();
@@ -983,6 +1020,7 @@ esp_err_t observore_web_start(void)
         {"/api/update/check", HTTP_POST, update_check_handler, false},
         {"/api/bright",    HTTP_POST, bright_handler,     false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
+        {"/api/census",    HTTP_GET,  census_handler,     false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},

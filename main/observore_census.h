@@ -65,11 +65,45 @@
  * the test. */
 #define OBSERVORE_CENSUS_DAY_MAX  65535
 
+/* How many distinct addresses one identity is tracked under.
+ *
+ * Eight, to match OBSERVORE_MUTE_ADDRESS_LIMIT -- the count at which the mute
+ * store retires a fingerprint rule for describing a kind of device rather than
+ * one. Measuring the census against the same number means the two can be
+ * compared directly when the suppression slice has to choose a threshold.
+ *
+ * What this measures, and what it does not. An identity seen under many
+ * addresses is ambiguous: it is either one device rotating its address, which
+ * is exactly what keying on the advert fingerprint is *for*, or several
+ * identical devices sharing a shape. The census cannot tell those apart, and
+ * neither can anything else here. What it can say is how often the ambiguous
+ * case arises at all -- which is the fact that decides whether suppression
+ * keyed on a fingerprint is viable, and the reason this is being measured
+ * before anything is suppressed.
+ */
+#define OBSERVORE_CENSUS_ADDRS 8
+
 typedef struct {
     uint32_t id;        /* opaque: whatever the caller uses to mean "this device" */
     uint16_t days;      /* bit 0 is `last_day`, bit n is n days before it */
     uint16_t last_day;  /* the day bit 0 refers to */
+    /* Sixteen-bit hashes of the addresses this identity has been seen under.
+     * Hashes rather than addresses: the question is how many, not which, and
+     * six bytes apiece would quadruple the table for an answer nobody needs.
+     * They do not decay -- a device that rotated through eight addresses last
+     * month really has been seen under eight, and that is the measurement. */
+    uint16_t addr[OBSERVORE_CENSUS_ADDRS];
+    uint8_t  addr_n;    /* how many of addr[] are in use */
+    uint8_t  addr_over; /* a further distinct address arrived with the set full */
 } observore_census_entry_t;
+
+/* The stored format. Version 1 was this table without the address set, and is
+ * discarded rather than read: at eight bytes an entry against this one's
+ * larger size, an old blob with an even number of entries divides evenly into
+ * the new size and would restore as half as many entries of garbage. That is
+ * the same trap the touch calibration hit, and the answer is the same one --
+ * record which code wrote it rather than trying to recognise the shape. */
+#define OBSERVORE_CENSUS_FORMAT 2
 
 /* The local day a timestamp falls in, or OBSERVORE_CENSUS_NO_DAY.
  *
@@ -88,9 +122,16 @@ int observore_census_day_from_tm(const struct tm *lt);
 
 void observore_census_init(void);
 
-/* Record that `id` was seen on `day`. Repeat sightings on the same day are
- * the normal case and cost nothing. */
-void observore_census_note(uint32_t id, int day);
+/* Record that `id` was seen on `day`, at address `mac` (six bytes, or NULL
+ * when there is no address to attribute it to). Repeat sightings on the same
+ * day at the same address are the normal case and cost nothing. */
+void observore_census_note(uint32_t id, int day, const uint8_t *mac);
+
+/* How many distinct addresses `id` has been seen under, saturating at
+ * OBSERVORE_CENSUS_ADDRS. `over`, if given, is set when more arrived after
+ * the set was full -- so "8" and "8 and counting" are distinguishable, which
+ * matters when the number is being compared against a limit. */
+int observore_census_addresses(uint32_t id, bool *over);
 
 /* Whether `id` is furniture as of `day`: seen on at least
  * OBSERVORE_CENSUS_MIN_DAYS distinct days inside the trailing window. */
@@ -109,8 +150,13 @@ void observore_census_counts(int day, int *household, int *tracked);
  * entries and points `out` at them. */
 size_t observore_census_entries(const observore_census_entry_t **out);
 
-/* Replace the table wholesale, from a blob previously saved. A blob that is
- * not a whole number of entries, or is longer than the table, is refused:
- * restoring half an entry is worse than starting empty. Returns false if the
- * blob was rejected. */
+/* Serialise the table, header and all, into `out`. Returns the number of
+ * bytes the blob needs; with `out` NULL or `cap` too small it writes nothing
+ * and returns that size, so a caller can ask first. */
+size_t observore_census_blob(void *out, size_t cap);
+
+/* Replace the table wholesale, from a blob previously saved. A blob whose
+ * header does not say this code wrote it, or whose length disagrees with its
+ * own header, is refused: restoring half an entry is worse than starting
+ * empty. Returns false if the blob was rejected. */
 bool observore_census_restore(const void *blob, size_t len);

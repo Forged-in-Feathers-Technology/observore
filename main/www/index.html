@@ -261,6 +261,26 @@
   </div>
 </div>
 
+<div class="panel">
+  <h2>Household census <span id="censusinfo" class="dim"></span></h2>
+  <div class="add">
+    <span class="note">What this device keeps seeing, counted in days rather
+      than sightings: a thing is &ldquo;household&rdquo; once it has been
+      around on separate days, not once it has been around a lot.
+      <strong>Nothing is suppressed on the strength of this yet.</strong> It is
+      here to be judged before it is trusted.</span>
+  </div>
+  <div class="add">
+    <span class="note"><strong>Addresses</strong> is the column to watch. One
+      identity seen under many addresses is either a single device rotating
+      &mdash; which is what keying on the advert&rsquo;s shape is for &mdash;
+      or several identical devices sharing that shape. Nothing here can tell
+      those apart, so how often it happens is what decides whether suppressing
+      by shape is safe at all.</span>
+  </div>
+  <div class="rules" id="census"></div>
+</div>
+
 <div class="panel" id="screenpanel" hidden>
   <h2>Screen</h2>
   <div class="add">
@@ -647,6 +667,49 @@ function renderHistory(list) {
   $('histinfo').textContent = list.length ? list.length + ' kept' : 'nothing recorded yet';
 }
 
+function renderCensus(c) {
+  const box = $('census');
+  box.textContent = '';
+  const n = (c.members || []).length;
+  const hh = (c.members || []).filter(m => m.household).length;
+  $('censusinfo').textContent = n
+    ? hh + ' household of ' + n + ' known \u2014 ' + c.min_days +
+      ' separate days in ' + c.window + ' earns it'
+    : 'nothing learned yet';
+  if (!n) {
+    box.textContent = 'Nothing yet. A device has to be around on ' +
+      c.min_days + ' separate days before it counts as household.';
+    return;
+  }
+  const t = document.createElement('table');
+  const head = document.createElement('tr');
+  ['identity', 'days', 'addresses', ''].forEach(h => {
+    const th = document.createElement('th');
+    th.textContent = h;
+    head.appendChild(th);
+  });
+  t.appendChild(head);
+  /* Most days first: the furniture at the top, the passers-by below. */
+  const rows = (c.members || []).slice().sort((a, b) => b.days - a.days);
+  for (const m of rows) {
+    const tr = document.createElement('tr');
+    cell(tr, 'mac', m.id);
+    cell(tr, '', m.days + ' / ' + c.min_days);
+    /* "and counting" matters: at the limit the count has stopped being a
+       count, and that is exactly when it is being compared to a limit. */
+    cell(tr, '', m.addresses + (m.more ? '+' : ''));
+    tagCell(tr, m.household ? 'clear' : 'dim',
+            m.household ? 'household' : 'seen');
+    if (m.addresses >= c.addr_limit) {
+      tr.title = 'Seen under ' + m.addresses + (m.more ? ' or more' : '') +
+                 ' addresses: one device rotating, or several alike. ' +
+                 'Cannot be told apart from here.';
+    }
+    t.appendChild(tr);
+  }
+  box.appendChild(t);
+}
+
 async function refreshLive() {
   if (locked) return;
   errors.length = 0;
@@ -658,6 +721,8 @@ async function refreshLive() {
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory((await getJSON('/api/history', { history: [] })).history);
+  renderCensus(await getJSON('/api/census',
+    { members: [], min_days: 3, window: 16, addr_limit: 8, day: -1 }));
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString() +
     (errors.length ? ' — failed: ' + errors.join('; ') : '');
 }
