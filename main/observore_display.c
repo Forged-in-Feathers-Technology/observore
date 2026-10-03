@@ -59,6 +59,7 @@
 #include "observore_nvs.h"
 #include "observore_runs.h"
 #include "observore_wifi.h"
+#include "observore_touchcal.h"
 #include "observore_touch.h"
 #include "observore_update.h"
 #include "observore_util.h"
@@ -1364,28 +1365,47 @@ static void calibrate_poll(void)
         return;
     }
 
-    /* Two corners, each inset by a known fraction of the screen, so the raw
-     * span is scaled back out to what the full sheet would read. Without
-     * that the map is short by the inset at both ends and every press lands
-     * slightly towards the middle. */
-    int span_x = s_cal_raw_x[1] - s_cal_raw_x[0];
-    int span_y = s_cal_raw_y[1] - s_cal_raw_y[0];
-    int used_x = COLS - 1 - 2 * CAL_INSET_COLS;
-    int used_y = ROWS - 1 - 2 * CAL_INSET_ROWS;
-    int full_x = used_x > 0 ? span_x * (COLS - 1) / used_x : span_x;
-    int full_y = used_y > 0 ? span_y * (ROWS - 1) / used_y : span_y;
-    int pad_x  = (full_x - span_x) / 2;
-    int pad_y  = (full_y - span_y) / 2;
+    /* Where the two targets actually were, in pixels: the centre of the grid
+     * cell each cross was drawn in.
+     *
+     * Pixels rather than cells, because the arithmetic pairs a raw channel
+     * with a screen axis and the two axes of this grid are not the same shape
+     * -- a cell is eight pixels wide and sixteen tall. Working in cells and
+     * then dividing by a count of cells happens to cancel on one axis and
+     * not the other, which is the sort of thing that looks right in the
+     * source and is wrong on the glass. */
+    const int tx0 = INSET_X + CAL_INSET_COLS * OBSERVORE_FONT_W + OBSERVORE_FONT_W / 2;
+    const int ty0 = INSET_Y + CAL_INSET_ROWS * OBSERVORE_FONT_H + OBSERVORE_FONT_H / 2;
+    const int tx1 = INSET_X + (COLS - 1 - CAL_INSET_COLS) * OBSERVORE_FONT_W
+                    + OBSERVORE_FONT_W / 2;
+    const int ty1 = INSET_Y + (ROWS - 1 - CAL_INSET_ROWS) * OBSERVORE_FONT_H
+                    + OBSERVORE_FONT_H / 2;
 
-    int lo_x = s_cal_raw_x[0] - pad_x, hi_x = s_cal_raw_x[1] + pad_x;
-    int lo_y = s_cal_raw_y[0] - pad_y, hi_y = s_cal_raw_y[1] + pad_y;
-    if (lo_x > hi_x) { int t = lo_x; lo_x = hi_x; hi_x = t; }
-    if (lo_y > hi_y) { int t = lo_y; lo_y = hi_y; hi_y = t; }
+    observore_touchcal_t cal;
+    bool solved = observore_touchcal_solve(
+        s_cal_raw_x[0], s_cal_raw_y[0], s_cal_raw_x[1], s_cal_raw_y[1],
+        tx0, ty0, tx1, ty1, DISP_W, DISP_H,
+#if CONFIG_OBSERVORE_TOUCH_SWAP_XY
+        true,
+#else
+        false,
+#endif
+        &cal);
 
-    observore_touch_set_bounds(lo_x, hi_x, lo_y, hi_y);
     s_cal_step = -1;
+    if (!solved) {
+        /* The presses could not describe a sheet -- the same spot twice, or a
+         * channel answering with a stuck value. Keeping the old bounds beats
+         * installing a mapping already known to be wrong. */
+        snprintf(s_notice, sizeof(s_notice), " calibration not usable -- unchanged");
+        s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
+        s_dirty = true;
+        return;
+    }
+
+    observore_touch_set_bounds(cal.lo_x, cal.hi_x, cal.lo_y, cal.hi_y);
     snprintf(s_notice, sizeof(s_notice), " calibrated: x %d-%d y %d-%d",
-             lo_x, hi_x, lo_y, hi_y);
+             cal.lo_x, cal.hi_x, cal.lo_y, cal.hi_y);
     s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
     s_dirty = true;
 }
