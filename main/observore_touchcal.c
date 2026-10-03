@@ -61,3 +61,30 @@ bool observore_touchcal_solve(int raw_x0, int raw_y0, int raw_x1, int raw_y1,
     *out = got;
     return true;
 }
+
+static int clamp(int v, int lo, int hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+bool observore_touchcal_fit(observore_touchcal_t *c, int raw_max)
+{
+    if (!c || raw_max <= OBSERVORE_TOUCHCAL_MIN_SPAN) {
+        return false;
+    }
+    if (c->hi_x < c->lo_x || c->hi_y < c->lo_y) {
+        return false;
+    }
+    observore_touchcal_t fitted = {
+        .lo_x = clamp(c->lo_x, 0, raw_max), .hi_x = clamp(c->hi_x, 0, raw_max),
+        .lo_y = clamp(c->lo_y, 0, raw_max), .hi_y = clamp(c->hi_y, 0, raw_max),
+    };
+    /* Clamping can only narrow a span, so the floor is re-checked afterwards:
+     * bounds that were mostly outside the range come back as a sliver. */
+    if (fitted.hi_x - fitted.lo_x < OBSERVORE_TOUCHCAL_MIN_SPAN ||
+        fitted.hi_y - fitted.lo_y < OBSERVORE_TOUCHCAL_MIN_SPAN) {
+        return false;
+    }
+    *c = fitted;
+    return true;
+}

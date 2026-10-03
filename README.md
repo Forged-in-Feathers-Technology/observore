@@ -1764,6 +1764,26 @@ rather than divided by.
 A capacitive panel has nothing to calibrate: the FT3168 reports panel pixels
 directly, so the round board has no such action and never needed one.
 
+**A calibration saved before v0.13.0 is discarded, and has to be done again.**
+Until then the arithmetic paired each touch channel with the wrong screen axis,
+so every calibration written by an older build is wrong -- and keeping one
+across an upgrade would look exactly like the bug never being fixed, because
+the symptom is identical. The device says so on the serial log and falls back
+to the compiled bounds, which are merely somebody else's measurements rather
+than impossible ones.
+
+That check is on *provenance*, not on the numbers, and the difference is worth
+recording because the first attempt got it wrong. Recognising a bad calibration
+by its values looks easy -- a span wider than the converter can read, an
+endpoint below zero -- and does not work. Extrapolating from inset targets
+assumes the sheet is linear, and near the bezel it is not quite, so a correct
+calibration can overshoot both ends by a few counts and exceed the range too.
+One board's bad bounds were 136 counts over, well inside any tolerance wide
+enough to admit a real one. And on a panel whose usable range is narrower, the
+same bug produces bounds entirely inside the valid range and is undetectable by
+value at all. So the stored calibration now records which arithmetic made it,
+and anything that does not say is not trusted.
+
 **Porting a new board** is the case calibration does not cover, because two
 of the three variables are structural rather than per-unit: whether the touch
 axes are crossed relative to the landscape display, and which way each one

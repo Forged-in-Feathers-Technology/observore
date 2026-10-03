@@ -63,3 +63,29 @@ bool observore_touchcal_solve(int raw_x0, int raw_y0, int raw_x1, int raw_y1,
                               int sx0, int sy0, int sx1, int sy1,
                               int disp_w, int disp_h, bool swap,
                               observore_touchcal_t *out);
+
+/* Fit bounds to what the controller is physically able to report, or reject
+ * them as something it could not have produced. `raw_max` is the largest
+ * reading the converter can return -- 4095 for the XPT2046's twelve bits.
+ *
+ * An endpoint outside the range is ordinary rather than broken.
+ * Extrapolating from inset targets assumes the sheet is linear, and near the
+ * bezel it is not quite, so a correct calibration can land a few counts past
+ * either end. Those are clamped, because the sheet does stop there.
+ *
+ * What it does NOT do is decide whether a calibration came from sound
+ * arithmetic. That was the first design -- recognise the bounds the bug fixed
+ * in #149 produced, by their being impossible -- and the tests said it cannot
+ * work: a real calibration that overshoots both ends has a span wider than the
+ * converter too, one bench board's bad bounds were only 136 counts over, and
+ * on a panel with a narrower usable range the same bug lands entirely inside
+ * the valid range. Provenance is recorded in the stored calibration instead;
+ * this is only about fitting numbers to hardware.
+ *
+ * Clamping can only narrow a span, so the floor is re-checked after it:
+ * bounds that were mostly outside the range come back as a sliver, and a
+ * sliver is not a calibration.
+ *
+ * Returns false when the bounds are unusable, and leaves `*c` alone.
+ */
+bool observore_touchcal_fit(observore_touchcal_t *c, int raw_max);
