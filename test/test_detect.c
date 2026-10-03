@@ -15,6 +15,7 @@
 #include "observore_rtc.h"
 #include "observore_census.h"
 #include "observore_touchcal.h"
+#include "observore_tap.h"
 #include "observore_watch.h"
 #include <limits.h>
 #include "observore_surroundings.h"
@@ -930,6 +931,117 @@ static void test_calibration_recovers_the_sheet(void)
     CHECK(cal.lo_x < cal.hi_x && cal.lo_y < cal.hi_y, "and come out ordered");
     CHECK(cal.lo_x >= LO_X - tol_x && cal.lo_x <= LO_X + tol_x,
           "to the same sheet");
+}
+
+/* One press, fed sample by sample, the way the poll task does it. Returns how
+ * many taps came out, and where the last one landed. */
+static int feed(const bool *samples, int n, int64_t release_us,
+                int *last_x, int *last_y)
+{
+    observore_tap_state_t st;
+    observore_tap_reset(&st);
+    int taps = 0;
+    for (int i = 0; i < n; i++) {
+        int tx = -1, ty = -1;
+        /* 20 ms a sample, which is the poll interval the task runs at, and the
+         * position walks a little so a tap reporting the wrong end of the
+         * press is visible. */
+        if (observore_tap_sample(&st, samples[i], 10 + i, 20 + i,
+                                 (int64_t)i * 20 * 1000, release_us,
+                                 &tx, &ty)) {
+            taps++;
+            if (last_x) { *last_x = tx; }
+            if (last_y) { *last_y = ty; }
+        }
+    }
+    return taps;
+}
+
+static void test_one_finger_is_one_tap(void)
+{
+    banner("one finger is one tap, even when the pressure dips");
+
+    const int64_t gated = 0;                  /* boards with an interrupt line */
+    const int64_t polled = 3 * 20 * 1000;     /* boards without one */
+
+    /* A clean press: contact for five polls, then gone. */
+    const bool clean[] = {false, true, true, true, true, true, false, false, false, false};
+    int x = -1, y = -1;
+    CHECK(feed(clean, 10, gated, &x, &y) == 1, "a clean press is one tap, gated");
+    CHECK(feed(clean, 10, polled, &x, &y) == 1, "a clean press is one tap, polled");
+
+    /* And it reports where the finger went down, not where it left. The
+     * position walks by one per sample, and contact begins at sample 1. */
+    CHECK(x == 11 && y == 21, "a tap reports where the press began");
+
+    /* The case this exists for: one sample in the middle reads below the
+     * pressure threshold while the finger is still on the glass.
+     *
+     * Gated, that is corroborated by the interrupt line, so the old behaviour
+     * is kept. Polled, pressure is the only witness, and believing it splits
+     * one press into two taps -- which on a keyboard is two characters. */
+    /* Four trailing samples without contact, not three: the window has to
+     * actually expire for the press to end, and a shorter tail leaves the
+     * press still open at the end of the array -- which is how the first
+     * version of this check failed for the wrong reason. */
+    const bool dip[] = {false, true, true, false, true, true, true,
+                        false, false, false, false};
+    CHECK(feed(dip, 11, polled, NULL, NULL) == 1,
+          "a one-sample dip does not split a press, polled");
+    CHECK(feed(dip, 11, gated, NULL, NULL) == 2,
+          "and with no release window it does split -- which is the mechanism");
+
+    /* Two dips in one press, because a flickering reading does not flicker
+     * politely once. */
+    const bool dips[] = {false, true, false, true, true, false, true, true, false, false, false, false};
+    CHECK(feed(dips, 12, polled, NULL, NULL) == 1, "two dips are still one press");
+
+    /* A dip at the very start, before the press is established. */
+    const bool late[] = {false, false, true, false, true, true, true, true,
+                         false, false, false, false};
+    CHECK(feed(late, 12, polled, NULL, NULL) == 1,
+          "a dip just after contact does not start a second press");
+
+    /* What it must NOT do: merge two deliberate presses. A person typing
+     * leaves far longer than three polls between keystrokes, and if this
+     * swallowed the gap, a password would come out short. */
+    const bool twice[] = {false, true, true, true, false, false, false, false, false,
+                          true, true, true, false, false, false, false};
+    CHECK(feed(twice, 16, polled, NULL, NULL) == 2,
+          "two presses separated by more than the window are two taps");
+
+    /* A contact too brief to be deliberate is noise from the radio beside the
+     * panel, not a finger. One 20 ms sample is under the 30 ms floor. */
+    const bool brief[] = {false, true, false, false, false, false};
+    CHECK(feed(brief, 6, polled, NULL, NULL) == 0, "a single-sample contact is noise, polled");
+    CHECK(feed(brief, 6, gated, NULL, NULL) == 0, "and gated");
+
+    /* The release window must not pay for the minimum contact. Waiting to be
+     * sure the finger has gone is not time the finger was there, so a brief
+     * contact plus a long wait is still noise -- measuring to "now" instead of
+     * to when contact was lost would let the window itself promote it. */
+    const bool brief_long_wait[] = {false, true, false, false, false, false, false, false, false, false};
+    CHECK(feed(brief_long_wait, 10, polled, NULL, NULL) == 0,
+          "the wait for a release does not turn noise into a tap");
+
+    /* A long hold is one tap, on release, not a stream of them -- which is
+     * what the keyboard depends on for a held key to type one character. */
+    bool hold[60];
+    for (int i = 0; i < 60; i++) { hold[i] = (i >= 2 && i < 55); }
+    CHECK(feed(hold, 60, polled, NULL, NULL) == 1, "a one-second hold is one tap");
+
+    /* Nothing at all, and a press that never ends, both produce nothing. */
+    const bool never[] = {false, false, false, false};
+    CHECK(feed(never, 4, polled, NULL, NULL) == 0, "an untouched panel reports nothing");
+    const bool still_down[] = {false, true, true, true, true, true};
+    CHECK(feed(still_down, 6, polled, NULL, NULL) == 0,
+          "a finger still on the glass has not tapped yet");
+
+    /* A NULL state is refused rather than dereferenced. */
+    CHECK(!observore_tap_sample(NULL, true, 0, 0, 0, 0, NULL, NULL),
+          "no state is not a crash");
+    observore_tap_reset(NULL);
+    CHECK(1, "resetting nothing is not a crash");
 }
 
 static void test_bcd(void)
@@ -3372,6 +3484,7 @@ int main(void)
     test_the_dial_wanders_without_leaving_the_glass();
     test_calibration_recovers_the_sheet();
     test_the_census_earns_membership_over_days();
+    test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();

@@ -1,3 +1,4 @@
+#include "observore_tap.h"
 #include "observore_touch.h"
 
 #include "sdkconfig.h"
@@ -76,6 +77,23 @@ static const char *TAG = "observore.touch";
  * cycle spends about thirty seconds inside a blocking passive scan, and a
  * screen that ignores a finger for thirty seconds is a screen nobody trusts. */
 #define POLL_MS   20
+
+/* How long a loss of contact must persist before a press is over.
+ *
+ * Zero where the controller's interrupt line is wired: the pressure reading
+ * and the interrupt agree before a press ends, so a single sub-threshold
+ * sample is already corroborated, and these boards work as they are.
+ *
+ * On a board with no interrupt line -- the NM-CYD-C5, whose vendor pin table
+ * prints "---" for it -- pressure is the only witness, and one 20 ms sample
+ * is enough to end a press a finger is still making. Three polls is long
+ * enough to ride out a dip and far shorter than the gap between two
+ * keystrokes, which is what stops it merging them. */
+#if CONFIG_OBSERVORE_TOUCH_POLLED
+#define RELEASE_US (3 * POLL_MS * 1000)
+#else
+#define RELEASE_US 0
+#endif
 /* Five SPI transactions and a five-element sort need very little -- but this
  * task also logs, and formatting one line costs about a kilobyte of stack on
  * this chip. Cut to 1536 by eye during a heap fix, it survived the shipping
@@ -94,10 +112,9 @@ static int64_t s_task_started_us;
 
 /* Press state, owned by the poll task and read under the lock. */
 static SemaphoreHandle_t s_lock;
-static bool    s_down;
+static bool    s_down;            /* mirrors s_tap.down, for the public read */
 static int     s_x, s_y;          /* where the finger is now */
-static int     s_down_x, s_down_y; /* where it went down */
-static int64_t s_down_us;
+static observore_tap_state_t s_tap;
 static bool    s_tap_pending;
 static int     s_tap_x, s_tap_y;
 
@@ -368,10 +385,6 @@ static bool sample(int *x, int *y)
      * one of its two plates partway through bring-up, which masks any smaller
      * effect. It costs about a millisecond, inside the interrupt gate, so it
      * only ever happens with a finger already on the glass. */
-    /* The backlight is a PWM whose switching sits inside the controller's
-     * measuring band, so it is held steady across a measurement. It costs
-     * about a millisecond, inside the interrupt gate, so it only ever happens
-     * with a finger already on the glass. */
     observore_display_backlight_hold();
     int z = pressure();
     int raw_x = z >= Z_THRESHOLD ? median_channel(CMD_X) : -1;
@@ -533,23 +546,14 @@ static void touch_task(void *arg)
         int64_t now = esp_timer_get_time();
 
         LOCK();
-        if (down && !s_down) {
-            s_down    = true;
-            s_down_x  = sx;
-            s_down_y  = sy;
-            s_down_us = now;
-        } else if (!down && s_down) {
-            /* A contact too brief to be deliberate is electrical noise from
-             * the radio alongside it, not a finger. A tap reports where the
-             * finger went down, not where it left: a thumb rolls a few pixels
-             * on release and a button should not care. */
-            if (now - s_down_us >= 30 * 1000) {
-                s_tap_pending = true;
-                s_tap_x = s_down_x;
-                s_tap_y = s_down_y;
-            }
-            s_down = false;
+        int tx = 0, ty = 0;
+        if (observore_tap_sample(&s_tap, down, sx, sy, now, RELEASE_US,
+                                 &tx, &ty)) {
+            s_tap_pending = true;
+            s_tap_x = tx;
+            s_tap_y = ty;
         }
+        s_down = s_tap.down;
         if (down) {
             s_x = sx;
             s_y = sy;
