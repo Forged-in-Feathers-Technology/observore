@@ -788,6 +788,7 @@ static void bl_init(void)
     if (s_bl_level == OBSERVORE_BRIGHT_AUTO && !observore_display_has_light_sensor()) {
         s_bl_level = 0;
     }
+    s_bl_level = 0;   /* TEMP: full, for the blink test below */
 
 #if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
     /* Nothing to set up: the stored level goes straight to the panel. */
@@ -2141,6 +2142,31 @@ static void ui_task(void *arg)
             reported = spare;
             ESP_LOGI(TAG, "%s: %u bytes of %d", "drawing stack headroom",
                      (unsigned)spare, UI_STACK);
+        }
+        {   /* TEMP: drive the backlight hard on and hard off every three
+             * seconds and read the board's own photoresistor each time. If the
+             * reading tracks the pin, the backlight lights the panel and the
+             * fault is the image; if it does not move, the backlight is not
+             * lighting at all. The board answers this without anybody looking
+             * at it. */
+            static int64_t s_blink_us;
+            static int s_phase;
+            int64_t now_b = esp_timer_get_time();
+            if (now_b - s_blink_us > 3 * 1000000) {
+                s_blink_us = now_b;
+                s_phase ^= 1;
+                ledc_set_duty(BL_MODE, BL_CHANNEL, s_phase ? 255 : 0);
+                ledc_update_duty(BL_MODE, BL_CHANNEL);
+                vTaskDelay(pdMS_TO_TICKS(300));
+                int raw = -1;
+#if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
+                if (s_ldr) {
+                    adc_oneshot_read(s_ldr, (adc_channel_t)s_ldr_channel, &raw);
+                }
+#endif
+                ESP_LOGW(TAG, "TEMP blink: duty=%d ldr_raw=%d",
+                         s_phase ? 255 : 0, raw);
+            }
         }
 #if CONFIG_OBSERVORE_TOUCH
         /* Asked for before the display lock is taken, never while holding it:

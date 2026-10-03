@@ -372,7 +372,7 @@ static void census_sweep(int64_t now_us)
         for (size_t i = 0; i < n; i++) {
             uint32_t id = census_id(&chunk[i]);
             if (id != 0) {
-                observore_census_note(id, day);
+                observore_census_note(id, day, chunk[i].mac);
             }
         }
     }

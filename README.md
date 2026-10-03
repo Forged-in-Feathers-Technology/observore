@@ -1473,6 +1473,43 @@ interesting reading while nothing acts on this: `known` climbing while
 `household` stays at zero would mean the rule is never being satisfied, and
 there is no other way to see that from outside.
 
+### Counting the addresses, which is the number that decides the next step
+
+The console grows a **Household census** panel listing what the device has
+learned: each identity, how many of the required days it has, whether it counts
+as household, and **how many distinct addresses it has been seen under**. The
+same thing is on `/api/census`, which like the rest of the detection data needs
+the console password.
+
+The address count is the column that matters, and it is there because of a
+limitation rather than a feature. An identity seen under many addresses is
+*ambiguous*: either one device rotating its address — which is precisely what
+keying on the advert's shape is for — or several identical devices sharing that
+shape. **Nothing here can tell those apart**, and no amount of further
+cleverness on one device will. What the count can say is how often the
+ambiguous case arises at all, and that is the fact which decides whether
+suppression keyed on a fingerprint is viable. The mute store already retires a
+fingerprint rule that covers more than eight addresses for exactly this reason;
+the census is measured against the same eight so the two compare directly.
+
+It is a true count of distinct addresses, not a count of changes — up to eight,
+after which it saturates and says so with a `+`. At the limit, "eight" and
+"eight and still arriving" mean different things about a device, and the
+difference is lost by a bare count. The addresses are stored as sixteen-bit
+hashes, because the question is how many rather than which, and they do **not**
+decay with the day window: a device that rotated through eight addresses a
+fortnight ago really has been seen under eight. Membership is a claim about
+now; this is a claim about what the identity is.
+
+**A census saved by v0.13.0 is discarded on upgrade**, because the stored entry
+grew to hold the address set. The blob now carries a header saying which code
+wrote it, and the reason is worth stating: the old entry was eight bytes and
+this one is larger, so an old table with the right number of entries divides
+evenly into the new entry size and would have restored as a smaller number of
+plausible-looking nonsense. That is the same trap the touch calibration fell
+into, and the answer is the same — record the provenance rather than try to
+recognise the shape. The device says so and rebuilds over the following days.
+
 ## The screen
 
 The ESP32-2432S028R — the 2.8" "Cheap Yellow Display" — is the one board here
