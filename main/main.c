@@ -14,6 +14,7 @@
 #include "observore_ble.h"
 #include <limits.h>
 
+#include "observore_census.h"
 #include "observore_clock.h"
 #include "observore_history.h"
 #include "observore_improv.h"
@@ -287,6 +288,96 @@ static void button_task(void *arg)
     }
 }
 
+/* What the census calls one device.
+ *
+ * The fingerprint where there is one, because it hashes the shape of the
+ * advert rather than the address, and the household's own phones rotate their
+ * addresses every fifteen minutes. Keyed on the address they would never
+ * accumulate a second day, which would make the census useless for the one
+ * case #132 most wants it for.
+ *
+ * Failing that, the address -- but only a fixed one. A random address with no
+ * stable advert shape has no identity to remember at all: noting it would
+ * fill the table with single-day entries that can never become furniture, and
+ * evict the furniture to do it.
+ *
+ * This is the decision in this change most worth arguing with. A fingerprint
+ * identifies a *kind* of device, so two identical handsets share one, and the
+ * mute store already has to disable fingerprint rules that turn out to cover
+ * a population (OBSERVORE_MUTE_ADDRESS_LIMIT, eight). The census will need the
+ * same guard before it suppresses anything -- which is a reason to gather the data
+ * first and see how often it happens here.
+ */
+static uint32_t census_id(const observore_event_t *e)
+{
+    if (e->fingerprint != 0) {
+        return e->fingerprint;
+    }
+    if (e->addr_random) {
+        return 0;
+    }
+    /* FNV-1a over the address, offset basis nudged so a MAC hash and a
+     * fingerprint cannot collide by being the same arithmetic over different
+     * inputs. */
+    uint32_t h = 0x811C9DC5u ^ 0x4D41435Bu;   /* "MAC[" */
+    for (int i = 0; i < OBSERVORE_MAC_LEN; i++) {
+        h = (h ^ e->mac[i]) * 16777619u;
+    }
+    return h ? h : 1u;   /* 0 means "no identity", so never return it */
+}
+
+/* Note everything currently tracked against today, once a minute.
+ *
+ * A sweep rather than a hook on each sighting. Three reasons, in order of how
+ * much they mattered:
+ *
+ *   The sighting path is the hot one -- every advert, every beacon -- and the
+ *   census only ever needs to learn one thing per device per day. Writing to
+ *   it from there would be thousands of calls to record a fact that stopped
+ *   changing at breakfast.
+ *
+ *   The sighting path has no clock. It is handed a monotonic microsecond
+ *   count, correctly, because nothing in classification should depend on
+ *   whether SNTP has answered. The census needs a date, so it is fed from
+ *   here, where the clock is already a consideration.
+ *
+ *   A device has to still be there when the sweep comes round, which biases
+ *   the census towards things that are present rather than things that
+ *   flickered past. That is a second rule arriving by accident, so it is
+ *   written down rather than left in the cadence: a minute of presence, not a
+ *   single frame, is what gets a device a day.
+ *
+ * Nothing acts on the result yet. This is here so the table has had weeks to
+ * be wrong in public before anything is suppressed on the strength of it.
+ */
+static void census_sweep(int64_t now_us)
+{
+    static int64_t s_last_us;
+    if (s_last_us != 0 && now_us - s_last_us < 60 * 1000000LL) {
+        return;
+    }
+    s_last_us = now_us;
+
+    int day = observore_census_day(time(NULL));
+    if (day == OBSERVORE_CENSUS_NO_DAY) {
+        return;      /* no date yet; the first uplink will bring one */
+    }
+
+    /* Chunked, like the baseline: a snapshot of all 192 slots is ~23 KB and
+     * the boards that most need this have no PSRAM to put it in. */
+    observore_event_t chunk[16];
+    size_t cursor = 0, n;
+    while ((n = observore_track_all_from(chunk, sizeof(chunk) / sizeof(chunk[0]),
+                                         &cursor)) > 0) {
+        for (size_t i = 0; i < n; i++) {
+            uint32_t id = census_id(&chunk[i]);
+            if (id != 0) {
+                observore_census_note(id, day);
+            }
+        }
+    }
+}
+
 void app_main(void)
 {
     /* The banner names the build, not just the program.
@@ -320,6 +411,9 @@ void app_main(void)
      * and a device flashed with an older build keeps everything under that
      * name. */
     observore_nvs_migrate();
+    /* Before the clock, deliberately: the table is read from flash here, and
+     * what it holds is days rather than anything relative to this boot. */
+    observore_census_init();
     /* Started here rather than on the first uplink: it renews its servers on
      * every new IP, so one init covers every window the device is associated
      * for, and the times it hands back are retroactive anyway. */
@@ -375,6 +469,7 @@ void app_main(void)
 
     int64_t last_heartbeat_us = 0;
     int64_t uplink_lost_us = 0;
+    int64_t last_census_us = 0;
 
     for (;;) {
         int64_t now = esp_timer_get_time();
@@ -383,6 +478,7 @@ void app_main(void)
          * number so it never has to know a sensor exists. */
         observore_track_set_at_far_end(observore_motion_at_far_end());
         observore_track_set_journeys(observore_motion_journeys());
+        census_sweep(now);
 
         if (observore_display_take_baseline_request()) {
             s_baseline_requested = true;

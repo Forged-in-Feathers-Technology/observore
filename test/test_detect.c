@@ -13,6 +13,7 @@
 #include "observore_mute.h"
 #include "observore_battery.h"
 #include "observore_rtc.h"
+#include "observore_census.h"
 #include "observore_watch.h"
 #include <limits.h>
 #include "observore_surroundings.h"
@@ -595,6 +596,203 @@ static void test_the_dial_wanders_without_leaving_the_glass(void)
     CHECK(ax == 0 && ay == 0, "radius zero does not move the dial");
     observore_watch_shift(5, -3, &ax, &ay);
     CHECK(ax == 0 && ay == 0, "a negative radius is treated as none");
+}
+
+static void test_the_census_earns_membership_over_days(void)
+{
+    banner("the census counts days, not sightings");
+
+    /* Days from 2000-01-01, against dates worked out independently. The
+     * arithmetic is written out rather than taken from mktime(), so it is
+     * worth pinning to real dates including the awkward ones. */
+    struct tm t = {0};
+    t.tm_year = 100; t.tm_mon = 0; t.tm_mday = 1;     /* 2000-01-01 */
+    CHECK(observore_census_day_from_tm(&t) == 0, "2000-01-01 is day zero");
+    t.tm_mday = 2;
+    CHECK(observore_census_day_from_tm(&t) == 1, "and the next day is one");
+    t.tm_mon = 2; t.tm_mday = 1;                      /* 2000-03-01 */
+    CHECK(observore_census_day_from_tm(&t) == 60, "2000 was a leap year");
+    t.tm_year = 101; t.tm_mon = 0; t.tm_mday = 1;     /* 2001-01-01 */
+    CHECK(observore_census_day_from_tm(&t) == 366, "a leap year is 366 days");
+    t.tm_year = 124; t.tm_mon = 1; t.tm_mday = 29;    /* 2024-02-29 */
+    CHECK(observore_census_day_from_tm(&t) == 8825, "2024-02-29 exists and is 8825");
+    t.tm_year = 126; t.tm_mon = 9; t.tm_mday = 3;     /* 2026-10-03 */
+    CHECK(observore_census_day_from_tm(&t) == 9772, "today is 9772");
+
+    /* A clock that has not been set has no day. ESP-IDF starts at 1970 and
+     * every sighting before the first SNTP reply lands there, so this is the
+     * normal state for the first minute of every run rather than an edge. */
+    t.tm_year = 70; t.tm_mon = 0; t.tm_mday = 1;      /* 1970-01-01 */
+    CHECK(observore_census_day_from_tm(&t) == OBSERVORE_CENSUS_NO_DAY,
+          "1970 is an unset clock, not a date");
+    CHECK(observore_census_day_from_tm(NULL) == OBSERVORE_CENSUS_NO_DAY,
+          "no date at all is no day");
+
+    /* One evening is one day, however many sightings it holds. This is the
+     * whole point of the rule: a device at your elbow all evening is
+     * interesting precisely because it is not furniture. */
+    observore_census_init();
+    for (int i = 0; i < 500; i++) {
+        observore_census_note(0xAABBCCDD, 9000);
+    }
+    CHECK(observore_census_days_seen(0xAABBCCDD, 9000) == 1,
+          "five hundred sightings in one evening are one day");
+    CHECK(!observore_census_is_household(0xAABBCCDD, 9000),
+          "and one day is not furniture");
+
+    /* Three separate days are. */
+    observore_census_init();
+    observore_census_note(0x1111, 9000);
+    CHECK(!observore_census_is_household(0x1111, 9000), "one day: no");
+    observore_census_note(0x1111, 9001);
+    CHECK(!observore_census_is_household(0x1111, 9001), "two days: no");
+    observore_census_note(0x1111, 9002);
+    CHECK(observore_census_is_household(0x1111, 9002), "three days: furniture");
+    CHECK(observore_census_days_seen(0x1111, 9002) == 3, "and it says three");
+
+    /* Days need not be consecutive -- a printer nobody uses at the weekend is
+     * still furniture. */
+    observore_census_init();
+    observore_census_note(0x2222, 9000);
+    observore_census_note(0x2222, 9004);
+    observore_census_note(0x2222, 9008);
+    CHECK(observore_census_is_household(0x2222, 9008), "spread across a week still counts");
+
+    /* Decay, which the bitmap does by itself: a visitor's phone seen three
+     * days running stops being household once those days fall out of the
+     * window. */
+    observore_census_init();
+    observore_census_note(0x3333, 9000);
+    observore_census_note(0x3333, 9001);
+    observore_census_note(0x3333, 9002);
+    CHECK(observore_census_is_household(0x3333, 9002), "household the day they leave");
+    CHECK(observore_census_is_household(0x3333, 9010), "and still, a week later");
+    CHECK(!observore_census_is_household(0x3333, 9002 + OBSERVORE_CENSUS_WINDOW),
+          "but not once the window has passed over it");
+    CHECK(observore_census_days_seen(0x3333, 9002 + OBSERVORE_CENSUS_WINDOW) == 0,
+          "and nothing is remembered of it");
+
+    /* Sightings with no date are dropped rather than counted against day
+     * zero, which would hand membership to whatever was in the room during
+     * the first minute after every boot. */
+    observore_census_init();
+    for (int i = 0; i < 10; i++) {
+        observore_census_note(0x4444, OBSERVORE_CENSUS_NO_DAY);
+    }
+    int tracked = -1, tracked2 = -1;
+    observore_census_counts(9000, NULL, &tracked);
+    CHECK(tracked == 0, "an undated sighting records nothing at all");
+
+    /* The clock jumping forward by nine thousand days. This is not a
+     * hypothetical: it happens on every run, when SNTP answers and the day
+     * number goes from unset to real. A shift of sixteen or more on a
+     * uint16_t is undefined behaviour rather than zero, so the distance is
+     * bounded before it is used. */
+    observore_census_init();
+    observore_census_note(0x5555, 10);
+    observore_census_note(0x5555, 11);
+    observore_census_note(0x5555, 12);
+    CHECK(observore_census_is_household(0x5555, 12), "household before the jump");
+    CHECK(observore_census_days_seen(0x5555, 30000) == 0,
+          "a jump wider than the window clears the mask rather than wrapping it");
+    observore_census_note(0x5555, 30000);
+    CHECK(observore_census_days_seen(0x5555, 30000) == 1,
+          "and starts again from one day, not four");
+
+    /* A day the record cannot hold is refused rather than truncated. Sixteen
+     * bits run out in 2179, and a truncated day number is not a near miss: it
+     * claims a different date, and the window is then measured from it. This
+     * is here because the first version of this test asked about day 100000
+     * and got a confident wrong answer. */
+    observore_census_init();
+    observore_census_note(0x5556, OBSERVORE_CENSUS_DAY_MAX + 1);
+    observore_census_counts(9000, NULL, &tracked2);
+    CHECK(tracked2 == 0, "a date past 2179 records nothing rather than wrapping");
+    observore_census_note(0x5556, 9000);
+    CHECK(observore_census_days_seen(0x5556, OBSERVORE_CENSUS_DAY_MAX + 1) == 0,
+          "and asking about one answers nothing rather than guessing");
+    t.tm_year = 400; t.tm_mon = 0; t.tm_mday = 1;     /* 2300-01-01 */
+    CHECK(observore_census_day_from_tm(&t) == OBSERVORE_CENSUS_NO_DAY,
+          "a date beyond the record has no day number");
+
+    /* A clock corrected backwards must not rewrite history it cannot
+     * reconstruct. */
+    observore_census_init();
+    observore_census_note(0x6666, 9000);
+    observore_census_note(0x6666, 9001);
+    observore_census_note(0x6666, 9002);
+    observore_census_note(0x6666, 8990);   /* the clock steps back */
+    CHECK(observore_census_days_seen(0x6666, 9002) == 3,
+          "a backwards step does not shift the window the wrong way");
+    CHECK(observore_census_is_household(0x6666, 9002), "and membership survives it");
+
+    /* Asking a question must not change the answer to the next one. */
+    observore_census_init();
+    observore_census_note(0x7777, 9000);
+    observore_census_note(0x7777, 9001);
+    observore_census_note(0x7777, 9002);
+    (void)observore_census_days_seen(0x7777, 99999);   /* ages a copy, not the entry */
+    CHECK(observore_census_days_seen(0x7777, 9002) == 3,
+          "asking about the distant future does not erase what is known");
+
+    /* An unknown id is not furniture and is not an error. */
+    CHECK(!observore_census_is_household(0xDEAD, 9002), "an unknown device is not household");
+    CHECK(observore_census_days_seen(0xDEAD, 9002) == 0, "and has no days");
+
+    /* The table fills, and what goes is the oldest -- which on a table this
+     * size is the thing least likely to be furniture, because anything
+     * around every day is among the most recently seen. */
+    observore_census_init();
+    for (int i = 0; i < OBSERVORE_CENSUS_MAX; i++) {
+        observore_census_note(0x8000u + (uint32_t)i, 9000 + i);
+    }
+    observore_census_counts(9100, NULL, &tracked);
+    CHECK(tracked == OBSERVORE_CENSUS_MAX, "the table fills to its limit");
+    observore_census_note(0x9999, 9200);
+    observore_census_counts(9200, NULL, &tracked);
+    CHECK(tracked == OBSERVORE_CENSUS_MAX, "and does not grow past it");
+    CHECK(observore_census_days_seen(0x9999, 9200) == 1, "the newcomer is recorded");
+    CHECK(observore_census_days_seen(0x8000u, 9200) == 0, "the oldest was the one evicted");
+    CHECK(observore_census_days_seen(0x8000u + OBSERVORE_CENSUS_MAX - 1, 9200) != 0 ||
+          OBSERVORE_CENSUS_MAX - 1 >= OBSERVORE_CENSUS_WINDOW,
+          "the most recent was not");
+
+    /* Counts, for the console: how many are furniture and how many are merely
+     * known. The difference is the thing worth watching while nothing acts on
+     * this yet. */
+    observore_census_init();
+    observore_census_note(0xA1, 9000);
+    observore_census_note(0xA1, 9001);
+    observore_census_note(0xA1, 9002);   /* furniture */
+    observore_census_note(0xA2, 9002);   /* merely seen */
+    int household = -1;
+    observore_census_counts(9002, &household, &tracked);
+    CHECK(tracked == 2 && household == 1, "two known, one of them furniture");
+
+    /* Persistence. The blob is the table, so the check that matters is that a
+     * blob which is not a whole number of entries is refused rather than read
+     * as garbage -- the same trap the mute store was fixed for. */
+    const observore_census_entry_t *tab = NULL;
+    size_t n = observore_census_entries(&tab);
+    CHECK(n == 2 && tab != NULL, "the table is readable for saving");
+    observore_census_entry_t saved[2];
+    memcpy(saved, tab, sizeof(saved));
+
+    observore_census_init();
+    observore_census_counts(9002, NULL, &tracked);
+    CHECK(tracked == 0, "cleared");
+    CHECK(observore_census_restore(saved, sizeof(saved)), "a whole table restores");
+    CHECK(observore_census_is_household(0xA1, 9002), "membership survived the round trip");
+    CHECK(observore_census_days_seen(0xA2, 9002) == 1, "and so did the partial record");
+
+    CHECK(!observore_census_restore(saved, sizeof(saved) - 1), "half an entry is refused");
+    CHECK(!observore_census_restore(saved, 0), "an empty blob is refused");
+    CHECK(!observore_census_restore(NULL, sizeof(saved)), "no blob is refused");
+    static observore_census_entry_t toobig[OBSERVORE_CENSUS_MAX + 1];
+    CHECK(!observore_census_restore(toobig, sizeof(toobig)),
+          "a blob longer than the table is refused rather than truncated");
+    CHECK(observore_census_is_household(0xA1, 9002),
+          "and a refused restore leaves what was there alone");
 }
 
 static void test_bcd(void)
@@ -3035,6 +3233,7 @@ int main(void)
     test_bcd();
     test_the_watch_hands_point_the_right_way();
     test_the_dial_wanders_without_leaving_the_glass();
+    test_the_census_earns_membership_over_days();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();
