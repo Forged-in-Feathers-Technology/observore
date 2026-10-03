@@ -34,6 +34,31 @@ case "$BOARD" in
     *) echo "unknown board: $BOARD" >&2; exit 2 ;;
 esac
 
+# Which board is actually on the end of the cable.
+#
+# This script has always verified the build and never the target, which is
+# half the job: it confirms the image matches the board asked for and has no
+# idea what is plugged in. Ports renumber whenever something is unplugged,
+# and the fourth time firmware went to the wrong board, both of them were
+# C5s -- so even a chip check would not have caught it. The MAC is what
+# distinguishes two boards of the same kind.
+#
+# The map is local and untracked, because it describes one bench rather than
+# the project: lines of "MAC board" in ~/.observore-boards. With no entry for
+# a MAC the flash proceeds and the address is printed, so the file can be
+# built up by pasting what it reports.
+KNOWN=~/.observore-boards
+mac=$(esptool.py --port "$PORT" read_mac 2>/dev/null |
+      grep -oE "^MAC: [0-9a-f:]+" | head -1 | cut -d' ' -f2)
+if [[ -n "$mac" && -f "$KNOWN" ]]; then
+    want=$(grep -i "^$mac " "$KNOWN" | awk '{print $2}' | head -1)
+    if [[ -n "$want" && "$want" != "$BOARD" ]]; then
+        echo "REFUSING to flash: $PORT is $mac, which is $want, not $BOARD" >&2
+        exit 1
+    fi
+fi
+[[ -n "$mac" ]] && echo "  $PORT is $mac"
+
 PROFILE="boards/$BOARD.defaults"
 DEFAULTS="sdkconfig.defaults"
 [ -f "$PROFILE" ] && DEFAULTS="sdkconfig.defaults;$PROFILE"

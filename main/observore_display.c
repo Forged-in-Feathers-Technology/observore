@@ -494,6 +494,15 @@ static int64_t s_baseline_armed_until_us;
  * that can silence a room with one tap should be able to unsilence it from
  * the same glass. */
 static int64_t s_clear_armed_until_us;
+/* Calibrating this panel's own sheet.
+ *
+ * -1 when not calibrating; otherwise which of the two targets is showing.
+ * Two opposite corners are enough for a linear map, and asking for four
+ * would mostly be asking somebody to press the two corners that sit under
+ * the bezel on these boards. */
+static int   s_cal_step = -1;
+static int   s_cal_raw_x[2], s_cal_raw_y[2];
+static int64_t s_cal_ready_us;
 static bool    s_install_armed;
 static int64_t s_install_armed_until_us;
 #endif
@@ -1256,6 +1265,90 @@ static void draw_clockface(const observore_status_t *st)
 }
 #endif
 
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+/* Two targets, in opposite corners, inset far enough to be pressable.
+ *
+ * The bezel on these boards overlaps the glass, and a press right at the
+ * edge often does not register at all -- which is how the 3.5" panel's first
+ * calibration came out wrong and squashed the bottom three rows together.
+ * An inset of two characters is comfortably inside the usable area, and the
+ * arithmetic below accounts for it rather than pretending the press was at
+ * the very corner. */
+#define CAL_INSET_COLS 2
+#define CAL_INSET_ROWS 2
+
+static void draw_calibrate(void)
+{
+    char text[COLS + 1];
+    for (int r = 0; r < ROWS; r++) {
+        line(r, "", C_WHITE, C_BLACK);
+    }
+    line(1, "  CALIBRATE TOUCH", C_BLACK, C_GREY);
+    snprintf(text, sizeof(text), "  press the marked corner, %s of 2",
+             s_cal_step == 0 ? "1" : "2");
+    line(3, text, C_WHITE, C_BLACK);
+    line(5, "  hold briefly, then let go", C_GREY, C_BLACK);
+    line(ROWS - 2, "  tap anywhere else to give up", C_GREY, C_BLACK);
+
+    /* The target itself: a cross of characters, which the text grid can draw
+     * and which is unambiguous about where to press. */
+    int col = s_cal_step == 0 ? CAL_INSET_COLS : COLS - 1 - CAL_INSET_COLS;
+    int row = s_cal_step == 0 ? CAL_INSET_ROWS : ROWS - 1 - CAL_INSET_ROWS;
+    char marker[COLS + 1];
+    memset(marker, ' ', COLS);
+    marker[COLS] = '\0';
+    marker[col] = '+';
+    line(row, marker, C_AMBER, C_BLACK);
+    if (col > 0) { marker[col] = ' '; }
+}
+
+/* Called from the drawing loop while calibrating: the raw reading is wanted
+ * here rather than a mapped one, since the mapping is what is being fixed. */
+static void calibrate_poll(void)
+{
+    int rx = 0, ry = 0;
+    if (!observore_touch_raw(&rx, &ry)) {
+        return;
+    }
+    if (esp_timer_get_time() < s_cal_ready_us) {
+        return;              /* still the press that started this step */
+    }
+    s_cal_raw_x[s_cal_step] = rx;
+    s_cal_raw_y[s_cal_step] = ry;
+    s_cal_step++;
+    s_cal_ready_us = esp_timer_get_time() + 1200 * 1000;
+    if (s_cal_step < 2) {
+        s_dirty = true;
+        return;
+    }
+
+    /* Two corners, each inset by a known fraction of the screen, so the raw
+     * span is scaled back out to what the full sheet would read. Without
+     * that the map is short by the inset at both ends and every press lands
+     * slightly towards the middle. */
+    int span_x = s_cal_raw_x[1] - s_cal_raw_x[0];
+    int span_y = s_cal_raw_y[1] - s_cal_raw_y[0];
+    int used_x = COLS - 1 - 2 * CAL_INSET_COLS;
+    int used_y = ROWS - 1 - 2 * CAL_INSET_ROWS;
+    int full_x = used_x > 0 ? span_x * (COLS - 1) / used_x : span_x;
+    int full_y = used_y > 0 ? span_y * (ROWS - 1) / used_y : span_y;
+    int pad_x  = (full_x - span_x) / 2;
+    int pad_y  = (full_y - span_y) / 2;
+
+    int lo_x = s_cal_raw_x[0] - pad_x, hi_x = s_cal_raw_x[1] + pad_x;
+    int lo_y = s_cal_raw_y[0] - pad_y, hi_y = s_cal_raw_y[1] + pad_y;
+    if (lo_x > hi_x) { int t = lo_x; lo_x = hi_x; hi_x = t; }
+    if (lo_y > hi_y) { int t = lo_y; lo_y = hi_y; hi_y = t; }
+
+    observore_touch_set_bounds(lo_x, hi_x, lo_y, hi_y);
+    s_cal_step = -1;
+    snprintf(s_notice, sizeof(s_notice), " calibrated: x %d-%d y %d-%d",
+             lo_x, hi_x, lo_y, hi_y);
+    s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
+    s_dirty = true;
+}
+#endif
+
 static void draw_system(const observore_status_t *st, int64_t now_us)
 {
     char text[COLS + 1], up[16];
@@ -1403,7 +1496,12 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
      * board and twenty on the 3.5". Labels that fit rather than labels that
      * truncate: "check update" with the s cut off looks like a typo, and a
      * clipped confirmation looks like a fault. */
-    const int third = COLS / 3;
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    const int cols_each = COLS / 4;
+#else
+    const int cols_each = COLS / 3;
+#endif
+    const int third = cols_each;
     const bool roomy = third >= 18;
     snprintf(left, sizeof(left), roomy ? " check for updates" : " check ver");
     if (!observore_update_available()) {
@@ -1430,9 +1528,21 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         snprintf(right, sizeof(right), roomy ? " clear %u ignores"
                                              : " clear %u", (unsigned)muted);
     }
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    /* A fourth action where the panel is resistive, because those are the
+     * ones whose sheet differs from the bench unit the bounds were measured
+     * on. A capacitive controller reports pixels and has nothing to teach. */
+    char cal[COLS];
+    snprintf(cal, sizeof(cal), observore_touch_calibrated() ? " recalibrate"
+                                                            : " calibrate");
+    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s%-*.*s",
+             third, third, left, third, third, mid, third, third, right,
+             COLS - 3 * third, COLS - 3 * third, cal);
+#else
     snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s",
              third, third, left, third, third, mid,
              COLS - 2 * third, COLS - 2 * third, right);
+#endif
     for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
         line(r, "", C_BLACK, C_GREY);
     }
@@ -1659,6 +1769,12 @@ static void draw_current(void)
     if (!s_have_snap) {
         return;
     }
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    if (s_cal_step >= 0) {
+        draw_calibrate();
+        return;
+    }
+#endif
 #if CONFIG_OBSERVORE_WATCHFACE
     /* Leaving the dial means clearing the whole panel, not just the rows.
      *
@@ -1804,11 +1920,28 @@ static void system_tap(int x, int y)
         return;
     }
     int col = x / OBSERVORE_FONT_W;
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    const int third = COLS / 4;
+    const int last  = 3;
+#else
     const int third = COLS / 3;
+    const int last  = 2;
+#endif
     int which = col / third;
-    if (which > 2) {
-        which = 2;
+    if (which > last) {
+        which = last;
     }
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    if (which == 3) {
+        /* Measuring this panel's own sheet, which beats the bench unit's. */
+        s_cal_step     = 0;
+        s_cal_ready_us = esp_timer_get_time() + 1200 * 1000;
+        s_install_armed = false;
+        s_clear_armed_until_us = 0;
+        s_dirty = true;
+        return;
+    }
+#endif
     if (which == 0) {
         observore_update_check_now();
         snprintf(s_notice, sizeof(s_notice), " asking for a version check");
@@ -1953,6 +2086,21 @@ static void ui_task(void *arg)
          * together would deadlock. */
         int x = 0, y = 0;
         bool tapped = observore_touch_tap(&x, &y);
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+        if (s_cal_step >= 0) {
+            /* While calibrating, a press is a measurement rather than a
+             * gesture: the mapped coordinates are exactly what is not to be
+             * trusted yet, so taps are swallowed here. */
+            calibrate_poll();
+            if (tapped && esp_timer_get_time() >= s_cal_ready_us) {
+                s_cal_step = -1;    /* a tap elsewhere gives up */
+                s_dirty = true;
+                snprintf(s_notice, sizeof(s_notice), " calibration cancelled");
+                s_notice_until_us = esp_timer_get_time() + 5 * 1000000;
+            }
+            tapped = false;
+        }
+#endif
 #endif
         xSemaphoreTake(s_lock, portMAX_DELAY);
 #if CONFIG_OBSERVORE_TOUCH
