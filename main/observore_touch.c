@@ -21,6 +21,7 @@
 #include "freertos/task.h"
 
 #include "observore_display.h"
+#include "observore_nvs.h"
 
 static const char *TAG = "observore.touch";
 
@@ -225,10 +226,78 @@ static bool backend_init(void)
  * Each is visible when wrong and in a different way: bad bounds put the finger
  * a fixed distance from the mark, a missing swap sends it along the wrong
  * edge, and a missing flip sends it the opposite way. */
+/* The bounds in use. Compiled-in values to begin with -- one bench panel's
+ * measurements -- replaced by whatever this device has been taught about its
+ * own sheet. */
+static int  s_lo_x = CONFIG_OBSERVORE_TOUCH_RAW_MIN_X;
+static int  s_hi_x = CONFIG_OBSERVORE_TOUCH_RAW_MAX_X;
+static int  s_lo_y = CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y;
+static int  s_hi_y = CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y;
+static bool s_calibrated;
+
+/* Four numbers, as they are stored. */
+typedef struct {
+    int16_t lo_x, hi_x, lo_y, hi_y;
+} touch_cal_t;
+
+static void cal_load(void)
+{
+    touch_cal_t cal = {0};
+    observore_nvs_item_t item = {.key = "touchcal", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = &cal, .len = sizeof(cal)};
+    if (observore_nvs_read(&item, 1) != ESP_OK || !item.found) {
+        return;
+    }
+    /* A calibration that says the sheet has no extent is not a calibration;
+     * ignoring it falls back to the compiled bounds rather than dividing by
+     * nothing later. */
+    if (cal.hi_x - cal.lo_x < 100 || cal.hi_y - cal.lo_y < 100) {
+        ESP_LOGW(TAG, "stored calibration looks wrong; using the built-in one");
+        return;
+    }
+    s_lo_x = cal.lo_x; s_hi_x = cal.hi_x;
+    s_lo_y = cal.lo_y; s_hi_y = cal.hi_y;
+    s_calibrated = true;
+    ESP_LOGI(TAG, "calibrated here: x %d-%d, y %d-%d",
+             s_lo_x, s_hi_x, s_lo_y, s_hi_y);
+}
+
+void observore_touch_set_bounds(int min_x, int max_x, int min_y, int max_y)
+{
+    if (max_x - min_x < 100 || max_y - min_y < 100) {
+        ESP_LOGW(TAG, "refusing a calibration with no extent");
+        return;
+    }
+    s_lo_x = min_x; s_hi_x = max_x;
+    s_lo_y = min_y; s_hi_y = max_y;
+    s_calibrated = true;
+
+    touch_cal_t cal = {(int16_t)min_x, (int16_t)max_x,
+                       (int16_t)min_y, (int16_t)max_y};
+    observore_nvs_item_t item = {.key = "touchcal", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = &cal, .len = sizeof(cal)};
+    if (observore_nvs_write(&item, 1) == ESP_OK) {
+        ESP_LOGI(TAG, "calibration saved: x %d-%d, y %d-%d",
+                 min_x, max_x, min_y, max_y);
+    } else {
+        ESP_LOGW(TAG, "calibration applied but not saved");
+    }
+}
+
+void observore_touch_bounds(int *min_x, int *max_x, int *min_y, int *max_y)
+{
+    if (min_x) { *min_x = s_lo_x; }
+    if (max_x) { *max_x = s_hi_x; }
+    if (min_y) { *min_y = s_lo_y; }
+    if (max_y) { *max_y = s_hi_y; }
+}
+
+bool observore_touch_calibrated(void) { return s_calibrated; }
+
 static void to_screen(int raw_x, int raw_y, int *x, int *y)
 {
-    int lo_x = CONFIG_OBSERVORE_TOUCH_RAW_MIN_X, hi_x = CONFIG_OBSERVORE_TOUCH_RAW_MAX_X;
-    int lo_y = CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y, hi_y = CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y;
+    int lo_x = s_lo_x, hi_x = s_hi_x;
+    int lo_y = s_lo_y, hi_y = s_hi_y;
 
     /* Per-mille of the way along each raw axis, so the whole mapping is
      * integer arithmetic on a chip with no reason to spend a float here. */
@@ -421,6 +490,11 @@ void observore_touch_init(void)
     if (!backend_init()) {
         return;
     }
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    /* Only a resistive sheet has edges to learn. A capacitive controller
+     * reports panel pixels and has nothing to calibrate. */
+    cal_load();
+#endif
     s_lock = xSemaphoreCreateMutex();
     if (!s_lock) {
         ESP_LOGE(TAG, "no memory for the touch lock");
@@ -501,6 +575,31 @@ bool observore_touch_read(int *x, int *y)
     return down;
 }
 
+bool observore_touch_raw(int *x, int *y)
+{
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    if (!s_ready) {
+        return false;
+    }
+    observore_display_backlight_hold();
+    int z = pressure();
+    int rx = z >= Z_THRESHOLD ? median_channel(CMD_X) : -1;
+    int ry = z >= Z_THRESHOLD ? median_channel(CMD_Y) : -1;
+    observore_display_backlight_release();
+    if (z < Z_THRESHOLD || rx < 0 || ry < 0) {
+        return false;
+    }
+    if (x) { *x = rx; }
+    if (y) { *y = ry; }
+    return true;
+#else
+    /* A capacitive controller reports panel pixels, so there is nothing to
+     * calibrate and nothing raw to report. */
+    (void)x; (void)y;
+    return false;
+#endif
+}
+
 bool observore_touch_tap(int *x, int *y)
 {
     if (!s_ready) {
@@ -522,5 +621,16 @@ bool observore_touch_tap(int *x, int *y)
 void observore_touch_init(void) {}
 bool observore_touch_read(int *x, int *y) { (void)x; (void)y; return false; }
 bool observore_touch_tap(int *x, int *y)  { (void)x; (void)y; return false; }
+bool observore_touch_raw(int *x, int *y)  { (void)x; (void)y; return false; }
+void observore_touch_set_bounds(int a, int b, int c, int d)
+{
+    (void)a; (void)b; (void)c; (void)d;
+}
+void observore_touch_bounds(int *a, int *b, int *c, int *d)
+{
+    if (a) { *a = 0; } if (b) { *b = 0; }
+    if (c) { *c = 0; } if (d) { *d = 0; }
+}
+bool observore_touch_calibrated(void) { return false; }
 
 #endif
