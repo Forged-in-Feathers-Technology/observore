@@ -7,6 +7,7 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
            ../main/observore_notify_fmt.c ../main/observore_wps.c \
            ../main/observore_version.c ../main/observore_heapwatch.c \
            ../main/observore_surroundings.c ../main/observore_battery.c ../main/observore_rtc.c ../main/observore_watch.c \
+           ../main/observore_touchcal.c \
            ../main/observore_census.c
 
 # Headers count as sources here.  Most of what this suite pins down lives in

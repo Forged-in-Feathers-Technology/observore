@@ -14,6 +14,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_census.h"
+#include "observore_touchcal.h"
 #include "observore_watch.h"
 #include <limits.h>
 #include "observore_surroundings.h"
@@ -793,6 +794,142 @@ static void test_the_census_earns_membership_over_days(void)
           "a blob longer than the table is refused rather than truncated");
     CHECK(observore_census_is_household(0xA1, 9002),
           "and a refused restore leaves what was there alone");
+}
+
+/* A synthetic resistive panel: what the controller would read for a press at
+ * a given screen pixel, if the sheet were perfectly linear between `lo` and
+ * `hi` on each channel.
+ *
+ * `swap` wires the controller's X channel along the screen's Y, which is how
+ * all four resistive boards here are built. Modelling the panel and then
+ * asking the solver to recover the bounds it was built from is the only way
+ * to check this that does not just restate the formula. */
+static void fake_panel(int sx, int sy, int w, int h, bool swap,
+                       int lo_x, int hi_x, int lo_y, int hi_y,
+                       int *raw_x, int *raw_y)
+{
+    int along_x = swap ? sy : sx;          /* screen distance raw X travels */
+    int along_y = swap ? sx : sy;
+    int full_x  = swap ? h : w;
+    int full_y  = swap ? w : h;
+    *raw_x = lo_x + (int)((long long)(hi_x - lo_x) * along_x / (full_x - 1));
+    *raw_y = lo_y + (int)((long long)(hi_y - lo_y) * along_y / (full_y - 1));
+}
+
+static void test_calibration_recovers_the_sheet(void)
+{
+    banner("calibration recovers the sheet it was measured on");
+
+    /* The CYD-C5's panel and grid: 320x240, an 8x16 font, targets inset two
+     * cells. The inset is 5% of the width and 13% of the height -- which is
+     * exactly why pairing a raw channel with the wrong screen axis does not
+     * cancel out. */
+    const int W = 320, H = 240;
+    const int tx0 = 2 * 8 + 4,  ty0 = 2 * 16 + 8;
+    const int tx1 = (40 - 1 - 2) * 8 + 4, ty1 = (15 - 1 - 2) * 16 + 8;
+
+    /* Bounds in the range an XPT2046 actually reports. */
+    const int LO_X = 200, HI_X = 3900, LO_Y = 300, HI_Y = 3800;
+
+    /* Swapped, which is every board this runs on. */
+    int rx0, ry0, rx1, ry1;
+    fake_panel(tx0, ty0, W, H, true, LO_X, HI_X, LO_Y, HI_Y, &rx0, &ry0);
+    fake_panel(tx1, ty1, W, H, true, LO_X, HI_X, LO_Y, HI_Y, &rx1, &ry1);
+
+    observore_touchcal_t cal;
+    CHECK(observore_touchcal_solve(rx0, ry0, rx1, ry1, tx0, ty0, tx1, ty1,
+                                   W, H, true, &cal),
+          "two inset presses describe a sheet");
+
+    /* Integer division through the model and back costs a few counts; a
+     * tolerance of one per cent of the span is far tighter than the half-cell
+     * a finger lands within. */
+    int tol_x = (HI_X - LO_X) / 100 + 2;
+    int tol_y = (HI_Y - LO_Y) / 100 + 2;
+    CHECK(cal.lo_x >= LO_X - tol_x && cal.lo_x <= LO_X + tol_x, "recovers lo x");
+    CHECK(cal.hi_x >= HI_X - tol_x && cal.hi_x <= HI_X + tol_x, "recovers hi x");
+    CHECK(cal.lo_y >= LO_Y - tol_y && cal.lo_y <= LO_Y + tol_y, "recovers lo y");
+    CHECK(cal.hi_y >= HI_Y - tol_y && cal.hi_y <= HI_Y + tol_y, "recovers hi y");
+
+    /* The inset really is scaled out: the recovered sheet is wider than the
+     * two presses, on both channels. */
+    int meas_x = rx1 > rx0 ? rx1 - rx0 : rx0 - rx1;
+    int meas_y = ry1 > ry0 ? ry1 - ry0 : ry0 - ry1;
+    CHECK(cal.hi_x - cal.lo_x > meas_x, "the sheet is wider than the presses, x");
+    CHECK(cal.hi_y - cal.lo_y > meas_y, "the sheet is wider than the presses, y");
+
+    /* The bug this file exists for. Solving the *same* readings with the axes
+     * paired the other way does not recover the sheet -- and the error is not
+     * marginal. This is what shipped: on this panel it scaled one channel by
+     * 1.11 where 1.40 was needed and the other by 1.40 where 1.11 was, which
+     * is why it read as the whole alignment being off rather than one edge
+     * being short. */
+    observore_touchcal_t wrong;
+    CHECK(observore_touchcal_solve(rx0, ry0, rx1, ry1, tx0, ty0, tx1, ty1,
+                                   W, H, false, &wrong),
+          "the wrong pairing still produces an answer, which is the trap");
+    bool far_off = (wrong.lo_x < LO_X - 10 * tol_x || wrong.lo_x > LO_X + 10 * tol_x) ||
+                   (wrong.hi_x < HI_X - 10 * tol_x || wrong.hi_x > HI_X + 10 * tol_x) ||
+                   (wrong.lo_y < LO_Y - 10 * tol_y || wrong.lo_y > LO_Y + 10 * tol_y) ||
+                   (wrong.hi_y < HI_Y - 10 * tol_y || wrong.hi_y > HI_Y + 10 * tol_y);
+    CHECK(far_off, "and it is badly wrong, not nearly right");
+
+    /* An unswapped panel, solved as unswapped, recovers its sheet too -- the
+     * flag is a property of the wiring, not a fudge factor for one board. */
+    fake_panel(tx0, ty0, W, H, false, LO_X, HI_X, LO_Y, HI_Y, &rx0, &ry0);
+    fake_panel(tx1, ty1, W, H, false, LO_X, HI_X, LO_Y, HI_Y, &rx1, &ry1);
+    CHECK(observore_touchcal_solve(rx0, ry0, rx1, ry1, tx0, ty0, tx1, ty1,
+                                   W, H, false, &cal),
+          "an unswapped panel solves too");
+    CHECK(cal.lo_x >= LO_X - tol_x && cal.lo_x <= LO_X + tol_x, "and recovers lo x");
+    CHECK(cal.hi_y >= HI_Y - tol_y && cal.hi_y <= HI_Y + tol_y, "and recovers hi y");
+
+    /* The 3.5" panel's shape, to be sure nothing here assumes 320x240. */
+    const int W35 = 480, H35 = 320;
+    const int bx0 = 2 * 8 + 4, by0 = 2 * 16 + 8;
+    const int bx1 = (60 - 1 - 2) * 8 + 4, by1 = (20 - 1 - 2) * 16 + 8;
+    fake_panel(bx0, by0, W35, H35, true, LO_X, HI_X, LO_Y, HI_Y, &rx0, &ry0);
+    fake_panel(bx1, by1, W35, H35, true, LO_X, HI_X, LO_Y, HI_Y, &rx1, &ry1);
+    CHECK(observore_touchcal_solve(rx0, ry0, rx1, ry1, bx0, by0, bx1, by1,
+                                   W35, H35, true, &cal),
+          "the 3.5\" panel solves");
+    CHECK(cal.lo_x >= LO_X - tol_x && cal.lo_x <= LO_X + tol_x,
+          "and recovers its sheet as well");
+
+    /* Refusals. Each of these leaves the caller's bounds alone, which is the
+     * point: a mapping known to be wrong is worse than the one already in
+     * place. */
+    observore_touchcal_t keep = {.lo_x = 1, .hi_x = 2, .lo_y = 3, .hi_y = 4};
+    observore_touchcal_t before = keep;
+    CHECK(!observore_touchcal_solve(2000, 2000, 2000, 2000, tx0, ty0, tx1, ty1,
+                                    W, H, true, &keep),
+          "the same spot twice is refused");
+    CHECK(keep.lo_x == before.lo_x && keep.hi_y == before.hi_y,
+          "and a refusal does not touch the bounds");
+    CHECK(!observore_touchcal_solve(2000, 2000, 2050, 2050, tx0, ty0, tx1, ty1,
+                                    W, H, true, &keep),
+          "a span under the floor is refused");
+    CHECK(!observore_touchcal_solve(200, 300, 3900, 3800, tx0, ty0, tx0, ty0,
+                                    W, H, true, &keep),
+          "two targets drawn at one place is refused");
+    CHECK(!observore_touchcal_solve(200, 300, 3900, 3800, tx0, ty0, tx1, ty1,
+                                    1, 1, true, &keep),
+          "a one-pixel panel is refused rather than divided by");
+    CHECK(!observore_touchcal_solve(200, 300, 3900, 3800, tx0, ty0, tx1, ty1,
+                                    W, H, true, NULL),
+          "no output pointer is refused rather than written through");
+
+    /* Pressed in the opposite order -- bottom-right first -- still yields an
+     * ordered sheet, because which corner was pressed first is not something
+     * the mapping should care about. */
+    fake_panel(tx1, ty1, W, H, true, LO_X, HI_X, LO_Y, HI_Y, &rx0, &ry0);
+    fake_panel(tx0, ty0, W, H, true, LO_X, HI_X, LO_Y, HI_Y, &rx1, &ry1);
+    CHECK(observore_touchcal_solve(rx0, ry0, rx1, ry1, tx1, ty1, tx0, ty0,
+                                   W, H, true, &cal),
+          "the corners pressed in the other order still solve");
+    CHECK(cal.lo_x < cal.hi_x && cal.lo_y < cal.hi_y, "and come out ordered");
+    CHECK(cal.lo_x >= LO_X - tol_x && cal.lo_x <= LO_X + tol_x,
+          "to the same sheet");
 }
 
 static void test_bcd(void)
@@ -3233,6 +3370,7 @@ int main(void)
     test_bcd();
     test_the_watch_hands_point_the_right_way();
     test_the_dial_wanders_without_leaving_the_glass();
+    test_calibration_recovers_the_sheet();
     test_the_census_earns_membership_over_days();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
