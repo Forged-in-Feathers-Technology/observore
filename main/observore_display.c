@@ -1128,6 +1128,14 @@ static uint16_t *s_fb;
 static int     s_face_minute = -1;
 static int64_t s_face_awake_until_us;
 
+/* How far the dial wanders from centre. Three pixels moves the ring clear of
+ * its own width -- it is five thick, so a three-pixel walk leaves no pixel
+ * lit by it at every step -- while costing three pixels of radius on a dial
+ * 229 across, which is not a difference anybody can see. */
+#define FACE_SHIFT_R  3
+#define FACE_MARGIN   4
+#define FACE_RING_W   5
+
 void observore_display_wake_face(void)
 {
     s_face_awake_until_us = esp_timer_get_time() + 15 * 1000000;
@@ -1173,13 +1181,47 @@ static void draw_clockface(const observore_status_t *st)
 
     observore_canvas_t c = {.px = s_fb, .w = DISP_W, .h = DISP_H};
 
-    const int cx = DISP_W / 2, cy = DISP_H / 2;
-    const int r  = (DISP_W < DISP_H ? DISP_W : DISP_H) / 2 - 4;
+    /* The dial walks, so that an AMOLED showing the same ring for a month
+     * does not keep it.
+     *
+     * The step comes from the clock rather than from a counter, which makes
+     * it continuous across a reboot -- a device restarted every morning
+     * would otherwise begin every day on the same eight pixels -- and costs
+     * nothing, since the face already knows what time it is.
+     *
+     * It is held still while the face is awake. The walk is about two pixels
+     * a step and nobody would call it wrong, but a dial that twitches at the
+     * minute while you are looking at it is a thing you would notice, and
+     * the whole point of the page is that it looks like a watch. Burn-in
+     * accrues over the hours nobody is looking, which is exactly when this
+     * is free to move.
+     *
+     * Deriving it from the clock has one discontinuity, and it is worth
+     * naming rather than discovering: when SNTP first sets the time the step
+     * jumps from boot-relative to epoch-relative, so the dial moves once to
+     * an unrelated position. It happens at most once a run, only while idle,
+     * and the alternative -- counting minutes instead -- trades it for
+     * starting every boot on the same eight pixels, which is the thing this
+     * is here to avoid. */
+    static unsigned s_shift_step;
+    if (!awake) {
+        s_shift_step = (unsigned)(now / 60);
+    }
+    int sdx = 0, sdy = 0;
+    observore_watch_shift(s_shift_step, FACE_SHIFT_R, &sdx, &sdy);
+
+    const int cx = DISP_W / 2 + sdx, cy = DISP_H / 2 + sdy;
+    /* The margin as before, and the walk and the ring's own thickness on top:
+     * the ring has to be inside the glass at every step, not just at the one
+     * it happened to be drawn at on the bench. The arithmetic is in
+     * observore_watch.c so a host test can hold it to that. */
+    const int r  = observore_watch_dial_radius(DISP_W, DISP_H, FACE_MARGIN,
+                                               FACE_RING_W, FACE_SHIFT_R);
 
     /* Black is genuinely off on this panel, so an unlit dial costs nothing
      * to show and little to leave on. */
     observore_watch_fill(&c, px(C_BLACK));
-    observore_watch_ring(&c, cx, cy, r, 5, px(C_SILVER));
+    observore_watch_ring(&c, cx, cy, r, FACE_RING_W, px(C_SILVER));
 
     uint16_t mark = st->level == OBSERVORE_LEVEL_ALERT   ? px(C_RED)
                   : st->level == OBSERVORE_LEVEL_CAUTION ? px(C_AMBER)

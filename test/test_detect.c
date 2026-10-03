@@ -504,6 +504,99 @@ static void test_the_watch_hands_point_the_right_way(void)
     CHECK(1, "drawing past the edges does not corrupt memory");
 }
 
+static void test_the_dial_wanders_without_leaving_the_glass(void)
+{
+    banner("the dial walks so the panel does not keep it");
+
+    /* The real geometry, and the radius from the same function the display
+     * calls -- not a copy of the sum. A test that recomputed the radius here
+     * would pass while the display forgot to subtract the walk, which is the
+     * one mistake this check exists to catch. */
+    const int panel = 466, margin = 4, shift = 3, ring = 5;
+    const int r = observore_watch_dial_radius(panel, panel, margin, ring, shift);
+
+    int seen_x[8], seen_y[8];
+    int distinct = 0;
+    for (unsigned step = 0; step < 8; step++) {
+        int dx, dy;
+        observore_watch_shift(step, shift, &dx, &dy);
+        seen_x[step] = dx;
+        seen_y[step] = dy;
+
+        /* Inside the circle it is allowed to wander in. */
+        CHECK(dx * dx + dy * dy <= shift * shift + 1,
+              "step stays within the walk radius");
+
+        /* And the dial, at that offset, still keeping the margin the design
+         * asked for -- not merely inside the panel.
+         *
+         * "On the glass" is too weak to be worth asserting: with four pixels
+         * of margin to spend, a dial that had not paid for the walk at all
+         * would still fit, by one pixel, and the check would pass while the
+         * ring sat on the bezel. The margin is the rule, so the margin is
+         * what gets checked. */
+        int reach = r + (ring + 1) / 2;
+        CHECK(panel / 2 + dx + reach <= panel - margin, "keeps its margin at the right");
+        CHECK(panel / 2 + dx - reach >= margin,         "keeps its margin at the left");
+        CHECK(panel / 2 + dy + reach <= panel - margin, "keeps its margin at the bottom");
+        CHECK(panel / 2 + dy - reach >= margin,         "keeps its margin at the top");
+
+        bool dup = false;
+        for (int i = 0; i < distinct; i++) {
+            if (seen_x[i] == dx && seen_y[i] == dy) { dup = true; break; }
+        }
+        if (!dup) { distinct++; }
+    }
+    /* A walk that visits two pixels is not a walk. Eight points on a circle
+     * of radius three round to six distinct offsets, because the diagonals
+     * land on the same pixel pair as nothing else does -- what matters is
+     * that it is most of them rather than one. */
+    CHECK(distinct >= 6, "the walk visits most of its eight positions");
+
+    /* Consecutive steps are adjacent. This is what a circle buys over a
+     * raster scan: no step crosses the face, so there is no one moment a
+     * minute when the dial visibly jumps. */
+    for (unsigned step = 0; step < 8; step++) {
+        int ax, ay, bx, by;
+        observore_watch_shift(step, shift, &ax, &ay);
+        observore_watch_shift(step + 1, shift, &bx, &by);
+        int d2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+        CHECK(d2 <= 2 * shift * shift,
+              "the dial moves to a neighbouring position, never across");
+    }
+
+    /* It cycles rather than running off, so step counts from the clock are
+     * safe for as long as the device runs. */
+    int ax, ay, bx, by;
+    observore_watch_shift(3, shift, &ax, &ay);
+    observore_watch_shift(3 + 8, shift, &bx, &by);
+    CHECK(ax == bx && ay == by, "the walk repeats every eight steps");
+    observore_watch_shift(3 + 8 * 1000000, shift, &bx, &by);
+    CHECK(ax == bx && ay == by, "and still does a million cycles later");
+
+    /* The radius pays for the walk. Asking for a wider walk must give back a
+     * smaller dial, or the ring leaves the glass -- and the edge checks above
+     * only catch that because this is the function the display uses. */
+    CHECK(observore_watch_dial_radius(panel, panel, margin, ring, shift) <
+          observore_watch_dial_radius(panel, panel, margin, ring, 0),
+          "a walk costs radius");
+    CHECK(observore_watch_dial_radius(panel, panel, margin, ring, 0) ==
+          panel / 2 - margin - (ring + 1) / 2,
+          "no walk leaves the dial where it always was, less its own ring");
+    CHECK(observore_watch_dial_radius(100, 400, 4, 5, 3) ==
+          observore_watch_dial_radius(100, 100, 4, 5, 3),
+          "the short side decides on a panel that is not square");
+    CHECK(observore_watch_dial_radius(20, 20, 4, 5, 300) == 0,
+          "a walk wider than the panel gives no dial rather than a negative one");
+
+    /* Asked for no walk, it stands still -- which is what every board
+     * without an AMOLED would want if this were ever shared. */
+    observore_watch_shift(5, 0, &ax, &ay);
+    CHECK(ax == 0 && ay == 0, "radius zero does not move the dial");
+    observore_watch_shift(5, -3, &ax, &ay);
+    CHECK(ax == 0 && ay == 0, "a negative radius is treated as none");
+}
+
 static void test_bcd(void)
 {
     banner("the clock chip speaks BCD and nothing else here does");
@@ -2941,6 +3034,7 @@ int main(void)
     test_the_battery_curve();
     test_bcd();
     test_the_watch_hands_point_the_right_way();
+    test_the_dial_wanders_without_leaving_the_glass();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
     test_rssi_floor();
