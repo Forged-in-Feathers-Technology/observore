@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "observore_battery.h"
+#include "observore_census.h"
 #include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -167,6 +168,14 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_clock_iso(now, now_iso, sizeof(now_iso));
     const observore_heap_event_t *latest = observore_heapwatch_latest();
 
+    /* What the census has learned. Reported before anything acts on it, which
+     * is the point of reporting it: "known" climbing while "household" stays
+     * at nothing would mean the rule is never being satisfied, and there is no
+     * other way to see that from outside. */
+    int census_known = 0, census_household = 0;
+    observore_census_counts(observore_census_day(time(NULL)),
+                            &census_household, &census_known);
+
     /* The last check's error, escaped: it can carry an esp-tls string. */
     char cerr[96];
     observore_json_escape(observore_update_error(), cerr, sizeof(cerr));
@@ -195,6 +204,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"taps\":%u"
+        ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -234,7 +244,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_battery_available() ? "true" : "false",
         observore_battery_mv(),
         observore_battery_pct_from_mv(observore_battery_mv()),
-        (unsigned)observore_display_taps());
+        (unsigned)observore_display_taps(),
+        census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",

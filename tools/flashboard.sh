@@ -48,8 +48,19 @@ esac
 # a MAC the flash proceeds and the address is printed, so the file can be
 # built up by pasting what it reports.
 KNOWN=~/.observore-boards
+
+# A port that is not there is said out loud rather than discovered later.
+# Boards get unplugged and renumbered constantly on this bench, and asking
+# esptool to talk to a device node that does not exist produces a wall of
+# retries and then a failure that reads like a cable fault.
+if [[ ! -e "$PORT" ]]; then
+    echo "no such port: $PORT" >&2
+    echo "ports present: $(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | tr '\n' ' ')" >&2
+    exit 2
+fi
+
 mac=$(esptool.py --port "$PORT" read_mac 2>/dev/null |
-      grep -oE "^MAC: [0-9a-f:]+" | head -1 | cut -d' ' -f2)
+      grep -oE "^MAC: [0-9a-f:]+" | head -1 | cut -d' ' -f2) || true
 if [[ -n "$mac" && -f "$KNOWN" ]]; then
     want=$(grep -i "^$mac " "$KNOWN" | awk '{print $2}' | head -1)
     if [[ -n "$want" && "$want" != "$BOARD" ]]; then
@@ -57,7 +68,14 @@ if [[ -n "$mac" && -f "$KNOWN" ]]; then
         exit 1
     fi
 fi
-[[ -n "$mac" ]] && echo "  $PORT is $mac"
+# An `if` rather than `[[ ... ]] && echo`, which under `set -e` is a silent
+# exit 1 when the address could not be read -- the script printed nothing at
+# all for a port that had been unplugged, which is how this was found.
+if [[ -n "$mac" ]]; then
+    echo "  $PORT is $mac"
+else
+    echo "  $PORT did not answer with an address; flashing without the guard" >&2
+fi
 
 PROFILE="boards/$BOARD.defaults"
 DEFAULTS="sdkconfig.defaults"

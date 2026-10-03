@@ -1385,6 +1385,94 @@ MAC rules. A minute later, after rotation, the score was still zero.
 
 Up to 128 rules are stored, in NVS, surviving reboots.
 
+### Learning the furniture, without acting on it yet
+
+A baseline is a decision you make once, by hand, about a room you happen to be
+standing in. The thing it is trying to approximate is *what is always around* —
+and a stationary device is in a position to learn that by itself, over days,
+without being asked ([#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)).
+This is the first part of that: the device now keeps a census of what it keeps
+seeing. **Nothing is suppressed on the strength of it.**
+
+That split is deliberate rather than unfinished. Twice this project has
+silenced the thing it exists to notice — a baseline that blinded the device
+outright, and a baseline that quieted a Flipper Zero by name for a week — and
+both were judgements that had never been watched before they were trusted. So
+membership is earned, persisted and reportable first, and acting on it is a
+separate change against a table that has had weeks to be wrong in public.
+
+**Membership is counted in days, not sightings.** Each known device carries a
+bitmap of the days it has been seen on, one bit per day, and counts as
+household at **three distinct days** inside a **sixteen-day** window. A
+doorbell seen four hundred times this evening has one day to its name. A
+visitor's phone seen three days running is household the day they leave, still
+household a week later, and forgotten a fortnight after that — decay needs no
+code, because the day falls out of the window and the bit goes with it.
+
+Conflating "furniture" and "here right now" is the mistake behind every
+revision of the follower class, which is why the rule is shaped this way: a
+device at your elbow for three hours is interesting *precisely because* it is
+not furniture.
+
+Three things about the implementation are worth knowing, because each is a
+place it could have been quietly wrong:
+
+- **An unset clock produces no day at all.** The device detects from the moment
+  it powers on and only learns the time when it next reaches a network, so
+  early sightings genuinely have no date. They are dropped. Counting them
+  against day zero would hand membership to whatever happened to be in the
+  room during the first minute after every boot, which is the opposite of
+  earning it over days.
+- **The clock jumping is normal, not an edge case.** When SNTP answers, the day
+  number goes from nothing to about nine thousand. Shifting a sixteen-bit mask
+  by nine thousand is undefined behaviour in C rather than a convenient zero,
+  so the distance is bounded before it is used, and a gap wider than the
+  window clears the mask. A clock corrected *backwards* leaves the window
+  alone rather than rewriting history it cannot reconstruct.
+- **A date the record cannot hold is refused, not truncated.** The day number
+  is sixteen bits, which runs out in 2179. A truncated day is not a near miss:
+  it silently claims a different date, and the window would then be measured
+  from it. This was found by a test asking about day 100000 and getting a
+  confident wrong answer.
+
+**Identity is the part most worth arguing with.** A device is keyed on its
+advert fingerprint where it has one, because that hashes the *shape* of the
+advert rather than the address, and the household's own phones rotate their
+addresses every fifteen minutes — keyed on the address they would never reach a
+second day, which is the case the census most wants to handle. Failing that,
+a fixed address. A random address with no stable advert shape is skipped
+entirely: it has no identity to remember, and noting it would fill the table
+with single-day entries that can never become furniture, evicting the furniture
+to do it.
+
+The weakness in that is known and is the reason for shipping the learning
+first. A fingerprint identifies a *kind* of device, so two identical handsets
+share one, and the mute store already has to retire fingerprint rules that
+turn out to cover more than eight addresses. The census will need the same
+guard before it suppresses anything, and the way to size it is to watch how
+often it happens here.
+
+It did not take long to happen. The first bench sweep on real air listed
+twelve tracked slots carrying five distinct identities: one fingerprint
+appeared three times in a single pass and another twice, which is a device
+rotating its address across several slots — exactly what the fingerprint is
+*for* — but it is indistinguishable, from here, from two identical devices in
+one room. That is the measurement the suppression slice needs and the reason
+it is not in this one.
+
+Sixty-four devices are tracked, in NVS, and a sighting is only written when it
+is a device's first of the day — a doorbell seen constantly would otherwise
+wear the flash out recording a fact that stopped changing at breakfast. The
+sweep runs **once a minute** over what is currently tracked rather than on
+every sighting, which means a device has to still be there when the sweep comes
+round. That is a second rule arriving by accident, so it is stated rather than
+left implicit: a minute of presence, not a single frame, earns a device its day.
+
+`/api/status` reports it as `census: {known, household, days}`. The pair is the
+interesting reading while nothing acts on this: `known` climbing while
+`household` stays at zero would mean the rule is never being satisfied, and
+there is no other way to see that from outside.
+
 ## The screen
 
 The ESP32-2432S028R — the 2.8" "Cheap Yellow Display" — is the one board here
