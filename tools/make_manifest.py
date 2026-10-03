@@ -35,6 +35,7 @@ LABELS = {
     "cyd-2432s028r-st7789": "ESP32-2432S028R 2.8\" CYD (ST7789 panel)",
     "cyd-2432s028r-ili9341": "ESP32-2432S028R 2.8\" CYD (ILI9341 panel)",
     "cyd-3248s035r-st7796": "ESP32-3248S035R 3.5\" CYD (ST7796 panel)",
+    "nm-cyd-c5":        "RockBase NM-CYD-C5 2.8\" CYD (ESP32-C5)",
     "waveshare-s3-amoled-143": "Waveshare ESP32-S3 1.43\" round AMOLED",
 }
 
@@ -43,6 +44,10 @@ NOTES = {
                                "board that can tell being carried from "
                                "sitting still",
     "xiao-esp32c6": "no PSRAM, so TLS for notifications is tight on this board",
+    "nm-cyd-c5": "on-screen display with touch, no notifier; the only display "
+                 "board that sees 5 GHz. Check the chip marking rather than "
+                 "the shape of the board -- it looks like the plain-ESP32 "
+                 "2.8\" CYD and takes a different image",
     "devkit-esp32c5": "two USB sockets; either one works",
     "cyd-2432s028r-st7789": "on-screen display, no notifier; the later revision of the 2.8\" CYD",
     "cyd-3248s035r-st7796": "on-screen display with touch, no notifier; the 3.5\" CYD, "
@@ -128,7 +133,7 @@ def main():
     order = {"xiao-esp32s3": 0, "devkit-esp32c5": 1, "xiao-esp32c5": 2,
              "xiao-esp32c6": 3, "cyd-2432s028r-st7789": 4,
              "cyd-2432s028r-ili9341": 5, "cyd-3248s035r-st7796": 6,
-             "waveshare-s3-amoled-143": 7}
+             "nm-cyd-c5": 7, "waveshare-s3-amoled-143": 8}
     index.sort(key=lambda e: (order.get(e["board"], 99), e["label"]))
     idx = os.path.join(args.out_dir, "boards.json")
     with open(idx, "w", encoding="utf-8") as fh:

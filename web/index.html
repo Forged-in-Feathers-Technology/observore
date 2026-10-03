@@ -95,9 +95,12 @@ normally there, and reports what is new.</p>
   <p class="note" id="boardwhy" hidden>
     Two boards can share a chip and still need different firmware: a XIAO
     ESP32-C5 and a Waveshare C5 put different LEDs on the same pin, and only one
-    of them has a UART bridge. The installer still checks the chip, so choosing
-    a profile for the wrong <em>chip</em> is refused rather than flashed; this
-    picker is for telling apart boards that share one.
+    of them has a UART bridge. Three boards here are C5s, and one of those is a
+    2.8&quot;&nbsp;Cheap Yellow Display &mdash; which looks exactly like the
+    plain-ESP32 one, so go by the chip marking rather than the shape of the
+    board. The installer still checks the chip, so choosing a profile for the
+    wrong <em>chip</em> is refused rather than flashed; this picker is for
+    telling apart boards that share one.
   </p>
   <esp-web-install-button id="installer" manifest="firmware/manifest-xiao-esp32s3.json">
     <button slot="activate">Install Observore</button>
@@ -253,7 +256,8 @@ esptool.py --chip esp32c6 -p /dev/ttyACM0 write_flash \
      ESP Web Tools matches on chip family, which tells an ESP32-S3 from an
      ESP32-C5 and cannot tell two C5 boards apart. They are not
      interchangeable: the Waveshare kit has an addressable pixel and a UART
-     bridge, the XIAO has a plain LED on the same pin and only native USB.
+     bridge, the XIAO has a plain LED on the same pin and only native USB, and
+     the NM-CYD-C5 drives a panel off pins the other two leave free.
      Install the wrong one and the LED stays dark while everything else looks
      fine, which is exactly the sort of failure worth a dropdown.
      The chip check still runs underneath: pick a C6 profile, plug in a C5, and

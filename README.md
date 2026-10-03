@@ -39,15 +39,14 @@ makes it fit on a chip with no PSRAM, and every memory problem this project has
 had was the TLS handshake behind a notification. A screen is a personal display,
 so the trade is a fair one.
 
-Four of the eight have screens: the 2.8" board in its two panel revisions,
-the 3.5", and the round one below. See [the screen](#the-screen) for what
+Five of the nine have screens: the 2.8" board in its two panel revisions,
+the 3.5", the C5 one below, and the round one after it. See [the screen](#the-screen) for what
 they can do and [boards, which are not the same as
 chips](#boards-which-are-not-the-same-as-chips) for the profiles.
 
-A ninth profile, `nm-cyd-c5`, is built by CI and **not shipped yet**:
-RockBase's NM-CYD-C5 is a Cheap Yellow Display with an **ESP32-C5** behind
-it, and it is the first board here that both sees 5 GHz and has a screen to
-say so on — every other display board is a plain ESP32 that cannot sweep the
+RockBase's **NM-CYD-C5** is a Cheap Yellow Display with an **ESP32-C5**
+behind it, and it is the first board here that both sees 5 GHz and has a
+screen to say so on — every other display board is a plain ESP32 that cannot sweep the
 upper band at all, and every board that could was headless.
 
 The same 2.8" ST7789 panel as the classic CYD and almost none of the same
@@ -60,7 +59,16 @@ threshold was always what decided — and the panel takes its pixels in the
 opposite byte order to the other ST7789 boards here, which took two readings
 to establish because each setting alone produces a plausible wrongness.
 
-The eighth is different enough to describe separately. Waveshare's
+What held it back was neither of those. Its touch bounds are the compiled
+defaults, because nobody has measured this panel — and the numbers in every
+other profile are one bench unit's, which is a thinner claim than it looks.
+A resistive sheet varies between assemblies of the same product, so shipping
+a profile meant shipping somebody else's measurements and hoping. The
+**calibrate** action settles it on the device instead: two presses and the
+panel in the owner's hand teaches it its own bounds. See [calibrating a
+panel](#calibrating-a-panel).
+
+The round one is different enough to describe separately. Waveshare's
 **ESP32-S3-Touch-AMOLED-1.43** is a round 1.43" AMOLED on an S3 with 16 MB of
 flash and 8 MB of octal PSRAM — capacitive touch rather than resistive, a
 hardware clock, and an **accelerometer**, which no other board here has. That
@@ -106,11 +114,11 @@ than one that is smaller and whole.
 
 ## Getting started
 
-You need one of the eight supported boards and a USB cable. The whole first run
+You need one of the nine supported boards and a USB cable. The whole first run
 takes about ten minutes, most of it waiting.
 
 The browser flasher detects the chip and offers the builds that fit it. There is
-usually one, and sometimes a choice: two of the boards are ESP32-C5s whose
+usually one, and sometimes a choice: three of the boards are ESP32-C5s whose
 images are not interchangeable, and the 2.8" and 3.5" displays are both plain
 ESP32s with different panels. The flasher says which is which, and the wrong
 choice is recoverable — a mismatched display build shows a blank or garbled
@@ -447,7 +455,7 @@ will report it as tailing. Take a baseline before setting off. That is also
 why the class is protected — a fingerprint rule may never silence it, and a
 baseline quiets it one address at a time.
 
-The seven boards with no accelerometer report zero journeys for ever, promote
+The eight boards with no accelerometer report zero journeys for ever, promote
 nothing, and behave exactly as they did.
 
 The screen lists the **heaviest finding first**, recency only breaking ties.
@@ -844,6 +852,13 @@ esptool.py --chip esp32 -p /dev/ttyUSB0 write_flash \
     0x10000 ota_data_initial-cyd-3248s035r-st7796.bin \
     0x20000 observore-cyd-3248s035r-st7796.bin
 
+# RockBase NM-CYD-C5 (2.8" CYD on a C5) -- native USB, so ttyACM
+esptool.py --chip esp32c5 -p /dev/ttyACM0 write_flash \
+    0x2000  bootloader-nm-cyd-c5.bin \
+    0x8000  partition-table-nm-cyd-c5.bin \
+    0x10000 ota_data_initial-nm-cyd-c5.bin \
+    0x20000 observore-nm-cyd-c5.bin
+
 # Waveshare ESP32-S3-Touch-AMOLED-1.43 (round, capacitive)
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x0     bootloader-waveshare-s3-amoled-143.bin \
@@ -886,9 +901,9 @@ supported chip that can see 5 GHz at all. On a C5 the sniffer sweeps both bands
 ### Boards, which are not the same as chips
 
 `sdkconfig.defaults.<target>` describes a chip. A **board** is a separate thing
-and cannot be inferred from it — the ESP32-C5 appears twice here, once as a
-Waveshare kit with a WS2812 and a CH343 UART bridge, and once as a XIAO with a
-plain LED and only native USB. Board files live in [`boards/`](boards/):
+and cannot be inferred from it — the ESP32-C5 appears three times here: as a
+Waveshare kit with a WS2812 and a CH343 UART bridge, as a XIAO with a plain
+LED and only native USB, and as a Cheap Yellow Display with a screen on it. Board files live in [`boards/`](boards/):
 
 ```bash
 idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
@@ -904,6 +919,8 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | `boards/cyd-2432s028r-st7789` | GPIO16, plain (green of the RGB) | GPIO0 | original ESP32, **no PSRAM, no notifier**; the later 2.8" CYD, on-screen display |
 | `boards/cyd-2432s028r-ili9341` | GPIO16, plain (green of the RGB) | GPIO0 | as above for the original 2.8" CYD and its 2.4"/3.2" siblings; **not yet confirmed on hardware** |
 | `boards/cyd-3248s035r-st7796` | GPIO16, plain (green of the RGB) | GPIO0 | the 3.5" CYD, 480x320 with touch; resistive **R** model only |
+| `boards/nm-cyd-c5` | GPIO27, WS2812 | GPIO28 | the 2.8" CYD on a **C5**: 8 MB PSRAM, dual-band, with touch. The only display board that sees 5 GHz |
+| `boards/waveshare-s3-amoled-143` | none — the panel is the indicator | GPIO0 | round 466x466 AMOLED, capacitive touch, clock and **accelerometer** |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
@@ -1565,21 +1582,6 @@ from the cell to a free pin. The run history answers the question that matters
 without any of that: the figure above, 25.1 hours, was measured rather than
 estimated.
 
-**Calibrating another panel.** Three things vary between assemblies and all
-three are build options: the bounds of the resistive sheet, whether its axes
-are crossed relative to the landscape display, and which way each one runs.
-Build with `CONFIG_OBSERVORE_TOUCH_LOG_RAW=y`, press the screen, and read the
-values off the log.
-
-Check the crossing first, and check it with a press to the left and then a
-press to the right at the same height. On the panels here that single move
-swings raw Y across its whole range while raw X barely stirs, which is what
-`CONFIG_OBSERVORE_TOUCH_SWAP_XY` exists for. Corner presses will not tell you
-this: a corner moves both axes at once, and two corners that share an edge
-look exactly like a dead axis — which is what they were read as here, through
-a board swap and a hunt for a fault that did not exist, before one deliberate
-left-right press settled it in ten seconds.
-
 That board does not send notifications. It cannot: the notifier is a build
 option (`CONFIG_OBSERVORE_NOTIFIER`) and the CYD profile leaves it out, which
 is what makes the port fit. Every memory problem this project has had was on
@@ -1602,6 +1604,50 @@ were settled on the bench against what is written about it: it does not want
 colour inversion, the SPI path does not byte-swap for you, and the panel driver
 returns before DMA has read the buffer you handed it. Each is a build setting
 or a comment where the next revision will look.
+
+### Calibrating a panel
+
+A resistive sheet does not read the same from one assembly to the next, so the
+bounds compiled into a profile are one unit's measurements — ours. If presses
+land a row or two off where you aimed, the panel in your hand simply reads
+differently, and the fix is on the device rather than in a rebuild.
+
+**`calibrate`** is the fourth action on the system page, on the boards that
+have a resistive panel. It shows a target near one corner and then near the
+other, and stores what it measured in NVS, where it survives an update like
+the Wi-Fi details do. The button reads `recalibrate` afterwards. It reads the
+**raw** channels rather than the mapped ones, because the mapping is the thing
+being corrected.
+
+Press the middle of each cross rather than the corner itself. The bezel
+overlaps the glass on these boards and a press right at the edge often does
+not register at all — which is how the 3.5" panel's first calibration came
+out short and squashed its bottom three rows together. That is also why the
+targets sit two characters in from the edge, and why the arithmetic scales the
+measured span back out to the full sheet instead of assuming the press landed
+where the cross was drawn. A stored calibration with no extent is ignored
+rather than divided by.
+
+A capacitive panel has nothing to calibrate: the FT3168 reports panel pixels
+directly, so the round board has no such action and never needed one.
+
+**Porting a new board** is the case calibration does not cover, because two
+of the three variables are structural rather than per-unit: whether the touch
+axes are crossed relative to the landscape display, and which way each one
+runs. Build with `CONFIG_OBSERVORE_TOUCH_LOG_RAW=y`, press the screen, and
+read the values off the log.
+
+Check the crossing first, and check it with a press to the left and then a
+press to the right **at the same height**. On the panels here that single move
+swings raw Y across its whole range while raw X barely stirs, which is what
+`CONFIG_OBSERVORE_TOUCH_SWAP_XY` exists for. Corner presses will not tell you
+this: a corner moves both axes at once, and two corners that share an edge
+look exactly like a dead axis — which is what they were read as here, through
+a board swap and a hunt for a fault that did not exist, before one deliberate
+left-right press settled it in ten seconds.
+
+Get those two right and the bounds no longer have to be: hand the board to
+whoever owns it and let them press two crosses.
 
 ## Notifications
 
@@ -2021,13 +2067,14 @@ itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
 
-The board matters as much as the version. Two of the eight boards here are
-ESP32-C5s and two are the same classic ESP32 behind different glass, and none of
-those images are interchangeable, which is why the installer offers a picker
+The board matters as much as the version. Three of the nine boards here are
+ESP32-C5s and three are the same classic ESP32 behind different glass, and none
+of those images are interchangeable, which is why the installer offers a picker
 rather than deciding from the chip. A device updating itself has the same
 problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
 `devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789`,
-`cyd-2432s028r-ili9341` or `cyd-3248s035r-st7796`. CI asserts that each board's build resolves to its own
+`cyd-2432s028r-ili9341`, `cyd-3248s035r-st7796`, `nm-cyd-c5` or
+`waveshare-s3-amoled-143`. CI asserts that each board's build resolves to its own
 name, checked against the `sdkconfig` the build actually produced rather than
 by re-deriving the layering.
 
