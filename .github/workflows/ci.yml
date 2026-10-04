@@ -32,6 +32,12 @@ jobs:
       - name: Scan tracked files
         run: tools/check_no_secrets.sh
 
+      # Diagnostic code announces itself and then gets committed anyway. Two
+      # TEMP blocks reached a pull request and passed every other check, and
+      # one of them silently disabled the stored brightness on every board.
+      - name: No diagnostic scaffolding left in the source
+        run: tools/check_no_scaffolding.sh
+
   # A board profile that nothing builds is a board profile that quietly rots.
   # These describe boards rather than chips -- the C5 appears twice, once as a
   # Waveshare kit with a WS2812 and a UART bridge and once as a XIAO with a
