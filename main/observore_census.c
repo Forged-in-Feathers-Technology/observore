@@ -22,8 +22,36 @@ static void census_save(void);
 static void census_load(void);
 #endif
 
-static observore_census_entry_t s_tab[OBSERVORE_CENSUS_MAX];
-static size_t s_count;
+/* The stored blob and the live table are the same bytes.
+ *
+ * They were separate, and that cost 4,864 bytes of static RAM on every board:
+ * the table, plus a scratch buffer in the loader and another in the saver, all
+ * the same size. On the devkit C5 -- headless, so it carries the notifier and
+ * its TLS -- the internal heap floor fell from about fourteen kilobytes to
+ * 2,932 over one night, and name resolution began failing with EAI_FAIL while
+ * notifications queued up unsent. getaddrinfo() has to allocate, and at three
+ * kilobytes it could not.
+ *
+ * Laying the header immediately before the entries means a save hands NVS a
+ * pointer into this struct and a length, with nothing copied anywhere. The
+ * loader reads straight into it and validates afterwards, which is safe
+ * because a blob that fails validation leaves the census empty -- which is
+ * exactly what a rejected blob means anyway.
+ *
+ * The header is four bytes, so the entries stay four-aligned behind it and
+ * their uint32 ids need no packing. */
+typedef struct {
+    uint16_t version;
+    uint16_t count;
+} census_blob_hdr_t;
+
+static struct {
+    census_blob_hdr_t        hdr;
+    observore_census_entry_t e[OBSERVORE_CENSUS_MAX];
+} s_store = {.hdr = {OBSERVORE_CENSUS_FORMAT, 0}};
+
+#define s_tab   (s_store.e)
+#define s_count (s_store.hdr.count)
 
 /* Days from 2000-01-01, from a civil date.
  *
@@ -273,20 +301,6 @@ size_t observore_census_entries(const observore_census_entry_t **out)
     return s_count;
 }
 
-/* What a saved census looks like: a short header, then the entries.
- *
- * The header exists because the entries grew. Version 1 had no address set
- * and was eight bytes an entry; this one is larger, and an old blob holding
- * an even number of entries divides evenly into the new entry size. It would
- * have restored as half as many entries of garbage -- plausible-looking ids,
- * nonsense day masks -- rather than being rejected. Recognising a format by
- * the length that happens to fit is how the touch calibration went wrong, so
- * this says what wrote it. */
-typedef struct {
-    uint16_t version;
-    uint16_t count;
-} census_blob_hdr_t;
-
 size_t observore_census_blob(void *out, size_t cap)
 {
     size_t need = sizeof(census_blob_hdr_t) +
@@ -319,28 +333,36 @@ bool observore_census_restore(const void *blob, size_t len)
     if (len != sizeof(hdr) + (size_t)hdr.count * sizeof(observore_census_entry_t)) {
         return false;
     }
-    memcpy(s_tab, (const char *)blob + sizeof(hdr),
-           (size_t)hdr.count * sizeof(observore_census_entry_t));
+    /* The loader reads straight into the store, so the source and the
+     * destination are the same bytes and there is nothing to move. memcpy
+     * with identical pointers is undefined behaviour rather than a harmless
+     * no-op, so it is skipped rather than relied upon. */
+    const void *src = (const char *)blob + sizeof(hdr);
+    if (src != (const void *)s_tab) {
+        memcpy(s_tab, src, (size_t)hdr.count * sizeof(observore_census_entry_t));
+    }
     s_count = hdr.count;
     return true;
 }
 
 #ifndef OBSERVORE_HOST_TEST
-#define CENSUS_BLOB_MAX (sizeof(census_blob_hdr_t) + \
-                         OBSERVORE_CENSUS_MAX * sizeof(observore_census_entry_t))
-
 static void census_load(void)
 {
-    static uint8_t buf[CENSUS_BLOB_MAX];
+    /* Straight into the store. A blob that does not validate leaves the
+     * census empty, which is what rejecting it means, so there is nothing to
+     * protect by reading somewhere else first. */
     observore_nvs_item_t item = {.key = "census", .type = OBSERVORE_NVS_BLOB,
-                                 .buf = buf, .len = sizeof(buf)};
+                                 .buf = &s_store, .len = sizeof(s_store)};
     if (observore_nvs_read(&item, 1) != ESP_OK || !item.found) {
+        s_count = 0;
         return;
     }
-    if (!observore_census_restore(buf, item.len)) {
+    if (!observore_census_restore(&s_store, item.len)) {
         ESP_LOGW(TAG, "the saved census was written by an older build "
                       "(%u bytes) -- starting over. It will rebuild over the "
                       "next few days.", (unsigned)item.len);
+        s_store.hdr.version = OBSERVORE_CENSUS_FORMAT;
+        s_count = 0;
         return;
     }
     ESP_LOGI(TAG, "census: %u known", (unsigned)s_count);
@@ -348,10 +370,12 @@ static void census_load(void)
 
 static void census_save(void)
 {
-    static uint8_t buf[CENSUS_BLOB_MAX];
-    size_t n = observore_census_blob(buf, sizeof(buf));
+    /* No copy: the header already sits in front of the entries. */
+    s_store.hdr.version = OBSERVORE_CENSUS_FORMAT;
     const observore_nvs_item_t item = {
-        .key = "census", .type = OBSERVORE_NVS_BLOB, .buf = buf, .len = n};
+        .key = "census", .type = OBSERVORE_NVS_BLOB, .buf = &s_store,
+        .len = sizeof(census_blob_hdr_t) +
+               (size_t)s_count * sizeof(observore_census_entry_t)};
     if (observore_nvs_write(&item, 1) != ESP_OK) {
         ESP_LOGW(TAG, "could not save the census");
     }
