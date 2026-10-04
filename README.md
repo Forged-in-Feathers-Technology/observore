@@ -1431,9 +1431,17 @@ point is involved, which keeps it exact and costs nothing on a chip with no
 FPU to spare. Four places is deliberate: enough for "a drone is over there",
 not enough to imply a survey.
 
-Only the BLE path decodes today. The Wi-Fi sniffer reports that a Remote ID
-element was present but does not yet hand over the bytes, so a drone seen only
-over Wi-Fi is still reported without a position.
+**Both transports decode, with one parser.** That is a property of the format
+rather than a convenience: over BLE the payload is the service data under UUID
+0xFFFA, and over Wi-Fi it is a vendor-specific element whose body is the ASTM
+OUI followed by a vendor type of `0x0D` — the same byte, in the same position
+relative to everything after it. The sniffer hands the element over from the
+vendor type onward, which is where the BLE service data begins, and the rest is
+identical.
+
+A position beats a name: a drone's beacon SSID is usually its model, which the
+label already says, so the SSID is the fallback when no position was broadcast
+or the element was malformed — never a replacement for one.
 
 ### Choosing which monitors run
 

@@ -149,8 +149,8 @@ static bool decode_message(const uint8_t *m, observore_odid_t *out)
     }
 }
 
-bool observore_odid_parse_ble(const uint8_t *sd, size_t len,
-                              observore_odid_t *out)
+bool observore_odid_parse(const uint8_t *sd, size_t len,
+                          observore_odid_t *out)
 {
     if (!sd || !out) {
         return false;

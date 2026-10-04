@@ -244,10 +244,12 @@ static bool beacon_is_secure(const uint8_t *ies, size_t len)
 static const char PWNAGOTCHI_MARKER[] = "pwnd_tot";
 
 static bool parse_ies(const uint8_t *ies, size_t len, char *ssid, size_t ssid_len,
-                      bool *pwnd)
+                      bool *pwnd, const uint8_t **odid_payload, size_t *odid_len)
 {
     bool odid = false;
     size_t i = 0;
+    if (odid_payload) { *odid_payload = NULL; }
+    if (odid_len)     { *odid_len = 0; }
 
     while (i + 2 <= len) {
         uint8_t id = ies[i];
@@ -269,6 +271,15 @@ static bool parse_ies(const uint8_t *ies, size_t len, char *ssid, size_t ssid_le
                    memcmp(body, ASTM_OUI, 3) == 0 &&
                    body[3] == ASTM_VENDOR_TYPE_ODID) {
             odid = true;
+            /* Keep the payload from the vendor type onward, which is where
+             * the BLE service data begins too, so the one decoder reads
+             * both. Pointing into the caller's frame rather than copying:
+             * this is the promiscuous callback, and the classifier runs
+             * before the frame goes out of scope. */
+            if (odid_payload && odid_len) {
+                *odid_payload = body + 3;
+                *odid_len = (size_t)ie_len - 3;
+            }
         } else if (id == IE_VENDOR_SPECIFIC && pwnd && !*pwnd &&
                    ie_len >= sizeof(PWNAGOTCHI_MARKER) - 1) {
             /* A pwnagotchi finds other pwnagotchis by putting a plain-ASCII
@@ -407,7 +418,10 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 
     char ssid[33] = {0};
     bool pwnd = false;
-    bool odid = parse_ies(ies, ie_len, ssid, sizeof(ssid), &pwnd);
+    const uint8_t *odid_payload = NULL;
+    size_t odid_payload_len = 0;
+    bool odid = parse_ies(ies, ie_len, ssid, sizeof(ssid), &pwnd,
+                          &odid_payload, &odid_payload_len);
 
     /* What the access point says about itself, if it says anything. Beacons
      * and probe responses from most consumer hardware carry a WPS element
@@ -425,6 +439,8 @@ static void sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         .ssid      = ssid[0] ? ssid : NULL,
         .wps       = observore_wps_empty(&wps) ? NULL : &wps,
         .remote_id = odid,
+        .odid = odid_payload,
+        .odid_len = odid_payload_len,
         .pwnagotchi = pwnd,
     };
     /* Whether or not a scan ever succeeds, a beacon we just decoded is an
