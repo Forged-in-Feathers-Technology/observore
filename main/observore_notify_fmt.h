@@ -82,9 +82,15 @@ typedef struct {
  * admits to it. The title always counts everything.
  *
  * `headline` is optional and leads the title when present, so a level change
- * reads as "alert: 6 findings (1 drone, 5 followers)". */
+ * reads as "alert: 6 findings (1 drone, 5 followers)".
+ *
+ * `monitors_off` is how many monitors are switched off, and appends a note
+ * to the body when it is not zero. It is a parameter rather than something
+ * looked up here because this file stays pure -- but it is not optional: a
+ * digest from a device that has been told to stop looking for things must say
+ * so, and the reader of a notification is the person least able to check. */
 size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
-                              const char *headline,
+                              const char *headline, int monitors_off,
                               char *title, size_t title_len,
                               char *body, size_t body_len);
 

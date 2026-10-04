@@ -262,6 +262,25 @@
 </div>
 
 <div class="panel">
+  <h2>Monitors <span id="moninfo" class="dim"></span></h2>
+  <div class="add">
+    <span class="note">Which questions this device asks. A monitor switched
+      off keeps <em>seeing</em> &mdash; the sighting is still tracked and
+      counted &mdash; but contributes nothing to the score, stays out of the
+      findings, and is not notified. Switch it back on and what has been
+      around all along appears at once.</span>
+  </div>
+  <div class="add">
+    <span class="note"><strong>A device with monitors off is not the same as a
+      device that looked and found nothing.</strong> Unlike an ignore rule, a
+      switched-off monitor leaves nothing behind to find later &mdash; no
+      count, no rule &mdash; so the number travels with the verdict, on the
+      screen and in the log at every boot.</span>
+  </div>
+  <div class="rules" id="monitors"></div>
+</div>
+
+<div class="panel">
   <h2>Household census <span id="censusinfo" class="dim"></span></h2>
   <div class="add">
     <span class="note">What this device keeps seeing, counted in days rather
@@ -463,7 +482,13 @@ async function mute(kind, value, row) {
 
 function renderStatus(s) {
   $('banner').className = 'banner ' + s.level;
-  $('level').textContent = s.level;
+  // The verdict never appears alone while a monitor is off. A switched-off
+  // monitor leaves nothing in the data to find afterwards, so if the verdict
+  // does not carry it, nothing does.
+  const monOff = (s.monitors && s.monitors.off) || 0;
+  $('level').textContent = monOff
+    ? s.level + ' \u2014 ' + monOff + ' monitor' + (monOff === 1 ? '' : 's') + ' off'
+    : s.level;
   $('score').textContent = s.score;
   $('devices').textContent = s.devices;
   $('sightings').textContent = s.sightings;
@@ -710,6 +735,44 @@ function renderCensus(c) {
   box.appendChild(t);
 }
 
+function renderMonitors(m) {
+  const box = $('monitors');
+  box.textContent = '';
+  const off = (m.monitors || []).filter(x => !x.on).length;
+  $('moninfo').textContent = off
+    ? off + ' switched off \u2014 this device is not looking for ' +
+      (m.monitors || []).filter(x => !x.on).map(x => x.class).join(', ')
+    : 'all on';
+  const t = document.createElement('table');
+  for (const mon of (m.monitors || [])) {
+    const tr = document.createElement('tr');
+    cell(tr, 'mac', mon.class);
+    tagCell(tr, mon.on ? 'clear' : 'alert', mon.on ? 'on' : 'OFF');
+    const td = document.createElement('td');
+    const b = document.createElement('button');
+    b.textContent = mon.on ? 'switch off' : 'switch on';
+    b.onclick = async () => {
+      /* A protected class is one the device exists to find. Turning it off is
+         allowed -- an explicit choice by the owner is not the same as a
+         baseline sweeping it up by accident -- but it is worth a pause. */
+      if (mon.on && mon.protected &&
+          !confirm('Stop looking for ' + mon.class + '?\n\n' +
+                   'This is a class this device exists to find. It will keep ' +
+                   'seeing them, but will not score, show or notify them ' +
+                   'until you switch it back on.')) return;
+      b.disabled = true;
+      await fetch('/api/monitors?class=' + encodeURIComponent(mon.class) +
+                  '&on=' + (mon.on ? '0' : '1'), { method: 'POST' });
+      refreshConfig();
+      refreshLive();
+    };
+    td.appendChild(b);
+    tr.appendChild(td);
+    t.appendChild(tr);
+  }
+  box.appendChild(t);
+}
+
 async function refreshLive() {
   if (locked) return;
   errors.length = 0;
@@ -717,6 +780,7 @@ async function refreshLive() {
     level: '?', score: 0, devices: 0, sightings: 0, uptime_s: 0, mode: '?',
     version: '', board: '', latest: '', update: false,
     update_state: 'idle', update_pct: -1, heap: null, runs: [], bright: -1, bright_steps: 0,
+    monitors: { off: 0, off_mask: 0 },
     checked_s: -1, checking: false, check_error: '' }));
   renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
@@ -815,6 +879,7 @@ async function refreshConfig() {
   renderNotify(await getJSON('/api/notify', { configured: false }));
   renderNet(await getJSON('/api/netcfg', { configured: false, ssid: '', ip: '' }));
   renderMutes(await getJSON('/api/mutes', { rules: [], suppressed: 0 }));
+  renderMonitors(await getJSON('/api/monitors', { off: 0, monitors: [] }));
 }
 
 // ---- actions ------------------------------------------------------------

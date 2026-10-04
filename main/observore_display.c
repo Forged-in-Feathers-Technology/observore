@@ -1007,10 +1007,27 @@ static void draw_watch(const observore_status_t *st,
     snprintf(text, sizeof(text), "  OBSERVORE  %-8s  score %u",
              observore_level_name(st->level), st->score);
     line(0, text, C_BLACK, band);
-    snprintf(text, sizeof(text), "  %u device%s   %lu sightings",
-             st->device_count, st->device_count == 1 ? "" : "s",
-             (unsigned long)st->total_sightings);
-    line(1, text, C_BLACK, band);
+    /* The count of switched-off monitors sits in the band itself, beside the
+     * verdict, because that is the only place it cannot be missed.
+     *
+     * A device that has been told to stop looking for something must not say
+     * "clear" as though it had looked. Unlike a mute rule, a disabled monitor
+     * leaves nothing in the data to find afterwards -- no suppressed count,
+     * no rule to read -- so if the verdict does not carry it, nothing does. */
+    /* Composed in a buffer sized for the text rather than for the grid: the
+     * narrowest panel here is forty columns, and the compiler has to assume a
+     * %u could be five digits. line() takes what fits. */
+    char bar[80];
+    if (st->monitors_off > 0) {
+        snprintf(bar, sizeof(bar), "  %u device%s   %d monitor%s OFF",
+                 st->device_count, st->device_count == 1 ? "" : "s",
+                 st->monitors_off, st->monitors_off == 1 ? "" : "s");
+    } else {
+        snprintf(bar, sizeof(bar), "  %u device%s   %lu sightings",
+                 st->device_count, st->device_count == 1 ? "" : "s",
+                 (unsigned long)st->total_sightings);
+    }
+    line(1, bar, C_BLACK, band);
 
     int row = 2;
     /* Something the person at the device just did, for a few seconds. */

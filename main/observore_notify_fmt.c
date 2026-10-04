@@ -369,7 +369,7 @@ static size_t census(const observore_digest_entry_t *e, size_t count,
 }
 
 size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
-                              const char *headline,
+                              const char *headline, int monitors_off,
                               char *title, size_t title_len,
                               char *body, size_t body_len)
 {
@@ -390,7 +390,31 @@ size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
              headline ? headline : "", headline ? ": " : "",
              count, count == 1 ? "" : "s", breakdown);
 
+    /* A device with monitors switched off says so in the body.
+     *
+     * Somebody reading this on a phone is the person least able to go and
+     * check, and a switched-off monitor leaves nothing behind to find later:
+     * no suppressed count, no rule, nothing. If the message does not carry
+     * it, nothing does.
+     *
+     * It leads the body rather than trailing it, which is what makes it
+     * impossible to lose. Reserving room for a trailing note was the first
+     * attempt and it was not good enough: whether the note survived depended
+     * on where the last finding happened to land, and the test written to
+     * prove the reservation worked passed just as happily with the
+     * reservation removed. Written first there is no arithmetic to get wrong
+     * -- a findings line is dropped instead, and "+N more" already accounts
+     * for that. It reads better too: the caveat frames what follows rather
+     * than arriving after the reader has drawn conclusions. */
     size_t written = 0, used = 0;
+    if (monitors_off > 0) {
+        used = (size_t)snprintf(body, body_len, "(%d monitor%s off)\n",
+                                monitors_off, monitors_off == 1 ? "" : "s");
+        if (used >= body_len) {
+            used = body_len - 1;
+        }
+    }
+    const size_t after_note = used;
     for (size_t i = 0; i < count && written < OBSERVORE_DIGEST_MAX_LINES; i++) {
         if (!entries[i].line || !entries[i].line[0]) {
             continue;
@@ -402,12 +426,12 @@ size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
             break;
         }
         used += (size_t)snprintf(body + used, body_len - used, "%s%s",
-                                 used ? "\n" : "", entries[i].line);
+                                 used > after_note ? "\n" : "", entries[i].line);
         written++;
     }
     if (written < count) {
         snprintf(body + used, body_len - used, "%s+%zu more",
-                 used ? "\n" : "", count - written);
+                 used > after_note ? "\n" : "", count - written);
     }
     return written;
 }

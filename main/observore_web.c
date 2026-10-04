@@ -5,6 +5,7 @@
 
 #include "observore_battery.h"
 #include "observore_census.h"
+#include "observore_monitors.h"
 #include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -204,6 +205,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"taps\":%u"
+        ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
         ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
@@ -245,6 +247,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_battery_mv(),
         observore_battery_pct_from_mv(observore_battery_mv()),
         (unsigned)observore_display_taps(),
+        st.monitors_off, (unsigned long)observore_monitors_off_mask(),
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
@@ -869,6 +872,60 @@ static esp_err_t census_handler(httpd_req_t *req)
     return send_json(req, body);
 }
 
+static esp_err_t monitors_get_handler(httpd_req_t *req)
+{
+    char body[768];
+    observore_jbuf_t jb;
+    observore_jb_init(&jb, body, sizeof(body), 2);
+    observore_jb_printf(&jb, "{\"off\":%d,\"monitors\":[",
+                        observore_monitors_off_count());
+    bool first = true;
+    for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
+        if (!observore_monitors_can_toggle((observore_class_t)c)) {
+            continue;
+        }
+        observore_jb_printf(&jb, "%s{\"class\":\"%s\",\"on\":%s,\"protected\":%s}",
+            first ? "" : ",", observore_class_name(c),
+            observore_monitors_enabled((observore_class_t)c) ? "true" : "false",
+            observore_mute_class_needs_address_rule((observore_class_t)c)
+                ? "true" : "false");
+        first = false;
+    }
+    observore_jb_close(&jb, "]}");
+    return send_json(req, body);
+}
+
+/* Switching a monitor off is a deliberate human act and this is the only way
+ * to do it. Nothing automatic -- not a baseline, not the census -- has a path
+ * to observore_monitors_set(), and that is the rule being kept by keeping it
+ * that way. */
+static esp_err_t monitors_set_handler(httpd_req_t *req)
+{
+    char q[96], name[32], onv[8];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+        httpd_query_key_value(q, "class", name, sizeof(name)) != ESP_OK ||
+        httpd_query_key_value(q, "on", onv, sizeof(onv)) != ESP_OK) {
+        return fail(req, "need class= and on=");
+    }
+    bool on = (onv[0] == '1' || onv[0] == 't' || onv[0] == 'y');
+
+    for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
+        if (strcmp(name, observore_class_name(c)) != 0) {
+            continue;
+        }
+        if (!observore_monitors_set((observore_class_t)c, on)) {
+            return fail(req, "that monitor cannot be switched");
+        }
+        /* Said in the log as well as answered, because switching a monitor
+         * off is the kind of change somebody should be able to find later
+         * without having thought to look at the time. */
+        ESP_LOGW(TAG, "monitor %s switched %s by the console",
+                 observore_class_name(c), on ? "on" : "off");
+        return send_json(req, "{\"ok\":true}");
+    }
+    return fail(req, "no such monitor");
+}
+
 static esp_err_t update_handler(httpd_req_t *req)
 {
     esp_err_t err = observore_update_install();
@@ -1021,6 +1078,8 @@ esp_err_t observore_web_start(void)
         {"/api/bright",    HTTP_POST, bright_handler,     false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/census",    HTTP_GET,  census_handler,     false},
+        {"/api/monitors",  HTTP_GET,  monitors_get_handler, false},
+        {"/api/monitors",  HTTP_POST, monitors_set_handler, false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},

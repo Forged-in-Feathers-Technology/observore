@@ -4,6 +4,7 @@
 
 #include "observore_clock.h"
 #include "observore_notify.h"
+#include "observore_monitors.h"
 
 #include "sdkconfig.h"
 #if CONFIG_OBSERVORE_NOTIFIER
@@ -523,13 +524,24 @@ void observore_notify_pump(void)
          * which happens when a device already known gains enough sightings to
          * move the score. Still worth saying, and it is the whole message. */
         snprintf(title, sizeof(title), "Observore: %s", headline);
-        snprintf(body, sizeof(body), "Threat level is now %s, score %u.",
-                 headline, headline_score);
+        /* This message has no findings to list, so the note about switched-off
+         * monitors has to be added here too: a level change reported by a
+         * device that is not looking for everything must say so. */
+        int off = observore_monitors_off_count();
+        if (off > 0) {
+            snprintf(body, sizeof(body),
+                     "Threat level is now %s, score %u. (%d monitor%s off)",
+                     headline, headline_score, off, off == 1 ? "" : "s");
+        } else {
+            snprintf(body, sizeof(body), "Threat level is now %s, score %u.",
+                     headline, headline_score);
+        }
         urgency = strcmp(headline, "alert") == 0 ? OBSERVORE_URGENCY_URGENT
                                                  : OBSERVORE_URGENCY_NORMAL;
     } else {
         observore_digest_build(entries, count,
                                headline[0] ? headline : NULL,
+                               observore_monitors_off_count(),
                                title, sizeof(title), body, sizeof(body));
     }
 

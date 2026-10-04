@@ -1385,6 +1385,63 @@ MAC rules. A minute later, after rotation, the score was still zero.
 
 Up to 128 rules are stored, in NVS, surviving reboots.
 
+### Choosing which monitors run
+
+Not everybody wants every class. Somebody watching a car park for trackers has
+no use for fleet telematics; somebody auditing a building's cameras does not
+want a follower class at all. The console's **Monitors** panel switches each
+one off, and the setting survives a reboot.
+
+**Off means "keep seeing, stop reporting".** A disabled class is still
+classified, still tracked, and still counted — it contributes nothing to the
+score, stays out of the findings, and is not notified. That costs almost
+nothing, because the device table is shared either way, and it means switching
+a monitor back on shows what has been around *all along* rather than starting a
+blank history. It is the same shape as the census: gather first, act later.
+
+**A device with monitors off never reports `clear` as though it had looked.**
+This matters more here than anywhere else in the device. An ignore rule leaves
+a trail — the rule is listed, it carries what it suppressed, and a fingerprint
+rule that covers a population retires itself. A switched-off monitor leaves
+*nothing* to find afterwards. So the count travels with the verdict everywhere
+the verdict goes:
+
+- on the glass, in the coloured band itself, beside the level
+- in the console, appended to the level: `clear — 2 monitors off`
+- in `/api/status`, as `monitors: {off, off_mask}`
+- at the top of every notification body, `(2 monitors off)`
+- in the log at every boot, naming each one
+
+The notification note **leads** the body rather than trailing it, which is what
+makes it impossible to lose. Reserving room for a trailing note was the first
+attempt, and it was not good enough — whether the note survived depended on
+where the last finding happened to land, and the test written to prove the
+reservation worked passed just as happily with the reservation removed. Written
+first there is no arithmetic to get wrong: a findings line is dropped instead,
+and `+N more` already accounts for that.
+
+**A protected class can be switched off, but only by a person.** Body camera,
+ALPR and tracker are the classes this device exists to find, and an explicit
+visible choice by the owner is different in kind from a baseline sweeping
+something up by accident — so the console allows it, behind a confirmation that
+says what it means. What stays impossible is anything *automatic* doing it: not
+a baseline, not the census, not a future mesh peer. That is enforced by
+construction — nothing but the console calls the setter — rather than by a
+flag, so the rule is kept by not adding callers.
+
+**`unknown` is not a monitor** and cannot be switched off. It is what the
+device says when nothing matched, so hiding it would mean hiding everything the
+device could not name, which is the opposite of the point. The unclassified
+list is untouched by this feature for the same reason.
+
+**The stored value is which monitors are *off*, not which are on.** Classes get
+appended to the list as the project learns to spot new things — fifteen so far.
+Storing the on-set would mean a setting saved today has a zero where tomorrow's
+class will be, and that class would arrive switched off on every device that had
+ever saved a preference. Storing the off-set makes the default fall the safe
+way: an unknown bit is zero, zero means on, and a missing or unreadable setting
+means everything is on rather than nothing.
+
 ### Learning the furniture, without acting on it yet
 
 A baseline is a decision you make once, by hand, about a room you happen to be
