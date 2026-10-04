@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "observore_ble.h"
+#include "observore_peer.h"
 #include "sdkconfig.h"
 #include "observore_track.h"
 #include "esp_log.h"
@@ -68,7 +69,18 @@ static int on_gap_event(struct ble_gap_event *event, void *arg)
         .adv         = d->data,
         .adv_len     = d->length_data,
     };
-    observore_track_observe(&obs, esp_timer_get_time());
+    int64_t now = esp_timer_get_time();
+
+    /* A warning from another node is kept as a warning as well as being
+     * classified as the peer that sent it. The classifier stays pure and
+     * says what the finding looks like; the standing record of who warned
+     * about what, with replay and ageing, lives in observore_peer. */
+    observore_peer_warning_t warn;
+    if (observore_peer_from_advert(d->data, d->length_data, &warn)) {
+        observore_peer_note(&warn, now);
+    }
+
+    observore_track_observe(&obs, now);
     return 0;
 }
 

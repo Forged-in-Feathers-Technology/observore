@@ -6,6 +6,7 @@
 #include "observore_battery.h"
 #include "observore_census.h"
 #include "observore_monitors.h"
+#include "observore_peer.h"
 #include "observore_motion.h"
 #include "observore_mute.h"
 #include "observore_netcfg.h"
@@ -169,6 +170,12 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_clock_iso(now, now_iso, sizeof(now_iso));
     const observore_heap_event_t *latest = observore_heapwatch_latest();
 
+    /* What other nodes have warned about. A receive-only node emits nothing
+     * and still benefits from every warning in range, so this is the number
+     * that says whether that is working. */
+    int peer_nodes = 0, peer_warnings = 0;
+    observore_peer_counts(now, &peer_nodes, &peer_warnings);
+
     /* What the census has learned. Reported before anything acts on it, which
      * is the point of reporting it: "known" climbing while "household" stays
      * at nothing would mean the rule is never being satisfied, and there is no
@@ -206,6 +213,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
+        ",\"peers\":{\"nodes\":%d,\"warnings\":%d}"
         ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
@@ -248,6 +256,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_battery_pct_from_mv(observore_battery_mv()),
         (unsigned)observore_display_taps(),
         st.monitors_off, (unsigned long)observore_monitors_off_mask(),
+        peer_nodes, peer_warnings,
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {

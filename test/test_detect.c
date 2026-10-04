@@ -16,6 +16,7 @@
 #include "observore_census.h"
 #include "observore_monitors.h"
 #include "observore_odid.h"
+#include "observore_peer.h"
 #include "observore_touchcal.h"
 #include "observore_tap.h"
 #include "observore_watch.h"
@@ -1602,6 +1603,183 @@ static void test_a_drone_says_where_it_is_and_where_its_pilot_is(void)
           "a negative fraction keeps its sign, got '%s'", buf);
     CHECK(observore_odid_format_pos(515074000, -1278000, buf, 4) < 4,
           "and a short buffer truncates rather than overruns");
+}
+
+static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
+{
+    banner("a warning from another node is heard, and can only raise");
+
+    /* Payloads built from the documented format rather than typed out. */
+    static const uint8_t w_drone[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x01, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x07, 0x00, 0x1E, 0x00, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF};
+    static const uint8_t w_nopos[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x08, 0x00, 0x0C, 0x00};
+    static const uint8_t w_replay[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x01, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x07, 0x00, 0x1E, 0x00, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF};
+    static const uint8_t w_other[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0x44, 0x33, 0x22, 0x11, 0x07, 0x01, 0x00, 0x05, 0x00};
+    static const uint8_t w_badver[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x09, 0x00, 0x01, 0x00};
+    static const uint8_t w_nofix[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x01, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t w_tagged[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x02, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x0B, 0x00, 0x01, 0x00, 0xDE, 0xAD, 0xBE, 0xEF};
+    static const uint8_t w_unkcls[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0xD4, 0xC3, 0xB2, 0xA1, 0xC8, 0x0C, 0x00, 0x01, 0x00};
+    static const uint8_t w_wrap_hi[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0x55, 0x55, 0x55, 0x55, 0x05, 0xFF, 0xFF, 0x01, 0x00};
+    static const uint8_t w_wrap_lo[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0x55, 0x55, 0x55, 0x55, 0x05, 0x00, 0x00, 0x01, 0x00};
+
+    observore_peer_warning_t w;
+
+    /* A neighbour saying it saw a drone, thirty seconds ago, over London. */
+    CHECK(observore_peer_parse(w_drone, sizeof(w_drone), &w), "a warning decodes");
+    CHECK(w.node == 0xA1B2C3D4u, "from a named node, got %08lx", (unsigned long)w.node);
+    CHECK(w.cls == OBSERVORE_CLASS_DRONE, "warning about a drone, got %u", w.cls);
+    CHECK(w.seq == 7 && w.age_s == 30, "sequence and age, got %u/%u", w.seq, w.age_s);
+    CHECK(w.have_pos && w.lat_e7 == 515074000 && w.lon_e7 == -1278000,
+          "with a position");
+
+    /* Nothing can be verified yet, so nothing is trusted -- including a
+     * warning that carries a tag. A tag that cannot be checked must never be
+     * mistaken for one that has been. */
+    CHECK(!w.trusted, "an unsigned warning is not trusted");
+    CHECK(observore_peer_parse(w_tagged, sizeof(w_tagged), &w), "a tagged warning decodes");
+    CHECK(!w.trusted, "and a tag nobody can check does not make it trusted");
+
+    /* Our own format, so a version we do not know is refused rather than read
+     * by a layout we have since changed. */
+    CHECK(!observore_peer_parse(w_badver, sizeof(w_badver), &w),
+          "an unknown format version is refused");
+
+    /* Zero/zero is the Gulf of Guinea and what a node without a fix sends. */
+    CHECK(observore_peer_parse(w_nofix, sizeof(w_nofix), &w), "a warning with no fix decodes");
+    CHECK(!w.have_pos, "but zero/zero is not repeated as a position");
+
+    /* A class this build does not have means a neighbour knows about
+     * something we do not. That it is warning at all is the useful part. */
+    CHECK(observore_peer_parse(w_unkcls, sizeof(w_unkcls), &w), "an unknown class decodes");
+    CHECK(w.cls == OBSERVORE_CLASS_UNKNOWN, "and lands as unknown rather than invented");
+
+    /* Refusals. */
+    static const uint8_t wrong_magic[] = {'S','Q','M','1', 0x01, 0x00, 0,0,0,0, 0, 0,0, 0,0};
+    CHECK(!observore_peer_parse(wrong_magic, sizeof(wrong_magic), &w),
+          "another project's magic is not read as ours");
+    CHECK(!observore_peer_parse(w_drone, 10, &w), "a truncated warning is refused");
+    CHECK(!observore_peer_parse(NULL, 20, &w), "no payload is refused");
+    /* Claims a position that did not arrive. */
+    CHECK(!observore_peer_parse(w_drone, 15 + 4, &w),
+          "a warning claiming a position it did not send is refused");
+
+    /* Replay. A warning whose sequence does not advance is dropped: the
+     * cheapest attack on a table like this is to repeat somebody's warning
+     * back at it forever. */
+    observore_peer_init();
+    observore_peer_parse(w_drone, sizeof(w_drone), &w);
+    CHECK(observore_peer_note(&w, SECS(10)), "the first warning is kept");
+    observore_peer_parse(w_replay, sizeof(w_replay), &w);
+    CHECK(!observore_peer_note(&w, SECS(20)), "the same sequence again is dropped");
+    observore_peer_parse(w_nopos, sizeof(w_nopos), &w);
+    CHECK(observore_peer_note(&w, SECS(30)), "a later sequence is kept");
+
+    /* And a node that wraps or reboots is still heard. A plain greater-than
+     * would silence it permanently the first time its counter rolled over. */
+    observore_peer_init();
+    observore_peer_parse(w_wrap_hi, sizeof(w_wrap_hi), &w);
+    CHECK(observore_peer_note(&w, SECS(10)), "a warning at 65535 is kept");
+    observore_peer_parse(w_wrap_lo, sizeof(w_wrap_lo), &w);
+    CHECK(observore_peer_note(&w, SECS(20)),
+          "and the next one at zero is heard rather than taken for a replay");
+
+    /* One entry per node: a node repeating itself must not be able to fill
+     * the table and push other nodes out. */
+    observore_peer_init();
+    for (int i = 0; i < 20; i++) {
+        uint8_t v[sizeof(w_nopos)];
+        memcpy(v, w_nopos, sizeof(v));
+        v[11] = (uint8_t)(20 + i);          /* advancing sequence */
+        observore_peer_parse(v, sizeof(v), &w);
+        observore_peer_note(&w, SECS(100 + i));
+    }
+    observore_peer_parse(w_other, sizeof(w_other), &w);
+    observore_peer_note(&w, SECS(130));
+    int nodes = -1, warnings = -1;
+    observore_peer_counts(SECS(130), &nodes, &warnings);
+    CHECK(nodes == 2, "twenty warnings from one node plus one from another is two nodes, got %d", nodes);
+
+    /* Warnings age out, because a warning is about now. One kept for ever
+     * would let a single sighting look like a standing alarm. */
+    observore_peer_counts(SECS(130) + (int64_t)OBSERVORE_PEER_TTL_S * 1000000 + SECS(1),
+                          &nodes, &warnings);
+    CHECK(nodes == 0, "and they expire, got %d", nodes);
+
+    /* Newest first. */
+    observore_peer_init();
+    observore_peer_parse(w_other, sizeof(w_other), &w);
+    observore_peer_note(&w, SECS(10));
+    observore_peer_parse(w_drone, sizeof(w_drone), &w);
+    observore_peer_note(&w, SECS(20));
+    observore_peer_warning_t got[4];
+    size_t n = observore_peer_recent(got, 4, SECS(25));
+    CHECK(n == 2, "two warnings stand, got %zu", n);
+    CHECK(got[0].node == 0xA1B2C3D4u, "newest first");
+
+    /* The whole-advert path, and then the classifier, because the decoder
+     * passing on its own proves nothing about what reaches a screen. */
+    uint8_t padv[64];
+    padv[0] = (uint8_t)(1 + 2 + sizeof(w_drone));
+    padv[1] = 0xFF;                   /* manufacturer specific */
+    padv[2] = 0xFF; padv[3] = 0xFF;   /* non-production company */
+    memcpy(&padv[4], w_drone, sizeof(w_drone));
+    size_t padv_len = 4 + sizeof(w_drone);
+
+    observore_peer_warning_t fromadv;
+    CHECK(observore_peer_from_advert(padv, padv_len, &fromadv),
+          "a warning is found in a whole advert");
+    CHECK(fromadv.node == 0xA1B2C3D4u && fromadv.cls == OBSERVORE_CLASS_DRONE,
+          "with its sender and its subject");
+
+    /* A different company ID is not ours, whatever follows it. */
+    uint8_t wrongco[64];
+    memcpy(wrongco, padv, padv_len);
+    wrongco[2] = 0x4C; wrongco[3] = 0x00;    /* a real assigned company */
+    CHECK(!observore_peer_from_advert(wrongco, padv_len, &fromadv),
+          "another company's element is not read as ours");
+
+    /* And through the classifier: #132 predicted that a meshing Observore
+     * becomes a peer-detector in somebody else's device, including ours. It
+     * does -- and now the finding says what the neighbour was warning about
+     * rather than only that it exists. */
+    const uint8_t pmac[6] = {0x70, 0x4B, 0xCA, 0x01, 0x02, 0x03};
+    observore_observation_t pobs = {
+        .mac = pmac, .src = OBSERVORE_SRC_BLE, .rssi = -48,
+        .adv = padv, .adv_len = padv_len,
+    };
+    observore_event_t pev;
+    CHECK(observore_classify(&pobs, &pev), "the advert classifies");
+    CHECK(pev.cls == OBSERVORE_CLASS_PEER_DETECTOR,
+          "as a peer detector, which is what #132 said it would be");
+    CHECK(strstr(pev.detail, "warns") != NULL && strstr(pev.detail, "drone") != NULL,
+          "and says what it warned about: '%s'", pev.detail);
+    CHECK(strstr(pev.detail, "51.5074") != NULL,
+          "including where: '%s'", pev.detail);
+
+    /* SquachWatch is still SquachWatch. Both ride under the same company ID,
+     * so the magic is the only thing separating them, and adding ours must
+     * not have shadowed theirs. */
+    uint8_t sq[32] = {0};
+    sq[0] = 1 + 2 + 8;
+    sq[1] = 0xFF; sq[2] = 0xFF; sq[3] = 0xFF;
+    memcpy(&sq[4], "SQM1", 4);
+    sq[8] = 1;
+    pobs.adv = sq; pobs.adv_len = 12;
+    CHECK(observore_classify(&pobs, &pev), "a SquachWatch advert still classifies");
+    CHECK(pev.cls == OBSERVORE_CLASS_PEER_DETECTOR, "as a peer detector");
+    CHECK(strstr(pev.detail, "warns") == NULL,
+          "and is not mistaken for one of ours: '%s'", pev.detail);
+
+    /* The asymmetry, asserted rather than assumed. Nothing in this module
+     * can quiet anything: there is no suppression path, and a warning
+     * contributes nothing to the score. A stranger can raise attention and
+     * can never cause silence -- which is what makes an open mesh survivable,
+     * because a Sybil flood produces noise rather than blindness. */
+    observore_track_init();
+    observore_monitors_init();
+    observore_status_t st;
+    observore_track_status(&st, SECS(26));
+    CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR,
+          "warnings heard from strangers do not move the score, got %u", st.score);
 }
 
 static void test_bcd(void)
@@ -4051,6 +4229,7 @@ int main(void)
     test_a_switched_off_monitor_stops_reporting_not_seeing();
     test_a_digest_admits_what_it_is_not_looking_for();
     test_a_drone_says_where_it_is_and_where_its_pilot_is();
+    test_a_warning_from_a_stranger_can_raise_but_never_quiet();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

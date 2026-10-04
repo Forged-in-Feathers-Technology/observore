@@ -1443,6 +1443,71 @@ A position beats a name: a drone's beacon SSID is usually its model, which the
 label already says, so the SSID is the fallback when no position was broadcast
 or the element was malformed — never a replacement for one.
 
+### Hearing other nodes, without becoming findable
+
+Another Observore in range can warn this one about what it has seen. **This
+half only listens.** The device already scans BLE continuously, so hearing a
+neighbour costs nothing and adds no exposure — which is the whole reason
+receiving comes first.
+
+Transmitting is a separate, opt-in change, and not built. A node that
+broadcasts becomes findable by direction-finding, and *there is an observer
+here* is the one thing a counter-surveillance device should not announce. So a
+**receive-only node is a first-class configuration**, not a degraded one: it
+benefits from every warning in range and emits nothing.
+
+**Strangers may warn; only friends may silence.** A warning from a node this
+device cannot authenticate can draw attention and can never quiet anything.
+That asymmetry is what makes an open mesh survivable — an adversary standing up
+ten invented nodes produces *noise*, never blindness, and noise is recoverable
+in a way that silent suppression is not. In this slice it holds by
+construction: there is no suppression path at all, and a warning contributes
+**zero** to the score. The device says what it heard and whose it was, and a
+person decides.
+
+A warning rides in manufacturer-specific data under company `0xFFFF`, the SIG's
+reserved non-production ID, with four magic bytes that make it specific —
+`OBW1`. That is the same arrangement SquachWatch uses, because the company ID
+alone means nothing: every hobby project made the same honest choice. There is
+a test that adding ours did not shadow theirs.
+
+It arrives as a `peer-detector`, which [#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)
+predicted against this project before any of it was built — *a meshing
+Observore becomes a peer-detector in somebody else's device, including ours*.
+What is new is that the finding says what the neighbour was warning about:
+
+```
+peer-detector   Observore node   warns drone 51.5074,-0.1278   -48 dBm
+```
+
+Four details of the format earn their place:
+
+- **A sequence that must advance**, compared modulo the space rather than
+  arithmetically. Repeating somebody's warning back at them forever is the
+  cheapest attack on a table like this, and a plain greater-than would silence
+  a node permanently the first time its counter wrapped or it rebooted.
+- **One entry per node.** A node repeating itself must not be able to fill the
+  table and push other nodes out.
+- **Warnings expire**, after five minutes. A warning is about *now*; one kept
+  for ever would let a single sighting look like a standing alarm.
+- **A version we do not know is refused.** Unlike another project's format this
+  one is ours, and reading fields by a layout we have since changed is how a
+  position ends up in the wrong place.
+
+A tag field is parsed for its length and then ignored, because there is no key
+management yet. A tag that cannot be checked must never be mistaken for one
+that has been, so `trusted` is always false — which is also why nothing in this
+slice can be trusted enough to suppress.
+
+One honest constraint of the format: a legacy advert gives 24 usable bytes once
+a flags element is present. A bare warning is 15 and one carrying a position is
+23, so both fit — but a warning that is both positioned *and* signed is 27 and
+does not. That needs BLE 5 extended advertising, which every board here except
+the classic ESP32 CYDs supports.
+
+`/api/status` reports `peers: {nodes, warnings}`, which is how a headless
+receive-only node says whether it is hearing anything at all.
+
 ### Choosing which monitors run
 
 Not everybody wants every class. Somebody watching a car park for trackers has
