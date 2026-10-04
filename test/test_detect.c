@@ -15,6 +15,7 @@
 #include "observore_rtc.h"
 #include "observore_census.h"
 #include "observore_monitors.h"
+#include "observore_odid.h"
 #include "observore_touchcal.h"
 #include "observore_tap.h"
 #include "observore_watch.h"
@@ -1387,6 +1388,179 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
     CHECK(strncmp(tiny, "(5 monitors off)", 16) == 0,
           "and survives a body too small for any finding at all: %s", tiny);
     CHECK(strlen(tiny) < sizeof(tiny), "still inside its buffer");
+}
+
+static void test_a_drone_says_where_it_is_and_where_its_pilot_is(void)
+{
+    banner("a Remote ID broadcast says where the drone and the pilot are");
+
+    /* Byte vectors built from the published wire format rather than typed out
+     * by hand: a Location message for a drone over London, a System message
+     * carrying the operator's position, a Basic ID with a serial, and the
+     * three of them in one message pack. */
+    static const uint8_t loc_london[] = {0x0D, 0x01, 0x12, 0x20, 0x2D, 0x28, 0x0A, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF, 0x00, 0x00, 0xC0, 0x08, 0xBC, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t sys_op[] = {0x0D, 0x01, 0x42, 0x00, 0x40, 0x7F, 0xB3, 0x1E, 0xF0, 0x50, 0xEC, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t id_serial[] = {0x0D, 0x01, 0x02, 0x12, 0x31, 0x35, 0x39, 0x36, 0x46, 0x33, 0x42, 0x32, 0x43, 0x34, 0x44, 0x35, 0x45, 0x36, 0x41, 0x37, 0x42, 0x38, 0x43, 0x39, 0x00, 0x00, 0x00};
+    static const uint8_t packed[] = {0x0D, 0x01, 0xF2, 0x19, 0x03, 0x12, 0x20, 0x2D, 0x28, 0x0A, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF, 0x00, 0x00, 0xC0, 0x08, 0xBC, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42, 0x00, 0x40, 0x7F, 0xB3, 0x1E, 0xF0, 0x50, 0xEC, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x12, 0x41, 0x42, 0x43, 0x31, 0x32, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t loc_nofix[] = {0x0D, 0x01, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xD0, 0x07, 0xD0, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t loc_fast[] = {0x0D, 0x01, 0x12, 0x23, 0x64, 0x64, 0xEC, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF, 0x00, 0x00, 0xB8, 0x0B, 0xF0, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    observore_odid_t o;
+
+    /* The aircraft's own position. The exact numbers matter: a one-byte error
+     * in the offset gives coordinates that look entirely plausible and are
+     * wrong by continents, which is how the first draft of the decoder had
+     * latitude at bytes 4-7 instead of 5-8. */
+    CHECK(observore_odid_parse_ble(loc_london, sizeof(loc_london), &o),
+          "a Location message decodes");
+    CHECK(o.have_location, "and carries a position");
+    CHECK(o.lat_e7 == 515074000, "latitude is 51.5074, got %ld", (long)o.lat_e7);
+    CHECK(o.lon_e7 == -1278000, "longitude is -0.1278, got %ld", (long)o.lon_e7);
+    CHECK(o.have_alt && o.alt_geo_m == 120, "altitude 120 m, got %d", o.alt_geo_m);
+    CHECK(o.have_height && o.height_m == 118, "height 118 m, got %d", o.height_m);
+    CHECK(o.have_speed && o.speed_cmps == 1000, "speed 10 m/s, got %u cm/s", o.speed_cmps);
+    CHECK(o.vspeed_cmps == 500, "climbing at 5 m/s, got %d cm/s", o.vspeed_cmps);
+    CHECK(o.have_direction && o.direction_deg == 45, "heading 45, got %u", o.direction_deg);
+    CHECK(o.status == 2, "operational status 2, got %u", o.status);
+    CHECK(!o.have_operator, "a Location message says nothing about the pilot");
+
+    /* The part people do not expect: the operator's position is broadcast
+     * too, in a separate message. */
+    CHECK(observore_odid_parse_ble(sys_op, sizeof(sys_op), &o),
+          "a System message decodes");
+    CHECK(o.have_operator, "and carries the operator position");
+    CHECK(o.op_lat_e7 == 515080000, "operator latitude, got %ld", (long)o.op_lat_e7);
+    CHECK(o.op_lon_e7 == -1290000, "operator longitude, got %ld", (long)o.op_lon_e7);
+    CHECK(!o.have_location, "and nothing about the aircraft");
+
+    /* The serial. */
+    CHECK(observore_odid_parse_ble(id_serial, sizeof(id_serial), &o),
+          "a Basic ID message decodes");
+    CHECK(o.have_id && strcmp(o.uas_id, "1596F3B2C4D5E6A7B8C9") == 0,
+          "the serial is read whole, got '%s'", o.uas_id);
+
+    /* The speed multiplier, which changes how byte 3 is read above 63.75 m/s,
+     * and the east/west flag, which is how a whole compass fits in one byte. */
+    CHECK(observore_odid_parse_ble(loc_fast, sizeof(loc_fast), &o), "a fast drone decodes");
+    CHECK(o.speed_cmps == 13875, "the multiplier applies, got %u cm/s", o.speed_cmps);
+    CHECK(o.vspeed_cmps == -1000, "descending at 10 m/s, got %d", o.vspeed_cmps);
+    CHECK(o.direction_deg == 280, "the east/west flag adds 180, got %u", o.direction_deg);
+    CHECK(o.alt_geo_m == 500 && o.height_m == 400, "altitude and height, %d/%d",
+          o.alt_geo_m, o.height_m);
+
+    /* A pack carries several messages in one advert, which is how a drone
+     * says everything at once. */
+    CHECK(observore_odid_parse_ble(packed, sizeof(packed), &o), "a message pack decodes");
+    CHECK(o.have_location && o.lat_e7 == 515074000, "the aircraft, from the pack");
+    CHECK(o.have_operator && o.op_lat_e7 == 515080000, "the operator, from the same pack");
+    CHECK(o.have_id && strcmp(o.uas_id, "ABC123") == 0, "and the serial");
+
+    /* Before a GPS fix a drone transmits zeroes, and zero/zero is a real
+     * place in the Gulf of Guinea. Reporting it would be a confident lie
+     * about where something is, which is worse than saying nothing. */
+    CHECK(observore_odid_parse_ble(loc_nofix, sizeof(loc_nofix), &o),
+          "a message with no fix still decodes");
+    CHECK(!o.have_location, "but zero/zero is not treated as a position");
+
+    /* A broadcast is not a trustworthy narrator. A pack that lies about its
+     * own geometry must be refused rather than walked off the end of the
+     * buffer it arrived in. */
+    uint8_t bad[sizeof(packed)];
+    memcpy(bad, packed, sizeof(bad));
+    bad[4] = 200;                      /* claims 200 messages */
+    CHECK(!observore_odid_parse_ble(bad, sizeof(bad), &o),
+          "a pack claiming more messages than the format allows is refused");
+    memcpy(bad, packed, sizeof(bad));
+    bad[3] = 99;                       /* claims a 99-byte stride */
+    CHECK(!observore_odid_parse_ble(bad, sizeof(bad), &o),
+          "a pack with the wrong stride is refused");
+    memcpy(bad, packed, sizeof(bad));
+    bad[4] = 9;                        /* nine messages that are not there */
+    CHECK(!observore_odid_parse_ble(bad, sizeof(bad), &o),
+          "a pack longer than what arrived is refused");
+
+    /* Not ours, truncated, or absent. */
+    static const uint8_t other_astm[] = {0x01, 0x01, 0x12, 0x00};
+    CHECK(!observore_odid_parse_ble(other_astm, sizeof(other_astm), &o),
+          "a different ASTM application is not read as Remote ID");
+    CHECK(!observore_odid_parse_ble(loc_london, 10, &o), "a truncated advert is refused");
+    CHECK(!observore_odid_parse_ble(NULL, 30, &o), "no advert at all is refused");
+
+    /* Accumulating across adverts: a drone sends its position in one message
+     * and its operator in another, often seconds apart. */
+    observore_odid_t acc, part;
+    memset(&acc, 0, sizeof(acc));
+    observore_odid_parse_ble(loc_london, sizeof(loc_london), &part);
+    observore_odid_merge(&acc, &part);
+    observore_odid_parse_ble(sys_op, sizeof(sys_op), &part);
+    observore_odid_merge(&acc, &part);
+    CHECK(acc.have_location && acc.have_operator,
+          "two adverts merge into one picture");
+    CHECK(acc.lat_e7 == 515074000 && acc.op_lat_e7 == 515080000,
+          "with both positions intact");
+    observore_odid_parse_ble(id_serial, sizeof(id_serial), &part);
+    observore_odid_merge(&acc, &part);
+    CHECK(acc.have_location && acc.have_operator && acc.have_id,
+          "and a third adds the serial without losing the rest");
+
+    /* End to end: an advert through the classifier, which is what actually
+     * reaches a screen. The decoder passing on its own would not prove the
+     * wiring, and the wiring is where this kind of work usually goes missing.
+     *
+     * The advert is built as a BLE payload: length, 0x16 service data, the
+     * 0xFFFA UUID little-endian, then the ODID service data. */
+    /* A message pack is 80 bytes of service data, which does not fit a legacy
+     * 31-byte advert -- real packs arrive over BLE 5 extended advertising or
+     * over Wi-Fi. The parser should not care which transport handed it the
+     * bytes, so it is exercised here with the larger payload regardless. */
+    uint8_t adv[128];
+    size_t sdlen = sizeof(packed);
+    adv[0] = (uint8_t)(1 + 2 + sdlen);
+    adv[1] = 0x16;
+    adv[2] = 0xFA; adv[3] = 0xFF;
+    memcpy(&adv[4], packed, sdlen);
+    const uint8_t mac[6] = {0x60, 0x60, 0x1F, 0x11, 0x22, 0x33};
+    observore_observation_t obs = {
+        .mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -55,
+        .adv = adv, .adv_len = 4 + sdlen,
+    };
+    observore_event_t ev;
+    CHECK(observore_classify(&obs, &ev), "the advert classifies");
+    CHECK(ev.cls == OBSERVORE_CLASS_DRONE, "as a drone");
+    /* The pilot's position leads, because it is the thing you could not have
+     * worked out by looking up. */
+    CHECK(strstr(ev.detail, "pilot") != NULL,
+          "and the finding names the pilot: '%s'", ev.detail);
+    CHECK(strstr(ev.detail, "51.5080") != NULL,
+          "with the operator's coordinates: '%s'", ev.detail);
+
+    /* A drone with no fix yet still classifies, and says nothing it does not
+     * know. */
+    uint8_t adv2[128];
+    adv2[0] = (uint8_t)(1 + 2 + sizeof(loc_nofix));
+    adv2[1] = 0x16;
+    adv2[2] = 0xFA; adv2[3] = 0xFF;
+    memcpy(&adv2[4], loc_nofix, sizeof(loc_nofix));
+    obs.adv = adv2;
+    obs.adv_len = 4 + sizeof(loc_nofix);
+    CHECK(observore_classify(&obs, &ev), "a drone with no fix still classifies");
+    CHECK(ev.cls == OBSERVORE_CLASS_DRONE, "still as a drone");
+    CHECK(strstr(ev.detail, "0.0000") == NULL,
+          "and claims no position it does not have: '%s'", ev.detail);
+
+    /* Formatting, without floating point. The negative fraction is the case
+     * that goes wrong: splitting -0.1278 into a whole part of 0 and a
+     * remainder loses the sign and puts the drone in the wrong hemisphere. */
+    char buf[32];
+    observore_odid_format_pos(515074000, -1278000, buf, sizeof(buf));
+    CHECK(strcmp(buf, "51.5074,-0.1278") == 0, "formats as degrees, got '%s'", buf);
+    observore_odid_format_pos(-515074000, 1278000, buf, sizeof(buf));
+    CHECK(strcmp(buf, "-51.5074,0.1278") == 0, "and the other hemisphere, got '%s'", buf);
+    observore_odid_format_pos(-500000, -500000, buf, sizeof(buf));
+    CHECK(strcmp(buf, "-0.0500,-0.0500") == 0,
+          "a negative fraction keeps its sign, got '%s'", buf);
+    CHECK(observore_odid_format_pos(515074000, -1278000, buf, 4) < 4,
+          "and a short buffer truncates rather than overruns");
 }
 
 static void test_bcd(void)
@@ -3835,6 +4009,7 @@ int main(void)
     test_scoring();
     test_a_switched_off_monitor_stops_reporting_not_seeing();
     test_a_digest_admits_what_it_is_not_looking_for();
+    test_a_drone_says_where_it_is_and_where_its_pilot_is();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

@@ -1385,6 +1385,56 @@ MAC rules. A minute later, after rotation, the score was still zero.
 
 Up to 128 rules are stored, in NVS, surviving reboots.
 
+### What a drone broadcasts about itself
+
+A drone complying with ASTM F3411 / Remote ID transmits, in clear and
+unauthenticated, its own position and altitude, its speed and heading, its
+serial number, and — the part that surprises people — **the location of its
+operator**. Regulation requires it, which is why it is there to be read.
+
+Observore recognised these broadcasts and labelled them `drone`, then threw the
+payload away. It now decodes it, and the finding carries where the pilot is
+standing:
+
+```
+drone   Remote ID drone   pilot 51.5080,-0.1290   -55 dBm
+```
+
+The operator's position leads where both are known, because it is the one thing
+you could not have worked out by looking up.
+
+**Silence is not evidence of no drone.** Consumer aircraft broadcast Remote ID
+because they are obliged to; anything that does not want to be found does not
+transmit it, and these radios see only 2.4 GHz Wi-Fi and BLE in any case. A
+quiet screen means *nothing announced itself*, never *the sky is clear*. If this
+is ever relied on for physical safety, that distinction is the whole thing.
+
+Three details of the decoding are worth recording, because each is a way it
+could have been quietly wrong:
+
+- **The offsets came from the reference header, not from memory.** A first draft
+  placed latitude at bytes 4–7. It is at 5–8, because `SpeedVertical` takes
+  byte 4. That one-byte error yields coordinates that look entirely plausible
+  and are wrong by continents, and the host tests now fail on it.
+- **Zero latitude and zero longitude is refused.** It is what a drone transmits
+  before it has a fix, and it is also a real place in the Gulf of Guinea.
+  Reporting it would be a confident lie about where something is, which is
+  worse than saying nothing.
+- **A pack that lies about its own geometry is refused rather than walked.** A
+  message pack declares its stride and how many messages follow; a broadcast is
+  not a trustworthy narrator, so both are checked against the format and
+  against how many bytes actually arrived.
+
+Positions are kept as the wire carries them — degrees times ten million — and
+formatted at the edge to four decimal places, about eleven metres. No floating
+point is involved, which keeps it exact and costs nothing on a chip with no
+FPU to spare. Four places is deliberate: enough for "a drone is over there",
+not enough to imply a survey.
+
+Only the BLE path decodes today. The Wi-Fi sniffer reports that a Remote ID
+element was present but does not yet hand over the bytes, so a drone seen only
+over Wi-Fi is still reported without a position.
+
 ### Choosing which monitors run
 
 Not everybody wants every class. Somebody watching a car park for trackers has
