@@ -14,6 +14,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_census.h"
+#include "observore_monitors.h"
 #include "observore_touchcal.h"
 #include "observore_tap.h"
 #include "observore_watch.h"
@@ -1198,6 +1199,194 @@ static void test_the_census_counts_addresses_not_just_days(void)
     CHECK(!observore_census_restore(blob, len - 1), "a truncated blob is refused");
     CHECK(!observore_census_restore(blob, 1), "so is one shorter than the header");
     CHECK(!observore_census_restore(NULL, len), "and no blob at all");
+}
+
+static void test_a_switched_off_monitor_stops_reporting_not_seeing(void)
+{
+    banner("a monitor switched off keeps seeing and stops reporting");
+
+    /* Unknown is not a monitor. It is what the device says when nothing
+     * matched, so switching it off would hide everything it could not name --
+     * the opposite of the point. */
+    CHECK(!observore_monitors_can_toggle(OBSERVORE_CLASS_UNKNOWN),
+          "unknown cannot be switched off");
+    CHECK(!observore_monitors_set(OBSERVORE_CLASS_UNKNOWN, false),
+          "and the setter refuses it");
+    CHECK(observore_monitors_enabled(OBSERVORE_CLASS_UNKNOWN),
+          "unknown is always reported");
+    CHECK(!observore_monitors_can_toggle(OBSERVORE_CLASS_MAX),
+          "nor is anything out of range");
+
+    /* A protected class may be switched off by a person. That was a decision,
+     * not an oversight: an explicit choice by the owner is different in kind
+     * from a baseline sweeping something up by accident. What must stay
+     * impossible is anything automatic doing it, which is enforced by nothing
+     * automatic having a call path to here. */
+    observore_monitors_init();
+    CHECK(observore_monitors_can_toggle(OBSERVORE_CLASS_BODYCAM),
+          "a body camera monitor can be switched off by hand");
+    CHECK(observore_monitors_can_toggle(OBSERVORE_CLASS_ALPR), "so can an ALPR");
+    CHECK(observore_monitors_can_toggle(OBSERVORE_CLASS_TRACKER), "and a tracker");
+
+    /* Everything is on to begin with, and that is also what a missing or
+     * unusable stored value resolves to. */
+    CHECK(observore_monitors_off_count() == 0, "nothing is off to begin with");
+    CHECK(observore_monitors_off_mask() == OBSERVORE_MONITORS_ALL_ON,
+          "and the mask says so");
+
+    /* The score. A body camera alone is an alert -- the clearest detection
+     * this device makes. With its monitor off it contributes nothing. */
+    observore_track_init();
+    observore_monitors_init();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t obs = {
+        .mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -40,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+    CHECK(observore_track_observe(&obs, SECS(0)), "the body camera is seen");
+
+    observore_status_t st;
+    observore_track_status(&st, SECS(1));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "with the monitor on it alerts, score %u", st.score);
+    CHECK(st.monitors_off == 0, "and nothing is reported as off");
+
+    CHECK(observore_monitors_set(OBSERVORE_CLASS_BODYCAM, false),
+          "switch the body camera monitor off");
+    observore_track_status(&st, SECS(2));
+    CHECK(st.score == 0, "it now contributes nothing, score %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR, "so the verdict is clear");
+
+    /* The number that stops "clear" from being a lie. */
+    CHECK(st.monitors_off == 1, "and the verdict carries that one monitor is off");
+
+    /* Still seen, though. This is the half of the decision that matters: the
+     * device has not stopped looking, so switching the monitor back on shows
+     * what has been there all along instead of an empty history. */
+    CHECK(st.device_count == 1, "the device is still tracked");
+    CHECK(st.class_counts[OBSERVORE_CLASS_BODYCAM] == 1,
+          "and still counted as a body camera");
+
+    /* But not in the findings. */
+    observore_event_t ev[8];
+    size_t n = observore_track_snapshot(ev, 8);
+    CHECK(n == 0, "it is not in the findings, got %zu", n);
+
+    /* Back on, and it returns at once with its history intact rather than as
+     * something newly discovered. */
+    CHECK(observore_monitors_set(OBSERVORE_CLASS_BODYCAM, true), "switch it back on");
+    observore_track_status(&st, SECS(3));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "the alert comes straight back");
+    CHECK(st.monitors_off == 0, "and no monitors are off");
+    n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1, "and it is in the findings again");
+    CHECK(ev[0].hits >= 1, "with the sightings it accrued while hidden");
+
+    /* Switching off a different class leaves this one alone. */
+    observore_monitors_init();
+    CHECK(observore_monitors_set(OBSERVORE_CLASS_CAMERA, false), "camera off");
+    observore_track_status(&st, SECS(4));
+    CHECK(st.score == 6, "a body camera is unaffected by the camera monitor");
+    CHECK(st.monitors_off == 1, "one off");
+
+    /* The stored value is the OFF set, and that choice is the whole reason a
+     * class added tomorrow arrives switched on. A mask with a high bit --
+     * a class this build does not have -- must not switch off a class it
+     * does. */
+    observore_monitors_init();
+    CHECK(!observore_monitors_restore(1u << 30),
+          "a mask naming a class this build lacks is not wholly usable");
+    CHECK(observore_monitors_off_count() == 0,
+          "and nothing this build knows about was switched off by it");
+    for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
+        CHECK(observore_monitors_enabled((observore_class_t)c),
+              "class %d is still reported", c);
+    }
+
+    /* A stored value that claims unknown is off is corrected rather than
+     * obeyed. */
+    observore_monitors_init();
+    observore_monitors_restore(1u << OBSERVORE_CLASS_UNKNOWN);
+    CHECK(observore_monitors_enabled(OBSERVORE_CLASS_UNKNOWN),
+          "unknown cannot be switched off by a stored value either");
+    CHECK(observore_monitors_off_count() == 0, "and it does not count as off");
+
+    /* A real stored value round-trips. */
+    observore_monitors_init();
+    observore_monitors_set(OBSERVORE_CLASS_DRONE, false);
+    observore_monitors_set(OBSERVORE_CLASS_FIXTURE, false);
+    uint32_t saved = observore_monitors_off_mask();
+    CHECK(observore_monitors_off_count() == 2, "two off");
+    observore_monitors_init();
+    CHECK(observore_monitors_off_count() == 0, "cleared");
+    CHECK(observore_monitors_restore(saved), "the saved set restores");
+    CHECK(!observore_monitors_enabled(OBSERVORE_CLASS_DRONE), "drone still off");
+    CHECK(!observore_monitors_enabled(OBSERVORE_CLASS_FIXTURE), "fixture still off");
+    CHECK(observore_monitors_enabled(OBSERVORE_CLASS_BODYCAM), "bodycam still on");
+    CHECK(observore_monitors_off_count() == 2, "and the count agrees");
+
+    observore_monitors_init();   /* leave the rest of the suite untouched */
+}
+
+static void test_a_digest_admits_what_it_is_not_looking_for(void)
+{
+    banner("a digest says when monitors are off");
+
+    char title[OBSERVORE_DIGEST_TITLE_LEN], body[OBSERVORE_DIGEST_BODY_LEN];
+    observore_digest_entry_t e[2] = {
+        {.rank = 6, .rssi = -40, .cls = "bodycam", .line = "bodycam  -40 dBm"},
+        {.rank = 6, .rssi = -55, .cls = "tracker", .line = "tracker  -55 dBm"},
+    };
+
+    /* Nothing off: no note, and nothing about the message changes. */
+    observore_digest_build(e, 2, "alert", 0, title, sizeof(title),
+                           body, sizeof(body));
+    CHECK(strstr(body, "monitor") == NULL, "no note when every monitor is on");
+
+    /* Monitors off: the body says so. The reader of a notification cannot go
+     * and check, and a switched-off monitor leaves nothing behind to find. */
+    observore_digest_build(e, 2, "alert", 3, title, sizeof(title),
+                           body, sizeof(body));
+    CHECK(strstr(body, "3 monitors off") != NULL,
+          "the body admits three monitors are off: %s", body);
+    observore_digest_build(e, 2, "alert", 1, title, sizeof(title),
+                           body, sizeof(body));
+    CHECK(strstr(body, "1 monitor off") != NULL, "and says it in the singular");
+
+    /* The note leads the body, which is what makes it impossible to lose.
+     * Reserving room for a trailing note was the first attempt, and the test
+     * written to prove the reservation worked passed just as happily with the
+     * reservation removed -- whether the note survived depended on where the
+     * last finding happened to land. Written first, a findings line is
+     * dropped instead, and "+N more" already accounts for that.
+     *
+     * So this checks the note is present even when the body is far too small
+     * for the findings, and that it comes first. */
+    observore_digest_entry_t many[12];
+    static char lines[12][48];
+    for (int i = 0; i < 12; i++) {
+        snprintf(lines[i], sizeof(lines[i]),
+                 "a reasonably long finding line number %02d", i);
+        many[i] = (observore_digest_entry_t){.rank = 3, .rssi = (int8_t)(-50 - i),
+                                            .cls = "camera", .line = lines[i]};
+    }
+    char small[160];
+    size_t n = observore_digest_build(many, 12, "alert", 2, title,
+                                      sizeof(title), small, sizeof(small));
+    CHECK(n < 12, "not everything fitted, which is the point of the test");
+    CHECK(strncmp(small, "(2 monitors off)", 16) == 0,
+          "the note leads the body: %s", small);
+    CHECK(strlen(small) < sizeof(small), "and the body stays in its buffer");
+
+    /* Squeezed to where not one finding fits, the note is still there. */
+    char tiny[40];
+    n = observore_digest_build(many, 12, "alert", 5, title, sizeof(title),
+                               tiny, sizeof(tiny));
+    CHECK(strncmp(tiny, "(5 monitors off)", 16) == 0,
+          "and survives a body too small for any finding at all: %s", tiny);
+    CHECK(strlen(tiny) < sizeof(tiny), "still inside its buffer");
 }
 
 static void test_bcd(void)
@@ -3367,7 +3556,7 @@ static void test_webhook_and_telegram(void)
         snprintf(lines[i], sizeof(lines[i]), "follower EE:00:00:00:00:%02zu  -60 dBm", i);
         many[i].rank = 4; many[i].rssi = -60; many[i].cls = "follower"; many[i].line = lines[i];
     }
-    observore_digest_build(many, 10, "alert", title, sizeof(title), body, sizeof(body));
+    observore_digest_build(many, 10, "alert", 0, title, sizeof(title), body, sizeof(body));
     CHECK(observore_notify_build(OBSERVORE_PROVIDER_WEBHOOK, "https://x/y", "tok", "",
                                  title, body, OBSERVORE_URGENCY_URGENT, &r),
           "full digest fits a webhook");
@@ -3556,7 +3745,7 @@ static void test_digest(void)
         {5, -70, "bodycam", "bodycam CC:00:00:00:00:03  -70 dBm"},
         {4, -50, "follower","follower DD:00:00:00:00:04  -50 dBm"},
     };
-    size_t n = observore_digest_build(e, 4, "alert",
+    size_t n = observore_digest_build(e, 4, "alert", 0,
                                       title, sizeof(title), body, sizeof(body));
     CHECK(n == 4, "all four findings should fit, got %zu", n);
     CHECK(e[0].rank == 5, "bodycam outranks everything else");
@@ -3584,7 +3773,7 @@ static void test_digest(void)
         many[i].cls  = "follower";
         many[i].line = lines[i];
     }
-    n = observore_digest_build(many, 10, NULL,
+    n = observore_digest_build(many, 10, NULL, 0,
                                title, sizeof(title), body, sizeof(body));
     CHECK(n == OBSERVORE_DIGEST_MAX_LINES,
           "body caps at %d lines, got %zu", OBSERVORE_DIGEST_MAX_LINES, n);
@@ -3594,14 +3783,14 @@ static void test_digest(void)
     CHECK(strlen(body) < sizeof(body), "body stays inside its buffer");
 
     /* An empty digest is not a message. */
-    CHECK(observore_digest_build(e, 0, NULL, title, sizeof(title),
+    CHECK(observore_digest_build(e, 0, NULL, 0, title, sizeof(title),
                                  body, sizeof(body)) == 0,
           "nothing to report produces nothing");
 
     /* The whole point of the cap: the largest digest still has to fit the
      * tightest provider's request body after escaping. */
     observore_notify_request_t req;
-    n = observore_digest_build(many, 10, "alert",
+    n = observore_digest_build(many, 10, "alert", 0,
                                title, sizeof(title), body, sizeof(body));
     CHECK(observore_notify_build(OBSERVORE_PROVIDER_PUSHOVER,
                                  "https://api.pushover.net/1/messages.json",
@@ -3644,6 +3833,8 @@ int main(void)
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
+    test_a_switched_off_monitor_stops_reporting_not_seeing();
+    test_a_digest_admits_what_it_is_not_looking_for();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

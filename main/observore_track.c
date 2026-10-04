@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "observore_mute.h"
+#include "observore_monitors.h"
 #include "observore_track.h"
 
 #ifdef OBSERVORE_HOST_TEST
@@ -496,6 +497,17 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
         out->device_count++;
         out->class_counts[e->cls]++;
 
+        /* A monitor that has been switched off contributes no score.
+         *
+         * The sighting is still tracked and still counted above -- "off" means
+         * keep seeing and stop reporting, so switching it back on shows what
+         * has been around all along rather than starting a blank history. The
+         * count of what is off travels with the verdict so that "clear" is
+         * never mistaken for "looked and found nothing". */
+        if (!observore_monitors_enabled(e->cls)) {
+            continue;
+        }
+
         uint16_t points = e->points;
         if (e->cls == OBSERVORE_CLASS_FOLLOWER) {
             /* The whole class is capped, rotation included. A follower is
@@ -518,6 +530,7 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
     out->score = (score > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
                                                : (uint16_t)score;
     out->level = level_for(out->score);
+    out->monitors_off = observore_monitors_off_count();
     OBSERVORE_UNLOCK();
 }
 
@@ -576,6 +589,14 @@ static size_t collect(observore_event_t *out, size_t max, int want,
             continue;
         }
         if (want >= 0 && s_devices[i].classified != (want == 1)) {
+            continue;
+        }
+        /* Findings only: a switched-off monitor does not appear in them. The
+         * unclassified view is deliberately untouched -- "unknown" is the
+         * absence of a monitor rather than one of them, and hiding things the
+         * device could not name is the opposite of what this is for. */
+        if (s_devices[i].classified &&
+            !observore_monitors_enabled(s_devices[i].ev.cls)) {
             continue;
         }
         const observore_event_t *ev = &s_devices[i].ev;

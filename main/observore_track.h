@@ -147,6 +147,11 @@ typedef struct {
     uint16_t      device_count;
     uint32_t      total_sightings;
     uint32_t      class_counts[OBSERVORE_CLASS_MAX];
+    /* How many monitors are switched off. Carried in the status rather than
+     * fetched separately so that nothing can report a verdict without it:
+     * "clear" and "clear, four monitors off" are different claims, and the
+     * second one is the honest one. */
+    int           monitors_off;
 } observore_status_t;
 
 void observore_track_init(void);

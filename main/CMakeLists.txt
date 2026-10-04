@@ -12,6 +12,7 @@ idf_component_register(
         "observore_notify_fmt.c"
         "observore_version.c"
         "observore_census.c"
+        "observore_monitors.c"
         "observore_touchcal.c"
         "observore_tap.c"
         "observore_update.c"
