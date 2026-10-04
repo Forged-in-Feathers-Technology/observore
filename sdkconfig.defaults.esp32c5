@@ -24,6 +24,26 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
+# Wi-Fi and lwIP buffers out of internal memory, where there is PSRAM to take
+# them.
+#
+# This was already set on the two display boards that needed it and not on the
+# C5 kits, which is backwards: the DevKitC is headless, so it is the only
+# board here that carries the notifier, and therefore the only one doing a TLS
+# handshake regularly. Eight megabytes of PSRAM sat behind it doing nothing
+# while the internal heap floor reached single-digit kilobytes during a send.
+#
+# The round board's floor went from about three kilobytes to eighteen for this
+# one line, with no measurable cost to sniffing -- 99.7% of frames still
+# captured. TRY, so a C5 without PSRAM falls back to internal memory rather
+# than failing to boot, which is the same reason IGNORE_NOTFOUND is above.
+#
+# Deliberately NOT CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC, for the reason recorded
+# in boards/nm-cyd-c5.defaults: on C5 revision v1.0 the chip warns at boot
+# that PSRAM contents are not encrypted, and TLS buffers are the one thing
+# that should not go there.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
 # Log to BOTH USB ports, because C5 boards have two and either one can be the
 # one in someone's hand.
 #
