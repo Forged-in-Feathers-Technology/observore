@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "observore_detect.h"
+#include "observore_odid.h"
 #include "observore_oui_table.h"
 
 /* ------------------------------------------------------------------ */
@@ -543,6 +544,34 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
         ev->cls = OBSERVORE_CLASS_DRONE;
         ev->evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(ev, "Remote ID drone");
+        /* The broadcast says where it is, how high, and where its operator is
+         * standing. Until now that was discarded and the device reported only
+         * that a drone existed somewhere within radio range.
+         *
+         * The operator's position goes in front of the aircraft's where both
+         * are known, because it is the one that tells you something you could
+         * not have worked out by looking up. */
+        observore_odid_t odid;
+        if (observore_odid_parse_ble(sd, sd_len, &odid)) {
+            char pos[32], detail[48];
+            if (odid.have_operator) {
+                observore_odid_format_pos(odid.op_lat_e7, odid.op_lon_e7,
+                                          pos, sizeof(pos));
+                snprintf(detail, sizeof(detail), "pilot %s", pos);
+                set_detail(ev, detail);
+            } else if (odid.have_location) {
+                observore_odid_format_pos(odid.lat_e7, odid.lon_e7,
+                                          pos, sizeof(pos));
+                if (odid.have_alt) {
+                    snprintf(detail, sizeof(detail), "%s %dm", pos, odid.alt_geo_m);
+                } else {
+                    snprintf(detail, sizeof(detail), "%s", pos);
+                }
+                set_detail(ev, detail);
+            } else if (odid.have_id) {
+                set_detail(ev, odid.uas_id);
+            }
+        }
         return true;
     }
 
