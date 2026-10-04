@@ -38,6 +38,12 @@ typedef struct {
      * has already parsed the IEs, so it reports the fact rather than making
      * the classifier re-walk the frame. */
     bool            remote_id;
+    /* Wi-Fi: the Remote ID element's payload, from its vendor type onward, or
+     * NULL. A pointer rather than a copy, for the same reason as `wps` above:
+     * it lives on the sniffer's stack for the duration of the call. The BLE
+     * path needs nothing here because the payload is already in `adv`. */
+    const uint8_t  *odid;
+    size_t          odid_len;
     /* A flood of deauthentication or disassociation frames naming this
      * address. Set by the sniffer, which is the only place with the history
      * to judge a flood from a single frame. */

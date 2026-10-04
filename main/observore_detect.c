@@ -552,7 +552,7 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
          * are known, because it is the one that tells you something you could
          * not have worked out by looking up. */
         observore_odid_t odid;
-        if (observore_odid_parse_ble(sd, sd_len, &odid)) {
+        if (observore_odid_parse(sd, sd_len, &odid)) {
             char pos[32], detail[48];
             if (odid.have_operator) {
                 observore_odid_format_pos(odid.op_lat_e7, odid.op_lon_e7,
@@ -789,7 +789,38 @@ bool observore_classify(const observore_observation_t *obs, observore_event_t *o
         ev.cls = OBSERVORE_CLASS_DRONE;
         ev.evidence = OBSERVORE_EVIDENCE_SERVICE_UUID;
         set_label(&ev, "Remote ID drone");
-        if (obs->ssid && *obs->ssid) {
+        /* The same decode as the BLE path. Over Wi-Fi the payload sits in a
+         * vendor element rather than service data, and the sniffer hands it
+         * over from the vendor type onward -- which is where the BLE service
+         * data starts too, so one parser serves both.
+         *
+         * An SSID is the fallback rather than the preference: a position is
+         * worth more than a name, and a drone's beacon SSID is usually its
+         * model, which the label already says. */
+        observore_odid_t odid;
+        bool said_where = false;
+        if (obs->odid && obs->odid_len &&
+            observore_odid_parse(obs->odid, obs->odid_len, &odid)) {
+            char pos[32], detail[48];
+            if (odid.have_operator) {
+                observore_odid_format_pos(odid.op_lat_e7, odid.op_lon_e7,
+                                          pos, sizeof(pos));
+                snprintf(detail, sizeof(detail), "pilot %s", pos);
+                set_detail(&ev, detail);
+                said_where = true;
+            } else if (odid.have_location) {
+                observore_odid_format_pos(odid.lat_e7, odid.lon_e7,
+                                          pos, sizeof(pos));
+                if (odid.have_alt) {
+                    snprintf(detail, sizeof(detail), "%s %dm", pos, odid.alt_geo_m);
+                } else {
+                    snprintf(detail, sizeof(detail), "%s", pos);
+                }
+                set_detail(&ev, detail);
+                said_where = true;
+            }
+        }
+        if (!said_where && obs->ssid && *obs->ssid) {
             set_detail(&ev, obs->ssid);
         }
         ev.points = observore_class_points(ev.cls);

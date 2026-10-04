@@ -83,11 +83,17 @@ typedef struct {
 #define OBSERVORE_ODID_MSG_LEN      25
 #define OBSERVORE_ODID_PACK_MAX      9
 
-/* Decode the service data carried under BLE UUID 0xFFFA.
+/* Decode an ASTM Remote ID payload.
  *
- * `sd` points at the service data after the UUID, so it begins with the ASTM
- * application code (0x0D), then a message counter, then one 25-byte message
- * -- or a message pack holding several.
+ * `sd` begins with the ASTM application code (0x0D), then a message counter,
+ * then one 25-byte message -- or a message pack holding several.
+ *
+ * The same function serves both transports, which is not a convenience but a
+ * property of the format: over BLE this is the service data under UUID
+ * 0xFFFA, and over Wi-Fi it is a vendor-specific element whose body is the
+ * ASTM OUI followed by a vendor type of 0x0D -- the same byte, in the same
+ * position relative to what follows it. The Wi-Fi caller passes the body
+ * three bytes in, past the OUI, and the rest is identical.
  *
  * Fills whichever fields the broadcast actually carried and leaves the rest
  * alone; a drone sends its position, its operator and its serial in separate
@@ -97,8 +103,8 @@ typedef struct {
  * `out` is zeroed first, so a caller that accumulates across adverts should
  * merge rather than reuse it.
  */
-bool observore_odid_parse_ble(const uint8_t *sd, size_t len,
-                              observore_odid_t *out);
+bool observore_odid_parse(const uint8_t *sd, size_t len,
+                          observore_odid_t *out);
 
 /* Merge anything newly decoded into an accumulating record, keeping fields
  * already known. A drone's position arrives in one message and its operator
