@@ -1958,7 +1958,22 @@ and shared now, which is better anyway: a block taken and released
 repeatedly is a block that fragments the heap it lives in.
 
 **On the 3.5" board's battery connector.** It charges a cell and reports
-nothing about it. The three ADC-capable pins the display and touch leave free
+nothing about it — with one failure that looks exactly like the connector not
+working at all.
+
+A lithium pack with a protection board that has been taken below roughly 2.5 V
+**latches off**. Its terminals then read zero, the board's charger sees nothing
+to charge and never starts, and the symptom is a device that goes dark the
+moment USB is unplugged. That is indistinguishable, at the connector, from a
+board with no charge circuit fitted — which is a real possibility on other
+boards in this family and sent one afternoon looking in the wrong place.
+
+The recovery is an external charger that will push a latched pack, or simply a
+known-good source; the board cannot do it. Worth checking polarity with a
+meter first regardless, because this family is reported to wire its JST
+connector against the usual convention, and reverse-feeding a lithium cell is
+a fire risk rather than an inconvenience. On the bench board here the polarity
+was correct. The three ADC-capable pins the display and touch leave free
 were probed on a board running from a battery: 35 and 39 read zero, and 34
 swung from 1,101 to 1,734 counts when a hand covered the screen — that is the
 ambient light sensor, not a supply. A percentage would need a divider soldered
