@@ -1975,22 +1975,34 @@ connector against the usual convention, and reverse-feeding a lithium cell is
 a fire risk rather than an inconvenience. On the bench board here the polarity
 was correct.
 
-**One supply at a time.** With a charged cell on the connector *and* USB
-plugged in, the bench board boot-loops continuously. Either source on its own
-runs it perfectly. That is worth knowing because "charge it by leaving USB
-plugged in" is the obvious thing to try and is the one arrangement it will not
-tolerate — so a cell for this board gets charged off the board.
+**Charging while it runs needs more current than a computer's USB port gives.**
+With a charged cell on the connector and the board plugged into a laptop port,
+it boot-loops continuously. On a proper USB supply with the same cell attached
+it runs fine, and either source on its own has always been fine. So the rule is
+about the *supply*, not about the combination: charge it from a wall adapter, or
+charge the cell off the board.
 
-The mechanism is **not established** and is recorded that way deliberately.
-Two candidates fit: the supplies contending because the board has no
-load-sharing between them, or charge current plus the board's own draw
-exceeding what the input path can deliver, either of which would show as the
-rail sagging. The device can settle it, because the bootloader prints its
-reset reason on every cycle and the firmware names it — `brownout` would
-confirm a power problem and rule the firmware out, where a panic or a watchdog
-would point the other way. That capture has not been taken yet, and the
-distinction matters: one of those is a hardware characteristic to live with and
-the other is a bug to fix. The three ADC-capable pins the display and touch leave free
+The mechanism, because the symptom is misleading enough to be worth writing
+down. Each cycle reaches exactly the same point and stops:
+
+```
+I (685) observore: Observore ... starting -- board cyd-3248s035r-st7796
+```
+
+Always 685 ms, across eighty-nine consecutive cycles. That is not noise; it is
+a deterministic trigger, and the step immediately after that line is
+`observore_wifi_init()` — the radio powering up, which is the largest current
+step in startup. Add the charger drawing from the same VBUS and the port cannot
+hold the rail.
+
+The confirming detail is that the **USB-serial bridge resets too**: the device
+node re-enumerated eighty-nine times, which an ESP32-only fault cannot do. It
+is VBUS collapsing, not the 3.3 V regulator, and not firmware. The intermittency
+fits as well — charge current is highest into a cell that has been sitting and
+tapers as it fills, so the margin moves while you watch.
+
+One practical trade: a wall adapter fixes it and takes the serial console with
+it. For bench work, one supply at a time remains the simpler habit. The three ADC-capable pins the display and touch leave free
 were probed on a board running from a battery: 35 and 39 read zero, and 34
 swung from 1,101 to 1,734 counts when a hand covered the screen — that is the
 ambient light sensor, not a supply. A percentage would need a divider soldered
