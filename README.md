@@ -1973,7 +1973,24 @@ known-good source; the board cannot do it. Worth checking polarity with a
 meter first regardless, because this family is reported to wire its JST
 connector against the usual convention, and reverse-feeding a lithium cell is
 a fire risk rather than an inconvenience. On the bench board here the polarity
-was correct. The three ADC-capable pins the display and touch leave free
+was correct.
+
+**One supply at a time.** With a charged cell on the connector *and* USB
+plugged in, the bench board boot-loops continuously. Either source on its own
+runs it perfectly. That is worth knowing because "charge it by leaving USB
+plugged in" is the obvious thing to try and is the one arrangement it will not
+tolerate — so a cell for this board gets charged off the board.
+
+The mechanism is **not established** and is recorded that way deliberately.
+Two candidates fit: the supplies contending because the board has no
+load-sharing between them, or charge current plus the board's own draw
+exceeding what the input path can deliver, either of which would show as the
+rail sagging. The device can settle it, because the bootloader prints its
+reset reason on every cycle and the firmware names it — `brownout` would
+confirm a power problem and rule the firmware out, where a panic or a watchdog
+would point the other way. That capture has not been taken yet, and the
+distinction matters: one of those is a hardware characteristic to live with and
+the other is a bug to fix. The three ADC-capable pins the display and touch leave free
 were probed on a board running from a battery: 35 and 39 read zero, and 34
 swung from 1,101 to 1,734 counts when a hand covered the screen — that is the
 ambient light sensor, not a supply. A percentage would need a divider soldered
