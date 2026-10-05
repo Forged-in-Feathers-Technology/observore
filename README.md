@@ -1958,7 +1958,51 @@ and shared now, which is better anyway: a block taken and released
 repeatedly is a block that fragments the heap it lives in.
 
 **On the 3.5" board's battery connector.** It charges a cell and reports
-nothing about it. The three ADC-capable pins the display and touch leave free
+nothing about it — with one failure that looks exactly like the connector not
+working at all.
+
+A lithium pack with a protection board that has been taken below roughly 2.5 V
+**latches off**. Its terminals then read zero, the board's charger sees nothing
+to charge and never starts, and the symptom is a device that goes dark the
+moment USB is unplugged. That is indistinguishable, at the connector, from a
+board with no charge circuit fitted — which is a real possibility on other
+boards in this family and sent one afternoon looking in the wrong place.
+
+The recovery is an external charger that will push a latched pack, or simply a
+known-good source; the board cannot do it. Worth checking polarity with a
+meter first regardless, because this family is reported to wire its JST
+connector against the usual convention, and reverse-feeding a lithium cell is
+a fire risk rather than an inconvenience. On the bench board here the polarity
+was correct.
+
+**Charging while it runs needs more current than a computer's USB port gives.**
+With a charged cell on the connector and the board plugged into a laptop port,
+it boot-loops continuously. On a proper USB supply with the same cell attached
+it runs fine, and either source on its own has always been fine. So the rule is
+about the *supply*, not about the combination: charge it from a wall adapter, or
+charge the cell off the board.
+
+The mechanism, because the symptom is misleading enough to be worth writing
+down. Each cycle reaches exactly the same point and stops:
+
+```
+I (685) observore: Observore ... starting -- board cyd-3248s035r-st7796
+```
+
+Always 685 ms, across eighty-nine consecutive cycles. That is not noise; it is
+a deterministic trigger, and the step immediately after that line is
+`observore_wifi_init()` — the radio powering up, which is the largest current
+step in startup. Add the charger drawing from the same VBUS and the port cannot
+hold the rail.
+
+The confirming detail is that the **USB-serial bridge resets too**: the device
+node re-enumerated eighty-nine times, which an ESP32-only fault cannot do. It
+is VBUS collapsing, not the 3.3 V regulator, and not firmware. The intermittency
+fits as well — charge current is highest into a cell that has been sitting and
+tapers as it fills, so the margin moves while you watch.
+
+One practical trade: a wall adapter fixes it and takes the serial console with
+it. For bench work, one supply at a time remains the simpler habit. The three ADC-capable pins the display and touch leave free
 were probed on a board running from a battery: 35 and 39 read zero, and 34
 swung from 1,101 to 1,734 counts when a hand covered the screen — that is the
 ambient light sensor, not a supply. A percentage would need a divider soldered
