@@ -2393,20 +2393,51 @@ that just ended, filed with the reason this boot happened. A run shorter than
 five minutes leaves nothing behind, which is right: that was a false start,
 not a run.
 
-This is the battery question answered from measurement. A device found up for
-seven hours after a night on battery used to say only that; the run before it
-was gone. Now a run that ended in `power-on` or `brownout` on a device that
-was on battery is the battery's life, to within five minutes, and the runs
-before it say whether that is getting worse. The same list is on `/api/status`
-under `runs`, newest first.
+This is the battery question answered from measurement, with one precondition
+that matters more than it looks. A device found up for seven hours after a
+night on battery used to say only that; the run before it was gone. Now the
+runs before it say whether its life is getting worse.
+
+**A run is a power session, not a battery session.** The record measures from
+boot to reset, and nothing in it distinguishes time on USB from time on a
+cell. So a run that ended in `power-on` or `brownout` is the battery's life
+only when the *whole* run was on battery — the device was unplugged before it
+booted, or at least immediately after.
+
+That is easy to get wrong, and this project got it wrong in writing before
+getting it wrong in practice: the round board recorded a single run of
+**21 h 44 min**, of which about 4 h 25 min was on the cell and the rest was
+plugged in. Five times the real figure, reported with complete confidence. If
+a run began on USB, the only honest reading is to subtract by hand from when
+you know it was unplugged.
+
+The round board is the one that could do better, because it is the only board
+that can measure its own supply. Detecting the transition and recording
+battery-only time is not implemented, and until it is, that board's figures
+need the same hand arithmetic as everyone else's.
+
+The same list is on `/api/status` under `runs`, newest first.
 
 **Measured: 25.1 hours.** An ESP32-C5 devkit on a 2,000 mAh cell, running
 v0.8.3 untouched from a full charge until the cell's protection cut off —
-`90311 s, ended by power-on`. That is with the radio at full duty: no light
+`90311 s, ended by power-on`. That figure survives the correction above
+because the run really was battery from end to end. That is with the radio at full duty: no light
 sleep, a passive dual-band scan and a channel sweep every two minutes, and the
 Bluetooth scanner running the whole time. Roughly 80 mA average, so a pack's
 capacity in milliamp-hours divided by eighty is a fair first guess at hours for
 any other cell.
+
+**Measured: about 4 h 25 min** on the round AMOLED board's 400 mAh cell,
+timed by hand from when it was unplugged to when it died, because its run
+record spanned USB time as well. That is roughly **90 mA** — only about ten
+more than the headless devkit, for a board carrying a lit dial, an
+accelerometer, a hardware clock and eight megabytes of PSRAM.
+
+Ten milliamps for a watch face is the clearest vindication the dial's design
+has had. Black is genuinely off on an AMOLED, the face is mostly black, and
+the hour markers and hands are a few hundred lit pixels out of 217,000. A
+backlit panel of the same size would not have been close. The brightness
+setting remains the one lever worth pulling before a long day out.
 
 The number took three attempts to get honestly. The first two runs ended
 because the firmware was reflashed mid-run, and a third gave six hours because
