@@ -4,6 +4,7 @@
 
 #include "observore_detect.h"
 #include "observore_odid.h"
+#include "observore_peer.h"
 #include "observore_oui_table.h"
 
 /* ------------------------------------------------------------------ */
@@ -609,6 +610,38 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
          * "SQM1", a version, a little-endian appearance word, a reserved
          * flags byte -- eight bytes, or twenty when the owner typed a name
          * that follows NUL-padded. */
+        /* --- another Observore, warning us ---------------------------
+         * #132 predicted this against us before it was built: a meshing
+         * Observore becomes a peer-detector in somebody else's device,
+         * including ours. So it lands in that class, which is already the
+         * right answer -- what is new is that the finding says what the
+         * neighbour was warning about rather than only that it exists.
+         *
+         * Nothing here raises the score. A warning from a node this device
+         * cannot authenticate may draw attention and may never quiet
+         * anything: that asymmetry is what keeps an open mesh survivable,
+         * because a crowd of invented nodes can then produce noise rather
+         * than blindness. The class's own points are for the peer being
+         * present, exactly as for any other detector in range. */
+        observore_peer_warning_t warn;
+        if (company == COMPANY_NONPRODUCTION &&
+            observore_peer_parse(payload, payload_len, &warn)) {
+            ev->cls = OBSERVORE_CLASS_PEER_DETECTOR;
+            ev->evidence = OBSERVORE_EVIDENCE_MFG_DATA;
+            set_label(ev, "Observore node");
+            char detail[48], pos[32];
+            if (warn.have_pos) {
+                observore_odid_format_pos(warn.lat_e7, warn.lon_e7, pos, sizeof(pos));
+                snprintf(detail, sizeof(detail), "warns %s %s",
+                         observore_class_name(warn.cls), pos);
+            } else {
+                snprintf(detail, sizeof(detail), "warns %s, %us ago",
+                         observore_class_name(warn.cls), warn.age_s);
+            }
+            set_detail(ev, detail);
+            return true;
+        }
+
         if (company == COMPANY_NONPRODUCTION && payload_len >= 8 &&
             memcmp(payload, SQUACHMESH_MAGIC, sizeof(SQUACHMESH_MAGIC)) == 0) {
             ev->cls = OBSERVORE_CLASS_PEER_DETECTOR;

@@ -13,6 +13,7 @@ idf_component_register(
         "observore_version.c"
         "observore_census.c"
         "observore_odid.c"
+        "observore_peer.c"
         "observore_monitors.c"
         "observore_touchcal.c"
         "observore_tap.c"
