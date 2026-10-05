@@ -1499,11 +1499,39 @@ management yet. A tag that cannot be checked must never be mistaken for one
 that has been, so `trusted` is always false — which is also why nothing in this
 slice can be trusted enough to suppress.
 
-One honest constraint of the format: a legacy advert gives 24 usable bytes once
-a flags element is present. A bare warning is 15 and one carrying a position is
-23, so both fit — but a warning that is both positioned *and* signed is 27 and
-does not. That needs BLE 5 extended advertising, which every board here except
-the classic ESP32 CYDs supports.
+**Every field is as small as it is for one reason.** A legacy advert gives 24
+usable bytes once a flags element is present. The first version of the format
+spent 23 of them on a positioned warning — it fit, with one byte to spare, and
+left no room at all for a signature. Signed *and* positioned came to 27, which
+would have needed BLE 5 extended advertising.
+
+That is not a tolerable place to end up, and the reason is specific: the
+classic ESP32 in both Cheap Yellow Displays is **BLE 4.2 and cannot *receive*
+extended advertising**. Moving the format there would not merely stop those
+boards transmitting — it would make them deaf to the mesh.
+
+The alternative was to buy a Bluetooth SIG company identifier, which retires
+the four magic bytes. That is **$1,250** for four bytes. So the fields were
+made honest instead:
+
+| field | was | now | why |
+|---|---|---|---|
+| node id | 4 | **2** | eight nodes in BLE range makes 16 bits ample |
+| age | 2 | **1** | warnings expire at 300 s, so >255 described one already dropped |
+| position | 4+4 | **3+3** | coarse was the stated preference anyway |
+
+Twelve bytes bare, eighteen with a position, **twenty-two signed and
+positioned** — two spare in a legacy advert, so every board here can hear a
+signed warning that says where.
+
+Positions go on the wire as degrees × 10⁷ divided by 256, in three signed
+bytes: about 2.8 metres, against the eleven metres the four decimal places
+shown to a person already imply. The divisor is a power of two, so the
+arithmetic is exact both ways and there is no rounding decision to get wrong.
+
+The version bumped to 2 when this changed. An unknown version is refused, so an
+old node and a new one simply do not hear each other — the right failure, and
+free right now because nothing transmits yet.
 
 `/api/status` reports `peers: {nodes, warnings}`, which is how a headless
 receive-only node says whether it is hearing anything at all.

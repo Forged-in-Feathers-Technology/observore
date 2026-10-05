@@ -1610,26 +1610,30 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
     banner("a warning from another node is heard, and can only raise");
 
     /* Payloads built from the documented format rather than typed out. */
-    static const uint8_t w_drone[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x01, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x07, 0x00, 0x1E, 0x00, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF};
-    static const uint8_t w_nopos[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x08, 0x00, 0x0C, 0x00};
-    static const uint8_t w_replay[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x01, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x07, 0x00, 0x1E, 0x00, 0xD0, 0x67, 0xB3, 0x1E, 0xD0, 0x7F, 0xEC, 0xFF};
-    static const uint8_t w_other[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0x44, 0x33, 0x22, 0x11, 0x07, 0x01, 0x00, 0x05, 0x00};
-    static const uint8_t w_badver[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x09, 0x00, 0x01, 0x00};
-    static const uint8_t w_nofix[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x01, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    static const uint8_t w_tagged[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x02, 0xD4, 0xC3, 0xB2, 0xA1, 0x05, 0x0B, 0x00, 0x01, 0x00, 0xDE, 0xAD, 0xBE, 0xEF};
-    static const uint8_t w_unkcls[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0xD4, 0xC3, 0xB2, 0xA1, 0xC8, 0x0C, 0x00, 0x01, 0x00};
-    static const uint8_t w_wrap_hi[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0x55, 0x55, 0x55, 0x55, 0x05, 0xFF, 0xFF, 0x01, 0x00};
-    static const uint8_t w_wrap_lo[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0x55, 0x55, 0x55, 0x55, 0x05, 0x00, 0x00, 0x01, 0x00};
+    static const uint8_t w_drone[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x01, 0xD4, 0xC3, 0x05, 0x07, 0x00, 0x1E, 0x67, 0xB3, 0x1E, 0x80, 0xEC, 0xFF};
+    static const uint8_t w_nopos[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0xD4, 0xC3, 0x05, 0x08, 0x00, 0x0C};
+    static const uint8_t w_replay[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x01, 0xD4, 0xC3, 0x05, 0x07, 0x00, 0x1E, 0x67, 0xB3, 0x1E, 0x80, 0xEC, 0xFF};
+    static const uint8_t w_other[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0x44, 0x33, 0x07, 0x01, 0x00, 0x05};
+    static const uint8_t w_badver[] = {0x4F, 0x42, 0x57, 0x31, 0x01, 0x00, 0xD4, 0xC3, 0x05, 0x09, 0x00, 0x01};
+    static const uint8_t w_nofix[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x01, 0xD4, 0xC3, 0x05, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t w_tagged[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x02, 0xD4, 0xC3, 0x05, 0x0B, 0x00, 0x01, 0xDE, 0xAD, 0xBE, 0xEF};
+    static const uint8_t w_unkcls[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0xD4, 0xC3, 0xC8, 0x0C, 0x00, 0x01};
+    static const uint8_t w_wrap_hi[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0x55, 0x55, 0x05, 0xFF, 0xFF, 0x01};
+    static const uint8_t w_wrap_lo[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0x55, 0x55, 0x05, 0x00, 0x00, 0x01};
+    static const uint8_t w_signed_pos[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x03, 0xD4, 0xC3, 0x05, 0x0D, 0x00, 0x02, 0x67, 0xB3, 0x1E, 0x80, 0xEC, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF};
 
     observore_peer_warning_t w;
 
     /* A neighbour saying it saw a drone, thirty seconds ago, over London. */
     CHECK(observore_peer_parse(w_drone, sizeof(w_drone), &w), "a warning decodes");
-    CHECK(w.node == 0xA1B2C3D4u, "from a named node, got %08lx", (unsigned long)w.node);
+    CHECK(w.node == 0xC3D4u, "from a named node, got %04x", w.node);
     CHECK(w.cls == OBSERVORE_CLASS_DRONE, "warning about a drone, got %u", w.cls);
     CHECK(w.seq == 7 && w.age_s == 30, "sequence and age, got %u/%u", w.seq, w.age_s);
-    CHECK(w.have_pos && w.lat_e7 == 515074000 && w.lon_e7 == -1278000,
-          "with a position");
+    /* Coarse by design: three bytes a coordinate, about 2.8 metres. Finer
+     * than the four decimal places ever shown to a person, so nothing
+     * visible is lost, and it is what makes room for a signature. */
+    CHECK(w.have_pos && w.lat_e7 == 515073792 && w.lon_e7 == -1277952,
+          "with a position, got %ld,%ld", (long)w.lat_e7, (long)w.lon_e7);
 
     /* Nothing can be verified yet, so nothing is trusted -- including a
      * warning that carries a tag. A tag that cannot be checked must never be
@@ -1641,7 +1645,7 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
     /* Our own format, so a version we do not know is refused rather than read
      * by a layout we have since changed. */
     CHECK(!observore_peer_parse(w_badver, sizeof(w_badver), &w),
-          "an unknown format version is refused");
+          "the previous format version is refused rather than misread");
 
     /* Zero/zero is the Gulf of Guinea and what a node without a fix sends. */
     CHECK(observore_peer_parse(w_nofix, sizeof(w_nofix), &w), "a warning with no fix decodes");
@@ -1659,8 +1663,21 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
     CHECK(!observore_peer_parse(w_drone, 10, &w), "a truncated warning is refused");
     CHECK(!observore_peer_parse(NULL, 20, &w), "no payload is refused");
     /* Claims a position that did not arrive. */
-    CHECK(!observore_peer_parse(w_drone, 15 + 4, &w),
+    CHECK(!observore_peer_parse(w_drone, 12 + 2, &w),
           "a warning claiming a position it did not send is refused");
+
+    /* The reason the fields were tightened: a signed, positioned warning has
+     * to fit a legacy advert, because the classic ESP32 in both Cheap Yellow
+     * Displays is BLE 4.2 and cannot receive extended advertising at all.
+     * Moving the format there would not just stop those boards transmitting,
+     * it would make them deaf. */
+    CHECK(observore_peer_parse(w_signed_pos, sizeof(w_signed_pos), &w),
+          "a signed, positioned warning decodes");
+    CHECK(w.have_pos && w.lat_e7 == 515073792, "with its position intact");
+    CHECK(!w.trusted, "and still untrusted, because nothing can check the tag");
+    /* 1 length + 1 type + 2 company + payload, plus a 3-byte flags element. */
+    CHECK(4 + sizeof(w_signed_pos) + 3 <= 31,
+          "and the whole advert fits in 31 bytes: %zu", 4 + sizeof(w_signed_pos) + 3);
 
     /* Replay. A warning whose sequence does not advance is dropped: the
      * cheapest attack on a table like this is to repeat somebody's warning
@@ -1688,7 +1705,7 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
     for (int i = 0; i < 20; i++) {
         uint8_t v[sizeof(w_nopos)];
         memcpy(v, w_nopos, sizeof(v));
-        v[11] = (uint8_t)(20 + i);          /* advancing sequence */
+        v[9] = (uint8_t)(20 + i);           /* advancing sequence */
         observore_peer_parse(v, sizeof(v), &w);
         observore_peer_note(&w, SECS(100 + i));
     }
@@ -1713,7 +1730,7 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
     observore_peer_warning_t got[4];
     size_t n = observore_peer_recent(got, 4, SECS(25));
     CHECK(n == 2, "two warnings stand, got %zu", n);
-    CHECK(got[0].node == 0xA1B2C3D4u, "newest first");
+    CHECK(got[0].node == 0xC3D4u, "newest first");
 
     /* The whole-advert path, and then the classifier, because the decoder
      * passing on its own proves nothing about what reaches a screen. */
@@ -1727,7 +1744,7 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
     observore_peer_warning_t fromadv;
     CHECK(observore_peer_from_advert(padv, padv_len, &fromadv),
           "a warning is found in a whole advert");
-    CHECK(fromadv.node == 0xA1B2C3D4u && fromadv.cls == OBSERVORE_CLASS_DRONE,
+    CHECK(fromadv.node == 0xC3D4u && fromadv.cls == OBSERVORE_CLASS_DRONE,
           "with its sender and its subject");
 
     /* A different company ID is not ours, whatever follows it. */
@@ -1752,7 +1769,7 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
           "as a peer detector, which is what #132 said it would be");
     CHECK(strstr(pev.detail, "warns") != NULL && strstr(pev.detail, "drone") != NULL,
           "and says what it warned about: '%s'", pev.detail);
-    CHECK(strstr(pev.detail, "51.5074") != NULL,
+    CHECK(strstr(pev.detail, "51.507") != NULL,
           "including where: '%s'", pev.detail);
 
     /* SquachWatch is still SquachWatch. Both ride under the same company ID,
