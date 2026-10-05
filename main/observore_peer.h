@@ -39,21 +39,55 @@
  *   0..3   magic "OBW1"
  *   4      format version
  *   5      flags: bit 0 a position follows, bit 1 a tag follows
- *   6..9   node id, little-endian
- *   10     the class being warned about (observore_class_t)
- *   11..12 sequence, little-endian
- *   13..14 how many seconds ago the sender saw it, little-endian
- *   15..18 latitude  e7, if bit 0
- *   19..22 longitude e7, if bit 0
- *   ...    a four-byte tag, if bit 1
+ *   6..7   node id, little-endian
+ *   8      the class being warned about (observore_class_t)
+ *   9..10  sequence, little-endian
+ *   11     how many seconds ago the sender saw it
+ *   12..14 latitude,  coarse, if bit 0
+ *   15..17 longitude, coarse, if bit 0
+ *   18..21 a four-byte tag, if bit 1
  *
- * A legacy advert carries 31 bytes, of which the manufacturer payload gets 27
- * -- 24 once a flags element is included. So fifteen bytes of warning fits
- * comfortably, a warning with a position fits at twenty-three, and a warning
- * that is both positioned and signed does not: it needs BLE 5 extended
- * advertising, which every board here except the classic ESP32 CYDs supports.
- * That is a real constraint of the format and is written down rather than
- * discovered later.
+ * ## Why every field is as small as it is
+ *
+ * A legacy advert carries 31 bytes. Four go to the element header and the
+ * company ID and three more to a flags element, leaving 24 for the warning.
+ * Version 1 spent 23 of them on a positioned warning, which fit with a single
+ * byte to spare and left no room at all for a signature -- a signed,
+ * positioned warning came to 27 and would have needed BLE 5 extended
+ * advertising.
+ *
+ * That is not a tolerable place to end up, because the classic ESP32 in both
+ * Cheap Yellow Displays is BLE 4.2 and cannot *receive* extended advertising
+ * at all. Moving the format there would not merely stop those boards
+ * transmitting; it would make them deaf to the mesh.
+ *
+ * The alternative was to buy a Bluetooth SIG company identifier, which would
+ * have retired the four magic bytes -- $1,250, for four bytes. So the fields
+ * were made honest instead:
+ *
+ *   The node id is two bytes. Eight nodes in BLE range makes sixteen bits
+ *   ample, and a collision costs one node's warnings being merged with
+ *   another's rather than anything unsafe.
+ *
+ *   The age is one byte. Warnings expire at five minutes, so a value that
+ *   could express more than 255 seconds was describing a warning that would
+ *   already have been dropped.
+ *
+ *   Positions are three bytes each rather than four, which is the saving
+ *   that was wanted anyway: coarse was always the stated preference, since
+ *   broadcasting a detector's exact position is its own hazard.
+ *
+ * Twelve bytes bare, eighteen with a position, twenty-two signed and
+ * positioned -- which leaves two spare in a legacy advert, so every board
+ * here can hear a signed warning that says where.
+ *
+ * ## Coarse positions
+ *
+ * The wire carries degrees times ten million divided by 256, in three signed
+ * bytes. That is about 2.8 metres, against the eleven metres the four decimal
+ * places already shown to a person imply, so nothing visible is lost. The
+ * divisor is a power of two so the arithmetic is exact in both directions
+ * and needs no rounding decision.
  *
  * ## What is deliberately not here yet
  *
@@ -64,7 +98,11 @@
  */
 
 #define OBSERVORE_PEER_MAGIC   "OBW1"
-#define OBSERVORE_PEER_VERSION 1
+/* Bumped from 1 when the fields were tightened. A version this build does
+ * not know is refused rather than guessed at, so an old node and a new one
+ * simply do not hear each other -- which is the right failure, and cheap
+ * right now because nothing transmits yet. */
+#define OBSERVORE_PEER_VERSION 2
 
 /* Warnings remembered, and for how long.
  *
@@ -86,7 +124,7 @@
 #define OBSERVORE_PEER_SEQ_WINDOW 32767
 
 typedef struct {
-    uint32_t node;       /* who said it */
+    uint16_t node;       /* who said it */
     uint8_t  cls;        /* what they saw */
     uint16_t seq;        /* their counter */
     uint16_t age_s;      /* how long before sending they saw it */

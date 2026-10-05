@@ -8,9 +8,14 @@
 #define FLAG_POSITION 0x01
 #define FLAG_TAG      0x02
 
-#define BASE_LEN      15    /* magic through age, with nothing optional */
-#define POSITION_LEN   8
+#define BASE_LEN      12    /* magic through age, with nothing optional */
+#define POSITION_LEN   6    /* three bytes a coordinate */
 #define TAG_LEN        4
+
+/* Coarse positions: degrees times ten million, divided by 256, in three
+ * signed bytes. About 2.8 metres. A power of two so the arithmetic is exact
+ * both ways and there is no rounding decision to get wrong. */
+#define COARSE_SHIFT 256
 
 static observore_peer_warning_t s_tab[OBSERVORE_PEER_MAX];
 static size_t s_count;
@@ -20,10 +25,16 @@ static uint16_t le16(const uint8_t *p)
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
-static uint32_t le32(const uint8_t *p)
+/* Three bytes, little-endian, sign-extended. Written out rather than shifted
+ * into place from a 32-bit load, because the top byte of a 24-bit field is a
+ * sign bit and sign-extension by shifting right is implementation-defined. */
+static int32_t le24s(const uint8_t *p)
 {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+    if (v & 0x800000u) {
+        v |= 0xFF000000u;
+    }
+    return (int32_t)v;
 }
 
 /* The same rule the drone decoder applies, for the same reason: zero/zero is
@@ -60,10 +71,10 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
     }
 
     memset(out, 0, sizeof(*out));
-    out->node  = le32(&payload[6]);
-    out->cls   = payload[10];
-    out->seq   = le16(&payload[11]);
-    out->age_s = le16(&payload[13]);
+    out->node  = le16(&payload[6]);
+    out->cls   = payload[8];
+    out->seq   = le16(&payload[9]);
+    out->age_s = payload[11];
 
     /* A class this build does not have is a node that knows about something
      * we do not. Kept as unknown rather than dropped: that a neighbour is
@@ -74,8 +85,8 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
     }
 
     if (flags & FLAG_POSITION) {
-        int32_t lat = (int32_t)le32(&payload[15]);
-        int32_t lon = (int32_t)le32(&payload[19]);
+        int32_t lat = le24s(&payload[12]) * COARSE_SHIFT;
+        int32_t lon = le24s(&payload[15]) * COARSE_SHIFT;
         if (position_usable(lat, lon)) {
             out->lat_e7 = lat;
             out->lon_e7 = lon;
