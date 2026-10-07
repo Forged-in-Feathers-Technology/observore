@@ -14,6 +14,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_census.h"
+#include "observore_clock.h"
 #include "observore_monitors.h"
 #include "observore_odid.h"
 #include "observore_peer.h"
@@ -1059,6 +1060,142 @@ static void test_the_census_acts_carefully(void)
 
     observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
     observore_census_init();
+}
+
+/* Which answer about the time the device believes.
+ *
+ * This is the rule that decides whether a clock exists at all, and since the
+ * census counts separate days it is also the rule that decides whether the
+ * device is allowed to call anything furniture. The rest of the clock needs a
+ * real settimeofday() and an I2C chip, which is how a rule like this goes
+ * unexercised; the decision is pure so that it does not. */
+static void test_a_guessed_clock_is_not_a_clock(void)
+{
+    banner("the clock knows what set it");
+
+    const time_t now = 1791000000L;    /* 2026-10-07, comfortably inside */
+
+    /* An unset device takes whatever it is offered, from any source. This is
+     * the case that matters most: a board with no RTC chip on a network with
+     * no route to an NTP server has nothing else coming. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_PERSON, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "an unset clock takes a time from a person");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_CHIP, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "and from the chip");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_NETWORK, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "and from the network");
+
+    /* "Nothing" is not a source. Treating it as one would hand every caller a
+     * way to un-date the device. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_NONE, now) !=
+              OBSERVORE_CLOCK_TAKE,
+          "a time from nowhere is not a time");
+
+    /* The window, at both ends and on the boundaries. The floor is what keeps
+     * an unsynced ESP's 1970 out. The ceiling is for the other direction: a
+     * browser with its year typed wrong is no more usable, and a date beyond
+     * what the census day number can hold would be stored as a different date
+     * entirely. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_NETWORK, 0) ==
+              OBSERVORE_CLOCK_OUT_OF_RANGE,
+          "1970 is refused, which is the whole reason for the floor");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_PERSON,
+                               OBSERVORE_CLOCK_SANE_FROM - 1) ==
+              OBSERVORE_CLOCK_OUT_OF_RANGE,
+          "a second before the floor is refused");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_PERSON,
+                               OBSERVORE_CLOCK_SANE_FROM) ==
+              OBSERVORE_CLOCK_TAKE,
+          "and the floor itself is taken");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_PERSON,
+                               OBSERVORE_CLOCK_SANE_UNTIL) ==
+              OBSERVORE_CLOCK_OUT_OF_RANGE,
+          "the ceiling is exclusive");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_PERSON,
+                               OBSERVORE_CLOCK_SANE_UNTIL - 1) ==
+              OBSERVORE_CLOCK_TAKE,
+          "a second inside it is taken");
+
+    /* Refused, not clamped. A device that will not use a time is honest; one
+     * that silently moves it to the nearest allowed instant has invented a
+     * date and will timestamp evidence with it. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NONE, false,
+                               OBSERVORE_CLOCK_PERSON, 1) !=
+              OBSERVORE_CLOCK_TAKE,
+          "an absurd time is refused rather than brought into range");
+
+    /* The ranking. A browser tab left open on the console offers to set the
+     * clock on every reload, and must not be able to replace an SNTP answer
+     * with its own opinion. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NETWORK, true,
+                               OBSERVORE_CLOCK_PERSON, now) ==
+              OBSERVORE_CLOCK_WORSE,
+          "a person does not overwrite the network");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_CHIP, true,
+                               OBSERVORE_CLOCK_PERSON, now) ==
+              OBSERVORE_CLOCK_WORSE,
+          "nor the chip");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NETWORK, true,
+                               OBSERVORE_CLOCK_CHIP, now) ==
+              OBSERVORE_CLOCK_WORSE,
+          "and the chip does not overwrite the network, which is more accurate");
+
+    /* Better always wins, and equal is a resync rather than a conflict. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_PERSON, true,
+                               OBSERVORE_CLOCK_NETWORK, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "the network corrects a person without being asked");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_PERSON, true,
+                               OBSERVORE_CLOCK_CHIP, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "and so does the chip");
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NETWORK, true,
+                               OBSERVORE_CLOCK_NETWORK, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "the same source again is a resync, not a conflict");
+
+    /* And the half of the ranking that is easy to leave out. A power cycle
+     * loses the clock; the recorded source is kept in the same memory and
+     * goes with it, but a board whose source somehow outlived its clock must
+     * still accept an answer. A ranking honoured against a clock that reads
+     * 1970 would refuse every source forever, which is a device that can
+     * never be dated again. */
+    CHECK(observore_clock_rule(OBSERVORE_CLOCK_NETWORK, false,
+                               OBSERVORE_CLOCK_PERSON, now) ==
+              OBSERVORE_CLOCK_TAKE,
+          "a recorded source with no clock behind it does not outrank a real answer");
+
+    /* The names, which end up in a log, in /api/status and on the glass. */
+    CHECK(strcmp(observore_clock_source_name(OBSERVORE_CLOCK_NONE), "none") == 0,
+          "an unset clock is named rather than left blank");
+    CHECK(strcmp(observore_clock_source_name(OBSERVORE_CLOCK_PERSON), "person") == 0,
+          "a person");
+    CHECK(strcmp(observore_clock_source_name(OBSERVORE_CLOCK_CHIP), "chip") == 0,
+          "the chip");
+    CHECK(strcmp(observore_clock_source_name(OBSERVORE_CLOCK_NETWORK), "network") == 0,
+          "the network");
+    CHECK(strcmp(observore_clock_source_name((observore_clock_source_t)99),
+                 "none") == 0,
+          "and a value this build does not know reads as unset, not as garbage");
+
+    /* The window has to leave room for a day the census can hold, or a clock
+     * the device accepts would be stored as a date it cannot record. */
+    time_t until = (time_t)OBSERVORE_CLOCK_SANE_UNTIL - 1;
+    struct tm *top = gmtime(&until);
+    CHECK(top && observore_census_day_from_tm(top) != OBSERVORE_CENSUS_NO_DAY,
+          "every instant the clock accepts is a day the census can count");
 }
 
 /* A synthetic resistive panel: what the controller would read for a press at
@@ -4540,6 +4677,7 @@ int main(void)
     test_calibration_recovers_the_sheet();
     test_the_census_earns_membership_over_days();
     test_the_census_acts_carefully();
+    test_a_guessed_clock_is_not_a_clock();
     test_the_census_counts_addresses_not_just_days();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();

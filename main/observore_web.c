@@ -183,7 +183,7 @@ static esp_err_t status_handler(httpd_req_t *req)
      * devices in front of the radio right now are having weight taken off
      * the score, which is the only thing that explains the number. */
     int census_known = 0, census_household = 0;
-    observore_census_counts(observore_census_day(time(NULL)),
+    observore_census_counts(observore_clock_day(),
                             &census_household, &census_known);
 
     /* The last check's error, escaped: it can carry an esp-tls string. */
@@ -201,7 +201,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         "{\"score\":%u,\"level\":\"%s\",\"devices\":%u,"
         "\"sightings\":%" PRIu32 ",\"uptime_s\":%" PRId64
         ",\"mode\":\"%s\",\"muted\":%zu,\"suppressed\":%" PRIu32
-        ",\"time_valid\":%s,\"now\":\"%s\""
+        ",\"time_valid\":%s,\"now\":\"%s\",\"clock\":\"%s\""
         ",\"version\":\"%s\",\"board\":\"%s\""
         ",\"latest\":\"%s\",\"update\":%s"
         ",\"update_state\":\"%s\",\"update_pct\":%d"
@@ -224,6 +224,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_mode_name(observore_wifi_mode()),
         observore_mute_count(), observore_mute_suppressed(),
         observore_clock_valid() ? "true" : "false", now_iso,
+        observore_clock_source_name(observore_clock_source()),
         observore_update_running_version(),
         CONFIG_OBSERVORE_BOARD,
         observore_update_latest_version(),
@@ -860,7 +861,7 @@ static esp_err_t census_handler(httpd_req_t *req)
      * this. */
     const observore_census_entry_t *tab = NULL;
     size_t n = observore_census_entries(&tab);
-    int day = observore_census_day(time(NULL));
+    int day = observore_clock_day();
 
     char *body = s_body;
     observore_jbuf_t jb;
@@ -883,6 +884,46 @@ static esp_err_t census_handler(httpd_req_t *req)
     }
     observore_jb_close(&jb, "]}");
     return send_json(req, body);
+}
+
+/* The time, from the browser asking.
+ *
+ * Most of these boards have no RTC chip, and the places this device is worth
+ * carrying are routinely places where no NTP server is reachable -- a camera
+ * VLAN with no route out, a field with no uplink at all. Those boards cold
+ * boot into 1970 and stay there, which means findings with no date on them
+ * and a census that cannot count a single day.
+ *
+ * The browser on the other end of this request knows the time to the
+ * millisecond. It is a worse clock than SNTP and a far better one than none,
+ * so it is accepted and recorded as what it is: set by a person. A later SNTP
+ * reply replaces it without being asked.
+ *
+ * Behind the console password like everything else here. That is not about
+ * the time being secret -- it is that a clock is now load-bearing for what
+ * the census suppresses, and an unauthenticated endpoint that moves the date
+ * is an unauthenticated endpoint that decides what the device stops
+ * reporting. */
+static esp_err_t time_handler(httpd_req_t *req)
+{
+    char value[24];
+    if (!query_param(req, "epoch", value, sizeof(value))) {
+        return fail(req, "epoch is required");
+    }
+    /* Seconds, parsed as 64-bit: time_t is 64-bit here and a 32-bit parse
+     * would turn a date past 2038 into one in the past, which is the exact
+     * class of mistake the sane window exists to catch. */
+    char *end = NULL;
+    long long epoch = strtoll(value, &end, 10);
+    if (end == value || (end && *end)) {
+        return fail(req, "epoch must be a whole number of seconds");
+    }
+    if (!observore_clock_set((time_t)epoch, OBSERVORE_CLOCK_PERSON)) {
+        return fail(req, "that time was refused: either it is outside the "
+                         "window a running device can be in, or the clock is "
+                         "already set from a better source");
+    }
+    return ok(req);
 }
 
 static esp_err_t monitors_get_handler(httpd_req_t *req)
@@ -1091,6 +1132,7 @@ esp_err_t observore_web_start(void)
         {"/api/bright",    HTTP_POST, bright_handler,     false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/census",    HTTP_GET,  census_handler,     false},
+        {"/api/time",      HTTP_POST, time_handler,       false},
         {"/api/monitors",  HTTP_GET,  monitors_get_handler, false},
         {"/api/monitors",  HTTP_POST, monitors_set_handler, false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},

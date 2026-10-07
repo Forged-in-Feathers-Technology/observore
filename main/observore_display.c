@@ -1475,6 +1475,27 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
              (unsigned long)st->total_sightings);
     line(r++, text, C_WHITE, C_BLACK);
 
+    /* Where the time came from, not merely whether there is one.
+     *
+     * A board on a camera VLAN with no route out never hears from an NTP
+     * server, and one with no RTC chip cold boots into 1970 and stays there.
+     * Both look identical on a screen that only says the uptime, and since
+     * the census cannot count a day without a trusted clock, "no clock" is
+     * the reason a household count stays at nothing. The console can be
+     * handed the time from a browser; this is the line that says it needs
+     * to be. */
+    if (observore_clock_valid()) {
+        char when[32];
+        observore_clock_iso(now_us, when, sizeof(when));
+        snprintf(text, sizeof(text), " clock    %.20s %s", when,
+                 observore_clock_source_name(observore_clock_source()));
+    } else {
+        /* Short enough for the narrowest panel here, which is forty columns:
+         * the first version of this line was truncated at compile time. */
+        snprintf(text, sizeof(text), " clock    not set -- set from console");
+    }
+    line(r++, text, C_WHITE, C_BLACK);
+
     /* The census, on the glass.
      *
      * It was reachable only through the web console, which needs the network
@@ -1491,7 +1512,7 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
      * screen that made that judgement, and it is still the screen that would
      * show it changing. */
     {
-        int day = observore_census_day(time(NULL));
+        int day = observore_clock_day();
         int known = 0, household = 0;
         observore_census_counts(day, &household, &known);
         snprintf(text, sizeof(text), " census   %d known, %d household",
