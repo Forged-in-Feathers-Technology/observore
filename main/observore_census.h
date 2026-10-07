@@ -5,20 +5,22 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "observore_types.h"
+
 /* What is always around.
  *
  * A stationary node learns the furniture: the doorbell, the printer, the
  * neighbour's television, the household's own phones. The point of knowing
- * that is to stop reporting it -- see #132 -- but this is deliberately only
- * the learning half. Nothing here suppresses anything yet.
+ * that is to stop reporting it -- see #132.
  *
- * That split is on purpose rather than for convenience. Twice this project
- * has silenced the thing it exists to notice: a baseline that blinded the
- * device outright (v0.9.1), and a baseline that quieted a Flipper Zero by
- * name for a week (#123). Both were acting on a judgement that had never been
- * watched. So membership is earned, persisted and reportable first, and
- * acting on it is a separate change against data that has had time to be
- * wrong in public.
+ * Learning and acting were deliberately separate changes rather than one, and
+ * not for convenience. Twice this project has silenced the thing it exists to
+ * notice: a baseline that blinded the device outright (v0.9.1), and a
+ * baseline that quieted a Flipper Zero by name for a week (#123). Both were
+ * acting on a judgement that had never been watched. So membership was
+ * earned, persisted and reported for four days first, and what came back
+ * changed the plan: see `observore_census_verdict` for the measurement that
+ * ruled out quieting half of what this was meant to quiet.
  *
  * ## Days, not hours
  *
@@ -119,6 +121,59 @@ int observore_census_day(time_t when);
 /* Same, from a date already broken down. Separated out so the day arithmetic
  * can be tested without a timezone in the way. */
 int observore_census_day_from_tm(const struct tm *lt);
+
+/* What the census calls one device.
+ *
+ * Moved here from the sweep's caller, because the scoring needs the same
+ * answer and two copies of an identity rule are two rules. The fingerprint
+ * where there is one, because the household's own phones rotate their
+ * addresses and would never reach a second day otherwise; failing that a
+ * fixed address; and nothing at all for a random address with no stable
+ * advert shape, which has no identity to remember.
+ *
+ * Returns 0 when there is nothing to key on. */
+uint32_t observore_census_id(const observore_event_t *e);
+
+/* What the census is entitled to do about a sighting.
+ *
+ * This is where four days of measurement landed. The original plan was to
+ * quiet household devices, and the data said that cannot be done safely: on
+ * the bench board every single identity at the address ceiling had become
+ * household, so the identities the census most wants to quiet are exactly the
+ * ones whose advert shape may name a kind of device rather than one. There is
+ * no safe subset.
+ *
+ * So two rules instead of one:
+ *
+ *   REPORT   nothing changes. Anything not household, and -- whatever else is
+ *            true -- anything in a protected class. A census may quiet
+ *            unidentified things and never the classes this device exists to
+ *            find, which is the same rule a baseline already obeys and for the
+ *            same reason.
+ *
+ *   QUIET    household, below the ceiling, not protected. Few enough
+ *            addresses that the shape names one identifiable device: the
+ *            doorbell, the printer, the things that do not rotate.
+ *
+ *   DAMPEN   household and at the ceiling. Fewer points rather than none. If
+ *            the shape really is one rotating phone the noise goes away; if it
+ *            covers a population, a stranger's device still registers. The
+ *            failure mode is under-alarmed rather than blind, which is the
+ *            trade worth making on a device that has been blinded twice.
+ */
+typedef enum {
+    OBSERVORE_CENSUS_REPORT = 0,
+    OBSERVORE_CENSUS_DAMPEN,
+    OBSERVORE_CENSUS_QUIET,
+} observore_census_verdict_t;
+
+observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
+                                                    observore_class_t cls);
+
+/* How much of its weight a dampened sighting keeps: half, never less than
+ * one. Halving a single point would round to silence, which is the one
+ * outcome this is designed to avoid. */
+uint16_t observore_census_dampen(uint16_t points);
 
 void observore_census_init(void);
 

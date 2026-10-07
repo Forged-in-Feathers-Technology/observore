@@ -6,6 +6,7 @@
 #endif
 
 #include "observore_census.h"
+#include "observore_mute.h"
 
 #include <string.h>
 
@@ -97,6 +98,55 @@ int observore_census_day(time_t when)
         return OBSERVORE_CENSUS_NO_DAY;
     }
     return observore_census_day_from_tm(&lt);
+}
+
+uint32_t observore_census_id(const observore_event_t *e)
+{
+    if (!e) {
+        return 0;
+    }
+    if (e->fingerprint != 0) {
+        return e->fingerprint;
+    }
+    if (e->addr_random) {
+        return 0;
+    }
+    /* FNV-1a over the address, offset basis nudged so a MAC hash and a
+     * fingerprint cannot collide by being the same arithmetic over different
+     * inputs. */
+    uint32_t h = 0x811C9DC5u ^ 0x4D41435Bu;   /* "MAC[" */
+    for (int i = 0; i < OBSERVORE_MAC_LEN; i++) {
+        h = (h ^ e->mac[i]) * 16777619u;
+    }
+    return h ? h : 1u;   /* 0 means "no identity", so never return it */
+}
+
+observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
+                                                    observore_class_t cls)
+{
+    /* Checked first, and before membership, so that no later change to this
+     * function can reach a protected class by some other path. The classes
+     * this device exists to find are not the census's to touch -- not to
+     * silence and not to quieten, because reducing the alarm on a body camera
+     * is still reducing it. */
+    if (observore_mute_class_is_protected(cls)) {
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    if (id == 0 || !observore_census_is_household(id, day)) {
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    bool over = false;
+    int addrs = observore_census_addresses(id, &over);
+    if (over || addrs >= OBSERVORE_CENSUS_ADDRS) {
+        return OBSERVORE_CENSUS_DAMPEN;
+    }
+    return OBSERVORE_CENSUS_QUIET;
+}
+
+uint16_t observore_census_dampen(uint16_t points)
+{
+    uint16_t half = (uint16_t)(points / 2);
+    return half > 0 ? half : (points > 0 ? 1u : 0u);
 }
 
 void observore_census_init(void)

@@ -368,8 +368,41 @@ static size_t census(const observore_digest_entry_t *e, size_t count,
     return n;
 }
 
+/* The parenthetical that says what is not in the findings.
+ *
+ * Its own function because two messages need it: the digest, where it leads
+ * the body, and a bare level change, which has no findings at all and would
+ * otherwise be the one message that omits the caveat -- a device reporting
+ * "alert" while it has been told not to look for half of what it can see.
+ */
+size_t observore_digest_note(const observore_digest_notes_t *notes,
+                             char *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return 0;
+    }
+    buf[0] = '\0';
+    int off = notes ? notes->monitors_off : 0;
+    int quiet = notes ? notes->census_quieted : 0;
+    int n = 0;
+    if (off > 0 && quiet > 0) {
+        n = snprintf(buf, len, "(%d monitor%s off, %d quieted as household)",
+                     off, off == 1 ? "" : "s", quiet);
+    } else if (off > 0) {
+        n = snprintf(buf, len, "(%d monitor%s off)", off, off == 1 ? "" : "s");
+    } else if (quiet > 0) {
+        n = snprintf(buf, len, "(%d quieted as household)", quiet);
+    }
+    if (n <= 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return ((size_t)n >= len) ? len - 1 : (size_t)n;
+}
+
 size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
-                              const char *headline, int monitors_off,
+                              const char *headline,
+                              const observore_digest_notes_t *notes,
                               char *title, size_t title_len,
                               char *body, size_t body_len)
 {
@@ -390,7 +423,7 @@ size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
              headline ? headline : "", headline ? ": " : "",
              count, count == 1 ? "" : "s", breakdown);
 
-    /* A device with monitors switched off says so in the body.
+    /* A device that has stopped reporting something says so in the body.
      *
      * Somebody reading this on a phone is the person least able to go and
      * check, and a switched-off monitor leaves nothing behind to find later:
@@ -407,9 +440,9 @@ size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
      * for that. It reads better too: the caveat frames what follows rather
      * than arriving after the reader has drawn conclusions. */
     size_t written = 0, used = 0;
-    if (monitors_off > 0) {
-        used = (size_t)snprintf(body, body_len, "(%d monitor%s off)\n",
-                                monitors_off, monitors_off == 1 ? "" : "s");
+    char note[64];
+    if (observore_digest_note(notes, note, sizeof(note)) > 0) {
+        used = (size_t)snprintf(body, body_len, "%s\n", note);
         if (used >= body_len) {
             used = body_len - 1;
         }

@@ -871,6 +871,196 @@ static void test_the_census_earns_membership_over_days(void)
           "and a refused restore leaves what was there alone");
 }
 
+/* What the census is allowed to do about what it learned.
+ *
+ * The rules here are not the ones that were planned. Four days of measurement
+ * on the bench said that every identity wearing the full eight addresses had
+ * become household, so "quiet the furniture" would have been quieting
+ * whichever advert shapes describe a population. What is tested is what that
+ * left: silence for an identifiable household device, half weight for an
+ * ambiguous one, and nothing at all for a protected class however long it has
+ * been around. */
+static void test_the_census_acts_carefully(void)
+{
+    banner("the census quiets carefully, and says that it did");
+
+    /* The verdict, on its own, before any of it is wired to a score. */
+    observore_census_init();
+    const uint32_t furniture = 0xF00D1;
+    CHECK(observore_census_verdict(furniture, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_REPORT,
+          "an identity the census has never seen is reported");
+
+    uint8_t mac[6] = {0x02, 0, 0, 0, 0, 0x01};
+    observore_census_note(furniture, 9000, mac);
+    observore_census_note(furniture, 9001, mac);
+    CHECK(observore_census_verdict(furniture, 9001, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_REPORT,
+          "two days is not yet furniture, so it is still reported");
+
+    observore_census_note(furniture, 9002, mac);
+    CHECK(observore_census_verdict(furniture, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "three days under one address is furniture and is quieted");
+
+    /* The ceiling is the whole of the measurement. An identity wearing the
+     * maximum number of addresses may be one rotating phone or may be every
+     * handset of a model, and nothing here can tell those apart -- so it is
+     * down-weighted rather than silenced. */
+    const uint32_t ambiguous = 0xF00D2;
+    for (int i = 0; i < OBSERVORE_CENSUS_ADDRS; i++) {
+        uint8_t m[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x20 + i)};
+        observore_census_note(ambiguous, 9000, m);
+        observore_census_note(ambiguous, 9001, m);
+        observore_census_note(ambiguous, 9002, m);
+    }
+    CHECK(observore_census_verdict(ambiguous, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_DAMPEN,
+          "furniture at the address ceiling is dampened, never silenced");
+
+    /* And the rule that outranks all of it. A protected class is what this
+     * device exists to find; no amount of being around every day earns the
+     * right to stop saying so. Checked for both of the other two outcomes,
+     * because the protection has to come before the membership test rather
+     * than after it. */
+    CHECK(observore_census_verdict(furniture, 9002, OBSERVORE_CLASS_BODYCAM) ==
+              OBSERVORE_CENSUS_REPORT,
+          "a body camera that is always there is still reported");
+    CHECK(observore_census_verdict(ambiguous, 9002, OBSERVORE_CLASS_TAILING) ==
+              OBSERVORE_CENSUS_REPORT,
+          "and so is something that came with you");
+    for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
+        if (!observore_mute_class_is_protected((observore_class_t)c)) {
+            continue;
+        }
+        CHECK(observore_census_verdict(furniture, 9002, (observore_class_t)c) ==
+                  OBSERVORE_CENSUS_REPORT,
+              "no protected class can be quieted: %s",
+              observore_class_name((observore_class_t)c));
+    }
+
+    /* Without a day there is no membership to test, so nothing is quieted.
+     * This is the state a board with no clock is in, and it is why the
+     * tracker's day starts unset rather than at zero. */
+    CHECK(observore_census_verdict(furniture, OBSERVORE_CENSUS_NO_DAY,
+                                   OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_REPORT,
+          "with no day, nothing is furniture and nothing is quieted");
+
+    /* Half, and never to nothing: halving one point would round to silence,
+     * which is the outcome dampening exists to avoid. */
+    CHECK(observore_census_dampen(6) == 3, "six halves to three");
+    CHECK(observore_census_dampen(3) == 1, "three halves to one");
+    CHECK(observore_census_dampen(2) == 1, "two halves to one");
+    CHECK(observore_census_dampen(1) == 1, "one stays one rather than vanishing");
+    CHECK(observore_census_dampen(0) == 0, "nothing stays nothing");
+
+    /* Now through the tracker, which is where it has to hold. A Ring doorbell
+     * is the case this was built for: a camera, unprotected, bolted to a wall,
+     * seen every day. */
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x11, 0x22, 0x33};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t o_ring = {
+        .mac = ring, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_mute_clear();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_ring, SECS(0)), "the doorbell is seen");
+
+    observore_event_t ev[8];
+    size_t n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1 && ev[0].cls == OBSERVORE_CLASS_CAMERA, "and it is a camera");
+
+    /* The identity the tracker will use, taken from the same function the
+     * sweep uses rather than recomputed here -- two copies of an identity
+     * rule is how the sweep and the scoring come to disagree. */
+    uint32_t id = observore_census_id(&ev[0]);
+    CHECK(id != 0, "a fixed address has an identity to remember");
+
+    observore_status_t st;
+    observore_track_status(&st, SECS(1));
+    CHECK(st.score == observore_class_points(OBSERVORE_CLASS_CAMERA),
+          "with no day set it scores normally, got %u", st.score);
+    CHECK(st.census_quieted == 0 && st.census_dampened == 0,
+          "and nothing is reported as quieted");
+
+    /* Household, and the clock has arrived. */
+    observore_census_note(id, 9000, ring);
+    observore_census_note(id, 9001, ring);
+    observore_census_note(id, 9002, ring);
+    observore_track_set_day(9002);
+
+    observore_track_status(&st, SECS(2));
+    CHECK(st.score == 0, "furniture contributes nothing, got %u", st.score);
+    CHECK(st.level == OBSERVORE_LEVEL_CLEAR, "so the verdict is clear");
+
+    /* The number that stops "clear" from being a lie. A quieted device is
+     * absent from the findings as well, so without this there would be
+     * nothing anywhere to say it had been seen. */
+    CHECK(st.census_quieted == 1, "and the verdict carries that one was quieted");
+    CHECK(observore_track_snapshot(ev, 8) == 0, "it is not in the findings");
+
+    /* Still seen, though, exactly as a switched-off monitor is. */
+    CHECK(st.device_count == 1, "the device is still tracked");
+    CHECK(st.class_counts[OBSERVORE_CLASS_CAMERA] == 1, "and still counted");
+
+    /* A day the census cannot judge puts it straight back. The tracker's day
+     * is the switch, and it has to be able to turn off again -- a clock that
+     * fails is not a licence to go on suppressing. */
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_track_status(&st, SECS(3));
+    CHECK(st.score == observore_class_points(OBSERVORE_CLASS_CAMERA),
+          "with the day withdrawn it reports again, got %u", st.score);
+    CHECK(st.census_quieted == 0, "and nothing is quieted");
+    CHECK(observore_track_snapshot(ev, 8) == 1, "back in the findings");
+
+    /* Dampening, where the weight actually has to change. Samsara fleet
+     * telematics: two points, unprotected, and a thing that genuinely does
+     * sit outside a house every day. */
+    const uint8_t samsara[6] = {0x28, 0xEA, 0x5B, 0x44, 0x55, 0x66};
+    observore_observation_t o_fleet = {
+        .mac = samsara, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+    observore_track_init();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_fleet, SECS(0)), "the fleet box is seen");
+    n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1 && ev[0].cls == OBSERVORE_CLASS_FLEET_TELEMATICS,
+          "and it is fleet telematics");
+    uint32_t fid = observore_census_id(&ev[0]);
+
+    /* Household, and wearing every address the census will record -- the
+     * shape that might be one device or might be a hundred. */
+    for (int d = 9000; d <= 9002; d++) {
+        for (int i = 0; i < OBSERVORE_CENSUS_ADDRS; i++) {
+            uint8_t m[6] = {0x28, 0xEA, 0x5B, 0x44, 0x55, (uint8_t)(0x70 + i)};
+            observore_census_note(fid, d, m);
+        }
+    }
+    observore_track_set_day(9002);
+    observore_track_status(&st, SECS(1));
+    CHECK(st.census_dampened == 1, "it is dampened rather than quieted");
+    CHECK(st.census_quieted == 0, "and nothing is silenced");
+    CHECK(st.score ==
+              observore_census_dampen(
+                  observore_class_points(OBSERVORE_CLASS_FLEET_TELEMATICS)),
+          "it keeps half its weight, got %u", st.score);
+
+    /* And it stays visible, which is the difference between the two verdicts:
+     * something still contributing to the score has to be something a person
+     * can see on the screen. */
+    CHECK(observore_track_snapshot(ev, 8) == 1,
+          "a dampened device is still in the findings");
+
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+}
+
 /* A synthetic resistive panel: what the controller would read for a press at
  * a given screen pixel, if the sheet were perfectly linear between `lo` and
  * `hi` on each channel.
@@ -1408,7 +1598,7 @@ static void test_a_switched_off_monitor_stops_reporting_not_seeing(void)
 
 static void test_a_digest_admits_what_it_is_not_looking_for(void)
 {
-    banner("a digest says when monitors are off");
+    banner("a digest says what it is holding back");
 
     char title[OBSERVORE_DIGEST_TITLE_LEN], body[OBSERVORE_DIGEST_BODY_LEN];
     observore_digest_entry_t e[2] = {
@@ -1417,17 +1607,17 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
     };
 
     /* Nothing off: no note, and nothing about the message changes. */
-    observore_digest_build(e, 2, "alert", 0, title, sizeof(title),
+    observore_digest_build(e, 2, "alert", NULL, title, sizeof(title),
                            body, sizeof(body));
     CHECK(strstr(body, "monitor") == NULL, "no note when every monitor is on");
 
     /* Monitors off: the body says so. The reader of a notification cannot go
      * and check, and a switched-off monitor leaves nothing behind to find. */
-    observore_digest_build(e, 2, "alert", 3, title, sizeof(title),
+    observore_digest_build(e, 2, "alert", &(observore_digest_notes_t){.monitors_off = 3}, title, sizeof(title),
                            body, sizeof(body));
     CHECK(strstr(body, "3 monitors off") != NULL,
           "the body admits three monitors are off: %s", body);
-    observore_digest_build(e, 2, "alert", 1, title, sizeof(title),
+    observore_digest_build(e, 2, "alert", &(observore_digest_notes_t){.monitors_off = 1}, title, sizeof(title),
                            body, sizeof(body));
     CHECK(strstr(body, "1 monitor off") != NULL, "and says it in the singular");
 
@@ -1449,7 +1639,7 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                             .cls = "camera", .line = lines[i]};
     }
     char small[160];
-    size_t n = observore_digest_build(many, 12, "alert", 2, title,
+    size_t n = observore_digest_build(many, 12, "alert", &(observore_digest_notes_t){.monitors_off = 2}, title,
                                       sizeof(title), small, sizeof(small));
     CHECK(n < 12, "not everything fitted, which is the point of the test");
     CHECK(strncmp(small, "(2 monitors off)", 16) == 0,
@@ -1458,11 +1648,47 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
 
     /* Squeezed to where not one finding fits, the note is still there. */
     char tiny[40];
-    n = observore_digest_build(many, 12, "alert", 5, title, sizeof(title),
+    n = observore_digest_build(many, 12, "alert", &(observore_digest_notes_t){.monitors_off = 5}, title, sizeof(title),
                                tiny, sizeof(tiny));
     CHECK(strncmp(tiny, "(5 monitors off)", 16) == 0,
           "and survives a body too small for any finding at all: %s", tiny);
     CHECK(strlen(tiny) < sizeof(tiny), "still inside its buffer");
+
+    /* The census quiets things too, and a notification has to admit to that
+     * for a stronger reason than it admits to a disabled monitor: a monitor
+     * was switched off by a person, who knows about it, whereas the census
+     * decided for itself. */
+    observore_digest_build(e, 2, "alert",
+                           &(observore_digest_notes_t){.census_quieted = 4},
+                           title, sizeof(title), body, sizeof(body));
+    CHECK(strncmp(body, "(4 quieted as household)", 24) == 0,
+          "the body leads with what the census held back: %s", body);
+    CHECK(strstr(body, "monitor") == NULL,
+          "and says nothing about monitors, which are all on");
+
+    /* Both at once, in one note rather than two: a body that leads with two
+     * parentheticals has pushed a finding off the end to say the same thing
+     * twice. */
+    observore_digest_build(e, 2, "alert",
+                           &(observore_digest_notes_t){.monitors_off = 2,
+                                                       .census_quieted = 1},
+                           title, sizeof(title), body, sizeof(body));
+    CHECK(strncmp(body, "(2 monitors off, 1 quieted as household)", 40) == 0,
+          "both arrive in one note: %s", body);
+
+    /* The note on its own, for the message that has no findings to lead -- a
+     * bare level change, which is the one message that would otherwise omit
+     * the caveat entirely. */
+    char note[64];
+    CHECK(observore_digest_note(NULL, note, sizeof(note)) == 0 && note[0] == '\0',
+          "nothing suppressed writes nothing at all");
+    CHECK(observore_digest_note(&(observore_digest_notes_t){0}, note,
+                               sizeof(note)) == 0,
+          "and nor does an empty set of notes");
+    CHECK(observore_digest_note(&(observore_digest_notes_t){.census_quieted = 1},
+                               note, sizeof(note)) > 0 &&
+              strcmp(note, "(1 quieted as household)") == 0,
+          "one quieted device reads in the singular: %s", note);
 }
 
 static void test_a_drone_says_where_it_is_and_where_its_pilot_is(void)
@@ -4040,7 +4266,7 @@ static void test_webhook_and_telegram(void)
         snprintf(lines[i], sizeof(lines[i]), "follower EE:00:00:00:00:%02zu  -60 dBm", i);
         many[i].rank = 4; many[i].rssi = -60; many[i].cls = "follower"; many[i].line = lines[i];
     }
-    observore_digest_build(many, 10, "alert", 0, title, sizeof(title), body, sizeof(body));
+    observore_digest_build(many, 10, "alert", NULL, title, sizeof(title), body, sizeof(body));
     CHECK(observore_notify_build(OBSERVORE_PROVIDER_WEBHOOK, "https://x/y", "tok", "",
                                  title, body, OBSERVORE_URGENCY_URGENT, &r),
           "full digest fits a webhook");
@@ -4229,7 +4455,7 @@ static void test_digest(void)
         {5, -70, "bodycam", "bodycam CC:00:00:00:00:03  -70 dBm"},
         {4, -50, "follower","follower DD:00:00:00:00:04  -50 dBm"},
     };
-    size_t n = observore_digest_build(e, 4, "alert", 0,
+    size_t n = observore_digest_build(e, 4, "alert", NULL,
                                       title, sizeof(title), body, sizeof(body));
     CHECK(n == 4, "all four findings should fit, got %zu", n);
     CHECK(e[0].rank == 5, "bodycam outranks everything else");
@@ -4257,7 +4483,7 @@ static void test_digest(void)
         many[i].cls  = "follower";
         many[i].line = lines[i];
     }
-    n = observore_digest_build(many, 10, NULL, 0,
+    n = observore_digest_build(many, 10, NULL, NULL,
                                title, sizeof(title), body, sizeof(body));
     CHECK(n == OBSERVORE_DIGEST_MAX_LINES,
           "body caps at %d lines, got %zu", OBSERVORE_DIGEST_MAX_LINES, n);
@@ -4267,14 +4493,14 @@ static void test_digest(void)
     CHECK(strlen(body) < sizeof(body), "body stays inside its buffer");
 
     /* An empty digest is not a message. */
-    CHECK(observore_digest_build(e, 0, NULL, 0, title, sizeof(title),
+    CHECK(observore_digest_build(e, 0, NULL, NULL, title, sizeof(title),
                                  body, sizeof(body)) == 0,
           "nothing to report produces nothing");
 
     /* The whole point of the cap: the largest digest still has to fit the
      * tightest provider's request body after escaping. */
     observore_notify_request_t req;
-    n = observore_digest_build(many, 10, "alert", 0,
+    n = observore_digest_build(many, 10, "alert", NULL,
                                title, sizeof(title), body, sizeof(body));
     CHECK(observore_notify_build(OBSERVORE_PROVIDER_PUSHOVER,
                                  "https://api.pushover.net/1/messages.json",
@@ -4313,6 +4539,7 @@ int main(void)
     test_the_dial_wanders_without_leaving_the_glass();
     test_calibration_recovers_the_sheet();
     test_the_census_earns_membership_over_days();
+    test_the_census_acts_carefully();
     test_the_census_counts_addresses_not_just_days();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();

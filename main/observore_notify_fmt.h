@@ -84,13 +84,30 @@ typedef struct {
  * `headline` is optional and leads the title when present, so a level change
  * reads as "alert: 6 findings (1 drone, 5 followers)".
  *
- * `monitors_off` is how many monitors are switched off, and appends a note
- * to the body when it is not zero. It is a parameter rather than something
- * looked up here because this file stays pure -- but it is not optional: a
- * digest from a device that has been told to stop looking for things must say
- * so, and the reader of a notification is the person least able to check. */
+ * `notes` is what was taken out of the picture before these findings were
+ * counted, and leads the body when there is any of it. NULL means nothing
+ * was. It is a parameter rather than something looked up here because this
+ * file stays pure -- but it is not optional: a digest from a device that has
+ * been told to stop looking, or that has decided something is furniture, must
+ * say so, and the reader of a notification is the person least able to go and
+ * check.
+ *
+ * A struct rather than a count, because the kinds of suppression keep
+ * arriving -- disabled monitors, then the census -- and each one added as
+ * another int is another call site to find. */
+typedef struct {
+    int monitors_off;      /* monitors switched off: nothing is being looked for */
+    int census_quieted;    /* household devices contributing nothing right now */
+} observore_digest_notes_t;
+
+/* The note on its own, for a message that has no findings to lead. Writes
+ * "" and returns 0 when nothing has been suppressed. */
+size_t observore_digest_note(const observore_digest_notes_t *notes,
+                             char *buf, size_t len);
+
 size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
-                              const char *headline, int monitors_off,
+                              const char *headline,
+                              const observore_digest_notes_t *notes,
                               char *title, size_t title_len,
                               char *body, size_t body_len);
 

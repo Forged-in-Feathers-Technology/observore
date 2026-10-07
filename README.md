@@ -1560,7 +1560,8 @@ the verdict goes:
 - on the glass, in the coloured band itself, beside the level
 - in the console, appended to the level: `clear — 2 monitors off`
 - in `/api/status`, as `monitors: {off, off_mask}`
-- at the top of every notification body, `(2 monitors off)`
+- at the top of every notification body, `(2 monitors off)` — sharing one
+  note with the census when it has quieted something too
 - in the log at every boot, naming each one
 
 The notification note **leads** the body rather than trailing it, which is what
@@ -1578,7 +1579,9 @@ something up by accident — so the console allows it, behind a confirmation tha
 says what it means. What stays impossible is anything *automatic* doing it: not
 a baseline, not the census, not a future mesh peer. That is enforced by
 construction — nothing but the console calls the setter — rather than by a
-flag, so the rule is kept by not adding callers.
+flag, so the rule is kept by not adding callers. The census, which does now
+act by itself, obeys the same line from the other side: it can quiet an
+unidentified household device and can never quiet a protected class.
 
 **`unknown` is not a monitor** and cannot be switched off. It is what the
 device says when nothing matched, so hiding it would mean hiding everything the
@@ -1593,21 +1596,23 @@ ever saved a preference. Storing the off-set makes the default fall the safe
 way: an unknown bit is zero, zero means on, and a missing or unreadable setting
 means everything is on rather than nothing.
 
-### Learning the furniture, without acting on it yet
+### Learning the furniture, then acting on it carefully
 
 A baseline is a decision you make once, by hand, about a room you happen to be
 standing in. The thing it is trying to approximate is *what is always around* —
 and a stationary device is in a position to learn that by itself, over days,
 without being asked ([#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)).
-This is the first part of that: the device now keeps a census of what it keeps
-seeing. **Nothing is suppressed on the strength of it.**
+The device keeps a census of what it keeps seeing, and now takes weight off the
+score for it — but it shipped as **learn and report, suppress nothing** and
+stayed that way for four days first.
 
-That split is deliberate rather than unfinished. Twice this project has
-silenced the thing it exists to notice — a baseline that blinded the device
-outright, and a baseline that quieted a Flipper Zero by name for a week — and
-both were judgements that had never been watched before they were trusted. So
-membership is earned, persisted and reportable first, and acting on it is a
-separate change against a table that has had weeks to be wrong in public.
+That split was deliberate rather than unfinished, and it paid for itself. Twice
+this project has silenced the thing it exists to notice — a baseline that
+blinded the device outright, and a baseline that quieted a Flipper Zero by name
+for a week — and both were judgements that had never been watched before they
+were trusted. So membership was earned, persisted and reported first, against a
+table that had time to be wrong in public. What came back off that table
+changed the rule that was going to be written: see below.
 
 **Membership is counted in days, not sightings.** Each known device carries a
 bitmap of the days it has been seen on, one bit per day, and counts as
@@ -1653,12 +1658,12 @@ entirely: it has no identity to remember, and noting it would fill the table
 with single-day entries that can never become furniture, evicting the furniture
 to do it.
 
-The weakness in that is known and is the reason for shipping the learning
-first. A fingerprint identifies a *kind* of device, so two identical handsets
-share one, and the mute store already has to retire fingerprint rules that
-turn out to cover more than eight addresses. The census will need the same
-guard before it suppresses anything, and the way to size it is to watch how
-often it happens here.
+The weakness in that is known and is the reason the learning shipped first. A
+fingerprint identifies a *kind* of device, so two identical handsets share one,
+and the mute store already has to retire fingerprint rules that turn out to
+cover more than eight addresses. The census is measured against the same eight,
+and what that measurement found is why it dampens rather than silences at the
+ceiling.
 
 It did not take long to happen. The first bench sweep on real air listed
 twelve tracked slots carrying five distinct identities: one fingerprint
@@ -1724,18 +1729,61 @@ is household**. There is no safe subset: the identities the census most wants
 to quiet are exactly the ones whose advert shape may name a kind of device
 rather than one.
 
-So suppression keyed on a fingerprint is not going to be built. What the data
-supports instead is two rules:
+So suppression keyed on a fingerprint was not built. What shipped instead is
+two rules, and one that outranks both:
 
 - **household and below the ceiling** — one device, identifiable, safe to
   quiet. Four of ten here: the doorbell, the printer, the things that do not
-  rotate.
-- **household and at the ceiling** — down-weighted, never silenced. A
-  household identity contributes fewer points rather than none, so if the
-  shape really is one rotating phone the noise goes away, and if it covers a
-  population a stranger's device still registers. The failure mode becomes
-  under-alarmed rather than blind, which matters on a device that has been
-  blinded twice before.
+  rotate. It contributes no points and does not appear in the findings.
+- **household and at the ceiling** — down-weighted, never silenced. It keeps
+  **half** its points, rounded up so a single point never rounds to silence,
+  and stays in the findings. If the shape really is one rotating phone the
+  noise goes away; if it covers a population, a stranger's device still
+  registers. The failure mode becomes under-alarmed rather than blind, which
+  matters on a device that has been blinded twice before.
+- **a protected class, whatever else is true** — reported, always. A body
+  camera, a tracker, a drone, a Flipper, something that came with you: no
+  amount of being around every day earns the right to stop saying so. This is
+  checked *before* membership rather than after, so no later change to the
+  rule can reach a protected class by another path.
+
+A halved device is halved **before** the follower ceiling is applied, not
+after, so a dampened follower spends half as much of that class's budget as
+well. Halving the total afterwards would instead let twice as many of them
+fill it, which is the opposite of down-weighting.
+
+**None of it happens without a clock.** The day the census judges against is
+handed to the scoring by the sweep, and until the first sweep that has a date
+the day is unset and nothing is quieted at all. A board that cannot tell one
+day from another cannot know what is furniture, and it withdraws the same way:
+if the day goes away, the suppression goes with it.
+
+**And it announces itself.** The verdict band carries the count of quieted
+devices beside the level, for the same reason it carries the count of
+switched-off monitors and a stronger one — a quieted device contributes nothing
+*and* is absent from the findings, so without that number there is nothing
+anywhere on the screen to say it was ever seen:
+
+```
+  OBSERVORE  CLEAR     score 0
+  5 devices   3 quiet
+```
+
+Dampened devices are not in that count, because they are visible by being
+listed. The exact pair is on the system page, in the present tense — not how
+many identities are household, which is a fact about the stored table, but how
+many devices in front of the radio right now are having weight taken off:
+
+```
+ quieted  3 silent, 2 at half
+```
+
+A notification carries it too, leading the body where it cannot be lost, and
+alongside the monitors note rather than as a second parenthetical:
+
+```
+(2 monitors off, 1 quieted as household)
+```
 
 It was reachable only through the web console at first, which needs the network
 *and* the console password — and that password is printed when the SoftAP comes
@@ -1743,10 +1791,12 @@ up and nowhere else. So a board with a screen and no browser to hand held this
 and had no way to say it: the same shape of fault as a brightness setting you
 cannot reach from a screen too dim to read.
 
-`/api/status` reports it as `census: {known, household, days}`. The pair is the
-interesting reading while nothing acts on this: `known` climbing while
-`household` stays at zero would mean the rule is never being satisfied, and
-there is no other way to see that from outside.
+`/api/status` reports it as `census: {known, household, days, quieted,
+dampened}`. The first pair is what the table has learned — `known` climbing
+while `household` stays at zero would mean the rule is never being satisfied,
+and there is no other way to see that from outside. The last pair is what is
+being done about it right now, which is the only thing that explains the
+score.
 
 ### Counting the addresses, which is the number that decides the next step
 

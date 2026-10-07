@@ -290,44 +290,6 @@ static void button_task(void *arg)
     }
 }
 
-/* What the census calls one device.
- *
- * The fingerprint where there is one, because it hashes the shape of the
- * advert rather than the address, and the household's own phones rotate their
- * addresses every fifteen minutes. Keyed on the address they would never
- * accumulate a second day, which would make the census useless for the one
- * case #132 most wants it for.
- *
- * Failing that, the address -- but only a fixed one. A random address with no
- * stable advert shape has no identity to remember at all: noting it would
- * fill the table with single-day entries that can never become furniture, and
- * evict the furniture to do it.
- *
- * This is the decision in this change most worth arguing with. A fingerprint
- * identifies a *kind* of device, so two identical handsets share one, and the
- * mute store already has to disable fingerprint rules that turn out to cover
- * a population (OBSERVORE_MUTE_ADDRESS_LIMIT, eight). The census will need the
- * same guard before it suppresses anything -- which is a reason to gather the data
- * first and see how often it happens here.
- */
-static uint32_t census_id(const observore_event_t *e)
-{
-    if (e->fingerprint != 0) {
-        return e->fingerprint;
-    }
-    if (e->addr_random) {
-        return 0;
-    }
-    /* FNV-1a over the address, offset basis nudged so a MAC hash and a
-     * fingerprint cannot collide by being the same arithmetic over different
-     * inputs. */
-    uint32_t h = 0x811C9DC5u ^ 0x4D41435Bu;   /* "MAC[" */
-    for (int i = 0; i < OBSERVORE_MAC_LEN; i++) {
-        h = (h ^ e->mac[i]) * 16777619u;
-    }
-    return h ? h : 1u;   /* 0 means "no identity", so never return it */
-}
-
 /* Note everything currently tracked against today, once a minute.
  *
  * A sweep rather than a hook on each sighting. Three reasons, in order of how
@@ -349,8 +311,10 @@ static uint32_t census_id(const observore_event_t *e)
  *   written down rather than left in the cadence: a minute of presence, not a
  *   single frame, is what gets a device a day.
  *
- * Nothing acts on the result yet. This is here so the table has had weeks to
- * be wrong in public before anything is suppressed on the strength of it.
+ * The sweep also hands the tracker the day it is recording against, which is
+ * what allows the scoring to quiet anything at all. Before the first sweep
+ * with a clock the tracker has no day and the census is inert -- a board that
+ * cannot tell one day from another cannot know what is furniture.
  */
 static void census_sweep(int64_t now_us)
 {
@@ -364,6 +328,12 @@ static void census_sweep(int64_t now_us)
     if (day == OBSERVORE_CENSUS_NO_DAY) {
         return;      /* no date yet; the first uplink will bring one */
     }
+
+    /* The scoring needs the same day the sweep is recording against, and
+     * handing it over here is what turns the census on: before the first
+     * sweep with a clock, the tracker's day is NO_DAY and nothing is
+     * quieted. */
+    observore_track_set_day(day);
 
     /* The household figures, once there is a clock to judge them against.
      *
@@ -412,7 +382,7 @@ static void census_sweep(int64_t now_us)
     while ((n = observore_track_all_from(chunk, sizeof(chunk) / sizeof(chunk[0]),
                                          &cursor)) > 0) {
         for (size_t i = 0; i < n; i++) {
-            uint32_t id = census_id(&chunk[i]);
+            uint32_t id = observore_census_id(&chunk[i]);
             if (id != 0) {
                 observore_census_note(id, day, chunk[i].mac);
             }

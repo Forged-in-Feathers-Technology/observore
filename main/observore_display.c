@@ -1018,16 +1018,41 @@ static void draw_watch(const observore_status_t *st,
     /* Composed in a buffer sized for the text rather than for the grid: the
      * narrowest panel here is forty columns, and the compiler has to assume a
      * %u could be five digits. line() takes what fits. */
+    /* Appended one piece at a time, with the cursor clamped after each:
+     * snprintf returns the length it *wanted*, so adding its return value
+     * unchecked is how a buffer pointer walks past the end of the array it
+     * came from. */
     char bar[80];
+    size_t at = 0;
+#define BAR_ADD(...) do { \
+        int _n = snprintf(bar + at, sizeof(bar) - at, __VA_ARGS__); \
+        if (_n > 0) { \
+            at += (size_t)_n; \
+            if (at > sizeof(bar) - 1) { at = sizeof(bar) - 1; } \
+        } \
+    } while (0)
+    BAR_ADD("  %u device%s", st->device_count,
+            st->device_count == 1 ? "" : "s");
     if (st->monitors_off > 0) {
-        snprintf(bar, sizeof(bar), "  %u device%s   %d monitor%s OFF",
-                 st->device_count, st->device_count == 1 ? "" : "s",
-                 st->monitors_off, st->monitors_off == 1 ? "" : "s");
-    } else {
-        snprintf(bar, sizeof(bar), "  %u device%s   %lu sightings",
-                 st->device_count, st->device_count == 1 ? "" : "s",
-                 (unsigned long)st->total_sightings);
+        BAR_ADD("   %d monitor%s OFF", st->monitors_off,
+                st->monitors_off == 1 ? "" : "s");
     }
+    /* Devices the census silenced go in the band too, and for a stronger
+     * reason than the monitors do: a quieted device contributes nothing to
+     * the score and does not appear in the findings, so without this number
+     * there is nothing on the screen to say it was ever there.
+     *
+     * Dampened devices are not counted here. They keep half their weight and
+     * stay in the findings, so they are visible by being listed; the exact
+     * figure is on the system page, where there is room to say what it means.
+     * The band is for what would otherwise be invisible. */
+    if (st->census_quieted > 0) {
+        BAR_ADD("   %d quiet", st->census_quieted);
+    }
+    if (st->monitors_off == 0 && st->census_quieted == 0) {
+        BAR_ADD("   %lu sightings", (unsigned long)st->total_sightings);
+    }
+#undef BAR_ADD
     line(1, bar, C_BLACK, band);
 
     int row = 2;
@@ -1460,10 +1485,11 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
      * dim to read.
      *
      * The address spread is the second line because it is the number that
-     * decides whether suppression keyed on an advert fingerprint is viable:
+     * decided whether suppression keyed on an advert fingerprint was viable:
      * identities under one address mean a fingerprint names a device,
-     * identities at the ceiling mean it names a population. Nothing acts on
-     * the census yet, and this is how that judgement gets made. */
+     * identities at the ceiling mean it names a population. This is the
+     * screen that made that judgement, and it is still the screen that would
+     * show it changing. */
     {
         int day = observore_census_day(time(NULL));
         int known = 0, household = 0;
@@ -1493,6 +1519,18 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         if (day != OBSERVORE_CENSUS_NO_DAY && many > 0) {
             snprintf(text, sizeof(text), " at cap   %d of %d household",
                      observore_census_household_at_ceiling(day), many);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+
+        /* And what it did about it, in the present tense: not how many
+         * identities are household, which is a fact about the stored table,
+         * but how many of the devices in front of the radio right now are
+         * having their weight taken off the score. Those are different
+         * numbers -- furniture that is out of range is household and is not
+         * being quieted -- and the one that explains the score is this one. */
+        if (st->census_quieted > 0 || st->census_dampened > 0) {
+            snprintf(text, sizeof(text), " quieted  %d silent, %d at half",
+                     st->census_quieted, st->census_dampened);
             line(r++, text, C_WHITE, C_BLACK);
         }
     }

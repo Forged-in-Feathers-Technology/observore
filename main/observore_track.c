@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "observore_census.h"
 #include "observore_mute.h"
 #include "observore_monitors.h"
 #include "observore_track.h"
@@ -459,6 +460,47 @@ static observore_level_t level_for(uint16_t score)
     return OBSERVORE_LEVEL_CLEAR;
 }
 
+/* Which local day the census should judge against.
+ *
+ * Pushed in from the sweep rather than read from the clock here, for the same
+ * reason the journey count is: the tracker depends on a number instead of on
+ * the time of day, and the host tests can drive the verdict without a
+ * timezone in the way.
+ *
+ * It starts as NO_DAY and stays there until something sets it, which is the
+ * safe default and not merely a placeholder. A board whose clock has never
+ * been set cannot tell one day from another, so it cannot know what is
+ * furniture -- and a census that cannot count days must not be allowed to
+ * quiet anything. No clock, no suppression. */
+static int s_census_day = OBSERVORE_CENSUS_NO_DAY;
+
+void observore_track_set_day(int day)
+{
+    OBSERVORE_LOCK();
+    s_census_day = day;
+    OBSERVORE_UNLOCK();
+}
+
+/* What the census is entitled to do about this device.
+ *
+ * One function for the score and for the findings list, so the two views
+ * cannot disagree about what is being quieted -- a row hidden from the list
+ * but still carrying points, or the reverse, is a device whose screen and
+ * whose number tell different stories.
+ *
+ * Called with the lock already held. */
+static observore_census_verdict_t census_says(const observore_event_t *e)
+{
+    if (s_census_day == OBSERVORE_CENSUS_NO_DAY) {
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    uint32_t id = observore_census_id(e);
+    if (id == 0) {
+        return OBSERVORE_CENSUS_REPORT;   /* nothing to key on */
+    }
+    return observore_census_verdict(id, s_census_day, e->cls);
+}
+
 /* The score is what is in front of the device, not a history of it.
  *
  * It used to accumulate: every device added its points again every two
@@ -508,15 +550,36 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
             continue;
         }
 
+        /* Furniture contributes nothing, or half.
+         *
+         * Counted either way, and the counts travel with the verdict for the
+         * same reason the switched-off monitors do: suppression has to
+         * announce itself. "Clear" and "clear, two quieted as household" are
+         * different claims (#132). */
+        observore_census_verdict_t cv = census_says(e);
+        if (cv == OBSERVORE_CENSUS_QUIET) {
+            out->census_quieted++;
+            continue;
+        }
+
         uint16_t points = e->points;
+        /* A follower that has not yet survived a rotation is worth presence
+         * alone. The whole class is capped besides, rotation included: a
+         * follower is unidentified by definition, and the device should not
+         * raise an alarm about something it cannot name. See the cap for what
+         * two earlier attempts got wrong about this. */
+        if (e->cls == OBSERVORE_CLASS_FOLLOWER && e->rotations == 0) {
+            points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
+        }
+        if (cv == OBSERVORE_CENSUS_DAMPEN) {
+            out->census_dampened++;
+            points = observore_census_dampen(points);
+        }
         if (e->cls == OBSERVORE_CLASS_FOLLOWER) {
-            /* The whole class is capped, rotation included. A follower is
-             * unidentified by definition, and the device should not raise an
-             * alarm about something it cannot name. See the cap for what two
-             * earlier attempts got wrong about this. */
-            if (e->rotations == 0) {
-                points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
-            }
+            /* Halved before the cap rather than after, so a dampened
+             * follower spends half as much of the class budget as well.
+             * Halving the total afterwards would instead let twice as many
+             * of them fill it, which is the opposite of down-weighting. */
             if (presence >= OBSERVORE_FOLLOWER_SCORE_CAP) {
                 continue;
             }
@@ -597,6 +660,14 @@ static size_t collect(observore_event_t *out, size_t max, int want,
          * device could not name is the opposite of what this is for. */
         if (s_devices[i].classified &&
             !observore_monitors_enabled(s_devices[i].ev.cls)) {
+            continue;
+        }
+        /* And nor does a household device the census has earned the right to
+         * quiet. Dampened rows stay: fewer points is not the same as gone,
+         * and a thing that still counts for something should still be
+         * visible. */
+        if (s_devices[i].classified &&
+            census_says(&s_devices[i].ev) == OBSERVORE_CENSUS_QUIET) {
             continue;
         }
         const observore_event_t *ev = &s_devices[i].ev;
