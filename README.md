@@ -1676,6 +1676,26 @@ every sighting, which means a device has to still be there when the sweep comes
 round. That is a second rule arriving by accident, so it is stated rather than
 left implicit: a minute of presence, not a single frame, earns a device its day.
 
+**It is on the device's own system page**, two lines, no browser and no
+password:
+
+```
+ census   28 known, 6 household
+ addrs    22x1  4x2-7  2x8+
+```
+
+That second line is the measurement this whole slice exists to produce.
+Identities under a single address mean a fingerprint names a device; identities
+at the eight-address ceiling mean it names a population, and quieting one would
+quiet the lot. Without a clock it says so rather than showing zeroes that look
+like a quiet room.
+
+It was reachable only through the web console at first, which needs the network
+*and* the console password — and that password is printed when the SoftAP comes
+up and nowhere else. So a board with a screen and no browser to hand held this
+and had no way to say it: the same shape of fault as a brightness setting you
+cannot reach from a screen too dim to read.
+
 `/api/status` reports it as `census: {known, household, days}`. The pair is the
 interesting reading while nothing acts on this: `known` climbing while
 `household` stays at zero would mean the rule is never being satisfied, and

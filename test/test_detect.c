@@ -762,6 +762,44 @@ static void test_the_census_earns_membership_over_days(void)
           OBSERVORE_CENSUS_MAX - 1 >= OBSERVORE_CENSUS_WINDOW,
           "the most recent was not");
 
+    /* The address spread, which is the number that decides whether suppression
+     * keyed on a fingerprint is viable -- and is now on the device's screen,
+     * because it was previously reachable only through a browser with a
+     * password that is printed in one place and shown nowhere. */
+    observore_census_init();
+    uint8_t m1[6] = {0x02, 0, 0, 0, 0, 0x01};
+    uint8_t m2[6] = {0x02, 0, 0, 0, 0, 0x02};
+    observore_census_note(0xB1, 9000, m1);                 /* one address */
+    observore_census_note(0xB2, 9000, m1);
+    observore_census_note(0xB2, 9000, m2);                 /* two addresses */
+    observore_census_note(0xB3, 9000, NULL);               /* no address at all */
+    for (int i = 0; i < OBSERVORE_CENSUS_ADDRS + 3; i++) {
+        uint8_t mm[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x40 + i)};
+        observore_census_note(0xB4, 9000, mm);             /* saturated */
+    }
+    int one = -1, few = -1, many = -1;
+    observore_census_addr_spread(&one, &few, &many);
+    CHECK(one == 1, "one identity under a single address, got %d", one);
+    CHECK(few == 1, "one between two and seven, got %d", few);
+    CHECK(many == 1, "one at the ceiling, got %d", many);
+    /* The identity with no address is in no bucket: it says nothing either way
+     * about whether a fingerprint names one device. */
+    int tracked_spread = -1;
+    observore_census_counts(9000, NULL, &tracked_spread);
+    CHECK(tracked_spread == 4 && one + few + many == 3,
+          "four tracked, three with any address at all");
+
+    /* Saturation counts as many whatever the stored number says: at the
+     * ceiling the count has stopped being a count, which is the case this is
+     * read to detect. */
+    observore_census_init();
+    for (int i = 0; i < OBSERVORE_CENSUS_ADDRS; i++) {
+        uint8_t mm[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x60 + i)};
+        observore_census_note(0xB5, 9000, mm);
+    }
+    observore_census_addr_spread(&one, &few, &many);
+    CHECK(many == 1 && few == 0, "exactly at the ceiling is already many");
+
     /* Counts, for the console: how many are furniture and how many are merely
      * known. The difference is the thing worth watching while nothing acts on
      * this yet. */

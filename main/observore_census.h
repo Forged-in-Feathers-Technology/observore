@@ -146,6 +146,18 @@ int observore_census_days_seen(uint32_t id, int day);
  * all. Either pointer may be NULL. */
 void observore_census_counts(int day, int *household, int *tracked);
 
+/* The address spread, in three buckets: identities seen under one address,
+ * under two to seven, and at the eight-address ceiling.
+ *
+ * This is the shape of the measurement that decides whether suppression keyed
+ * on an advert fingerprint is viable at all, so it belongs somewhere a person
+ * can read without a browser and without a password. If most identities sit
+ * in `one`, a fingerprint names a device. If many sit in `many`, a fingerprint
+ * names a population, and quieting one would quiet the lot.
+ *
+ * Any pointer may be NULL. */
+void observore_census_addr_spread(int *one, int *few, int *many);
+
 /* The table, for persistence and for the console. Returns the number of
  * entries and points `out` at them. */
 size_t observore_census_entries(const observore_census_entry_t **out);
