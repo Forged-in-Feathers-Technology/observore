@@ -2435,9 +2435,37 @@ accelerometer, a hardware clock and eight megabytes of PSRAM.
 
 Ten milliamps for a watch face is the clearest vindication the dial's design
 has had. Black is genuinely off on an AMOLED, the face is mostly black, and
-the hour markers and hands are a few hundred lit pixels out of 217,000. A
-backlit panel of the same size would not have been close. The brightness
-setting remains the one lever worth pulling before a long day out.
+the hour markers and hands are a few hundred lit pixels out of 217,000.
+
+**Measured: about 19.5 hours** on the 3.5" CYD's 3,000 mAh cell, which is
+roughly **154 mA**. That run needs no correction, unlike the two above: it
+began on battery, ran until the cell died, and so the record means what it
+says.
+
+Which gives three figures and one conclusion:
+
+| board | screen | draw |
+|---|---|---|
+| ESP32-C5 devkit | none | ~80 mA |
+| Waveshare 1.43" AMOLED | 466x466, mostly-black dial | ~90 mA |
+| ESP32-3248S035R | 480x320 backlit LCD | ~154 mA |
+
+**A screen costs either ten milliamps or seventy-four, depending on the
+panel.** An AMOLED lights the pixels it needs and a dark watch face needs
+almost none; a backlit LCD illuminates the whole panel whatever is on it. The
+same information, on the same sized glass, for seven times the power.
+
+Two caveats on the 154 mA, both of which make it a pessimistic figure. The
+cell's 3,000 mAh is its rating rather than a measurement. And that board was
+sitting at **full brightness** throughout, because its stored level had been
+forced there while chasing an unrelated fault and never put back — on a board
+where the backlight is three quarters of the draw, the brightness setting is
+not a detail. It has a photoresistor and an automatic mode for exactly this
+reason.
+
+So the brightness setting remains the one lever worth pulling before a long
+day out, and on a backlit board it is worth more than everything else
+combined.
 
 The number took three attempts to get honestly. The first two runs ended
 because the firmware was reflashed mid-run, and a third gave six hours because
