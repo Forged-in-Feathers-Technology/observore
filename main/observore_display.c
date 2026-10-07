@@ -1483,6 +1483,18 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
                      one, few, many);
         }
         line(r++, text, C_WHITE, C_BLACK);
+
+        /* The intersection, which is the number that actually decides what
+         * the census may do. An identity at the ceiling is ambiguous; an
+         * identity that is household is one the census would be entitled to
+         * quiet. Where those overlap, quieting it could silence a whole class
+         * of device -- possibly the class this exists to notice. Neither the
+         * spread nor the household count shows it alone. */
+        if (day != OBSERVORE_CENSUS_NO_DAY && many > 0) {
+            snprintf(text, sizeof(text), " at cap   %d of %d household",
+                     observore_census_household_at_ceiling(day), many);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
     }
 
 #if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0

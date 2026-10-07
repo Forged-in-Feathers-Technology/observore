@@ -158,6 +158,21 @@ void observore_census_counts(int day, int *household, int *tracked);
  * Any pointer may be NULL. */
 void observore_census_addr_spread(int *one, int *few, int *many);
 
+/* Of the identities at the address ceiling, how many are household as of
+ * `day`.
+ *
+ * This is the intersection that decides what the census may safely do, and it
+ * is not derivable from the spread and the household count separately. An
+ * identity at the ceiling is ambiguous -- one device rotating, or a population
+ * sharing an advert shape -- and an identity that is household is one the
+ * census would otherwise be entitled to quiet. Where those overlap, quieting
+ * it would risk silencing a whole class of device, and the class this project
+ * exists to notice could be in it.
+ *
+ * Reported rather than acted on: a number this consequential should be read
+ * by a person before anything is built on it. */
+int observore_census_household_at_ceiling(int day);
+
 /* The table, for persistence and for the console. Returns the number of
  * entries and points `out` at them. */
 size_t observore_census_entries(const observore_census_entry_t **out);

@@ -789,6 +789,42 @@ static void test_the_census_earns_membership_over_days(void)
     CHECK(tracked_spread == 4 && one + few + many == 3,
           "four tracked, three with any address at all");
 
+    /* The intersection that decides what the census may safely do: identities
+     * at the ceiling that have also become household. Those are the ones the
+     * census would be entitled to quiet and cannot safely quiet, and neither
+     * the spread nor the household count reveals it alone. */
+    observore_census_init();
+    /* Saturated and household: three days, many addresses. */
+    for (int d = 0; d < 3; d++) {
+        for (int i = 0; i < OBSERVORE_CENSUS_ADDRS + 1; i++) {
+            uint8_t mm[6] = {0x02, 0, 0, 0, (uint8_t)d, (uint8_t)(0x70 + i)};
+            observore_census_note(0xC1, 9000 + d, mm);
+        }
+    }
+    /* Saturated but only one day -- ambiguous, but not yet household. */
+    for (int i = 0; i < OBSERVORE_CENSUS_ADDRS + 1; i++) {
+        uint8_t mm[6] = {0x02, 0, 0, 0, 0x99, (uint8_t)(0x80 + i)};
+        observore_census_note(0xC2, 9002, mm);
+    }
+    /* Household but a single address -- safe to act on. */
+    for (int d = 0; d < 3; d++) {
+        uint8_t mm[6] = {0x02, 0, 0, 0, 0, 0xAA};
+        observore_census_note(0xC3, 9000 + d, mm);
+    }
+    observore_census_addr_spread(&one, &few, &many);
+    CHECK(many == 2, "two identities at the ceiling, got %d", many);
+    CHECK(observore_census_household_at_ceiling(9002) == 1,
+          "only one of them is household, got %d",
+          observore_census_household_at_ceiling(9002));
+    CHECK(observore_census_is_household(0xC3, 9002) &&
+          observore_census_addresses(0xC3, NULL) == 1,
+          "the single-address household identity is the safe case");
+    /* Once the window has passed over it, nothing is household and so nothing
+     * is at risk -- the figure follows membership rather than the addresses,
+     * which do not decay. */
+    CHECK(observore_census_household_at_ceiling(9002 + OBSERVORE_CENSUS_WINDOW) == 0,
+          "and it lapses with membership rather than persisting");
+
     /* Saturation counts as many whatever the stored number says: at the
      * ceiling the count has stopped being a count, which is the case this is
      * read to detect. */
