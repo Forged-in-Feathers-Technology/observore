@@ -176,10 +176,12 @@ static esp_err_t status_handler(httpd_req_t *req)
     int peer_nodes = 0, peer_warnings = 0;
     observore_peer_counts(now, &peer_nodes, &peer_warnings);
 
-    /* What the census has learned. Reported before anything acts on it, which
-     * is the point of reporting it: "known" climbing while "household" stays
-     * at nothing would mean the rule is never being satisfied, and there is no
-     * other way to see that from outside. */
+    /* What the census has learned, and what it is doing about it. "known"
+     * climbing while "household" stays at nothing would mean the rule is
+     * never being satisfied, and there is no other way to see that from
+     * outside. `quieted` and `dampened` are the live half: how many of the
+     * devices in front of the radio right now are having weight taken off
+     * the score, which is the only thing that explains the number. */
     int census_known = 0, census_household = 0;
     observore_census_counts(observore_census_day(time(NULL)),
                             &census_household, &census_known);
@@ -214,7 +216,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
         ",\"peers\":{\"nodes\":%d,\"warnings\":%d}"
-        ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d}"
+        ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d"
+        ",\"quieted\":%d,\"dampened\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -257,7 +260,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         (unsigned)observore_display_taps(),
         st.monitors_off, (unsigned long)observore_monitors_off_mask(),
         peer_nodes, peer_warnings,
-        census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS);
+        census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS,
+        st.census_quieted, st.census_dampened);
 
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",

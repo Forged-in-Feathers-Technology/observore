@@ -286,16 +286,19 @@
     <span class="note">What this device keeps seeing, counted in days rather
       than sightings: a thing is &ldquo;household&rdquo; once it has been
       around on separate days, not once it has been around a lot.
-      <strong>Nothing is suppressed on the strength of this yet.</strong> It is
-      here to be judged before it is trusted.</span>
+      A household device below the address ceiling is <strong>quieted</strong>
+      &mdash; no points, not in the findings. One at the ceiling keeps
+      <strong>half</strong> its points and stays listed. A protected class is
+      never either, however long it has been around.</span>
   </div>
   <div class="add">
     <span class="note"><strong>Addresses</strong> is the column to watch. One
       identity seen under many addresses is either a single device rotating
       &mdash; which is what keying on the advert&rsquo;s shape is for &mdash;
       or several identical devices sharing that shape. Nothing here can tell
-      those apart, so how often it happens is what decides whether suppressing
-      by shape is safe at all.</span>
+      those apart, so how often it happens is what decides what the census may
+      do. On this bench every identity at the ceiling had become household,
+      which is why the ceiling dampens rather than silences.</span>
   </div>
   <div class="rules" id="census"></div>
 </div>
@@ -482,12 +485,19 @@ async function mute(kind, value, row) {
 
 function renderStatus(s) {
   $('banner').className = 'banner ' + s.level;
-  // The verdict never appears alone while a monitor is off. A switched-off
-  // monitor leaves nothing in the data to find afterwards, so if the verdict
-  // does not carry it, nothing does.
+  // The verdict never appears alone while something is being held back. A
+  // switched-off monitor leaves nothing in the data to find afterwards, and a
+  // device the census quieted is absent from the findings as well, so if the
+  // verdict does not carry it, nothing does.
   const monOff = (s.monitors && s.monitors.off) || 0;
-  $('level').textContent = monOff
-    ? s.level + ' \u2014 ' + monOff + ' monitor' + (monOff === 1 ? '' : 's') + ' off'
+  const quiet = (s.census && s.census.quieted) || 0;
+  const half = (s.census && s.census.dampened) || 0;
+  const notes = [];
+  if (monOff) { notes.push(monOff + ' monitor' + (monOff === 1 ? '' : 's') + ' off'); }
+  if (quiet)  { notes.push(quiet + ' quieted as household'); }
+  if (half)   { notes.push(half + ' at half weight'); }
+  $('level').textContent = notes.length
+    ? s.level + ' \u2014 ' + notes.join(', ')
     : s.level;
   $('score').textContent = s.score;
   $('devices').textContent = s.devices;

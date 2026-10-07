@@ -4,7 +4,7 @@
 
 #include "observore_clock.h"
 #include "observore_notify.h"
-#include "observore_monitors.h"
+#include "observore_track.h"
 
 #include "sdkconfig.h"
 #if CONFIG_OBSERVORE_NOTIFIER
@@ -511,6 +511,17 @@ void observore_notify_pump(void)
     static char title[OBSERVORE_DIGEST_TITLE_LEN];
     static char body[OBSERVORE_DIGEST_BODY_LEN];
 
+    /* What has been taken out of the picture, taken from the tracker rather
+     * than from the monitors alone. The census decides what is furniture in
+     * the same pass that computes the score, so the number of devices it
+     * quieted this time round exists nowhere else. */
+    observore_status_t st;
+    observore_track_status(&st, esp_timer_get_time());
+    observore_digest_notes_t notes = {
+        .monitors_off   = st.monitors_off,
+        .census_quieted = st.census_quieted,
+    };
+
     if (count == 0 && headline[0] == '\0') {
         /* Nothing detected, but a release appeared. Worth one message: a device
          * that only mentions updates alongside findings would stay quiet
@@ -524,14 +535,15 @@ void observore_notify_pump(void)
          * which happens when a device already known gains enough sightings to
          * move the score. Still worth saying, and it is the whole message. */
         snprintf(title, sizeof(title), "Observore: %s", headline);
-        /* This message has no findings to list, so the note about switched-off
-         * monitors has to be added here too: a level change reported by a
-         * device that is not looking for everything must say so. */
-        int off = observore_monitors_off_count();
-        if (off > 0) {
+        /* This message has no findings to list, so the note about what is
+         * being suppressed has to be added here too: a level change reported
+         * by a device that is not looking for everything, or that is holding
+         * things back as furniture, must say so. */
+        char note[64];
+        if (observore_digest_note(&notes, note, sizeof(note)) > 0) {
             snprintf(body, sizeof(body),
-                     "Threat level is now %s, score %u. (%d monitor%s off)",
-                     headline, headline_score, off, off == 1 ? "" : "s");
+                     "Threat level is now %s, score %u. %s",
+                     headline, headline_score, note);
         } else {
             snprintf(body, sizeof(body), "Threat level is now %s, score %u.",
                      headline, headline_score);
@@ -540,8 +552,7 @@ void observore_notify_pump(void)
                                                  : OBSERVORE_URGENCY_NORMAL;
     } else {
         observore_digest_build(entries, count,
-                               headline[0] ? headline : NULL,
-                               observore_monitors_off_count(),
+                               headline[0] ? headline : NULL, &notes,
                                title, sizeof(title), body, sizeof(body));
     }
 

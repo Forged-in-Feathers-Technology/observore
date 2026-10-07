@@ -152,6 +152,19 @@ typedef struct {
      * "clear" and "clear, four monitors off" are different claims, and the
      * second one is the honest one. */
     int           monitors_off;
+    /* How much the census took off the number, and in what way.
+     *
+     * `census_quieted` is devices that contributed nothing because they are
+     * household and identifiable; `census_dampened` is devices that
+     * contributed half because they are household but their advert shape may
+     * name a kind of device rather than one.
+     *
+     * Here for the same reason `monitors_off` is: a verdict that has had
+     * things removed from it has to be able to say so. The device has twice
+     * been quietened into uselessness without the screen admitting it, and
+     * the fix both times was not a better rule but a visible one. */
+    int           census_quieted;
+    int           census_dampened;
 } observore_status_t;
 
 void observore_track_init(void);
@@ -163,6 +176,17 @@ void observore_track_init(void);
  * accelerometer simply never calls it and never promotes anything to
  * OBSERVORE_CLASS_TAILING. */
 void observore_track_set_journeys(uint32_t journeys);
+
+/* Which local day the census should judge against, from the sweep.
+ *
+ * Pushed in rather than read from the clock, like the journey count: the
+ * tracker then depends on a number rather than on the time of day, and the
+ * host tests can exercise the verdict without a timezone in the way.
+ *
+ * Until something sets it, the day is OBSERVORE_CENSUS_NO_DAY and the census
+ * quiets nothing at all. A board whose clock has never been set cannot tell
+ * one day from another, so it cannot know what is furniture. */
+void observore_track_set_day(int day);
 
 /* Whether the board is at the far end of a journey: open once the
  * surroundings confirm it is somewhere else, closed half a minute later.
