@@ -293,6 +293,42 @@ void observore_census_counts(int day, int *household, int *tracked)
     }
 }
 
+void observore_census_addr_spread(int *one, int *few, int *many)
+{
+    int a = 0, b = 0, c = 0;
+    for (size_t i = 0; i < s_count; i++) {
+        /* Saturated counts as "many" whatever the stored number says: at the
+         * ceiling the count has stopped being a count, and that is exactly
+         * the case this is being read to detect. */
+        if (s_tab[i].addr_over || s_tab[i].addr_n >= OBSERVORE_CENSUS_ADDRS) {
+            c++;
+        } else if (s_tab[i].addr_n >= 2) {
+            b++;
+        } else if (s_tab[i].addr_n == 1) {
+            a++;
+        }
+        /* An identity with no address at all -- a Wi-Fi sighting with nothing
+         * to attribute -- is in none of the buckets. It says nothing either
+         * way about whether a fingerprint names one device. */
+    }
+    if (one)  { *one = a; }
+    if (few)  { *few = b; }
+    if (many) { *many = c; }
+}
+
+int observore_census_household_at_ceiling(int day)
+{
+    int n = 0;
+    for (size_t i = 0; i < s_count; i++) {
+        bool at_cap = s_tab[i].addr_over ||
+                      s_tab[i].addr_n >= OBSERVORE_CENSUS_ADDRS;
+        if (at_cap && observore_census_is_household(s_tab[i].id, day)) {
+            n++;
+        }
+    }
+    return n;
+}
+
 size_t observore_census_entries(const observore_census_entry_t **out)
 {
     if (out) {

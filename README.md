@@ -1676,6 +1676,45 @@ every sighting, which means a device has to still be there when the sweep comes
 round. That is a second rule arriving by accident, so it is stated rather than
 left implicit: a minute of presence, not a single frame, earns a device its day.
 
+**It is on the device's own system page**, two lines, no browser and no
+password:
+
+```
+ census   28 known, 6 household
+ addrs    19x1  3x2-7  6x8+
+ at cap   2 of 6 household
+```
+
+The second line is the measurement this whole slice exists to produce, and the
+third is the one that decides what may be done with it. An identity at the
+ceiling is *ambiguous*; an identity that is household is one the census would
+be entitled to quiet. Where those overlap, quieting it could silence a whole
+class of device — possibly the class this exists to notice — and neither the
+spread nor the household count shows that overlap on its own.
+Identities under a single address mean a fingerprint names a device; identities
+at the eight-address ceiling mean it names a population, and quieting one would
+quiet the lot. Without a clock the line says so rather than showing zeroes that
+look like a quiet room.
+
+**The first real reading changed the plan.** Four days on one board gave
+`19x1 3x2-7 6x8+` — better than a fifth of identities at the ceiling, which is
+not a rounding error and lands exactly on the limit the mute store already
+uses to retire a fingerprint rule for describing a kind of device rather than
+one. The identities at the ceiling are almost certainly the rotating ones, the
+household's own phones: simultaneously what the census was built to quiet and
+what cannot safely be quieted by fingerprint. Suppression keyed on an advert
+shape is therefore safe only for the cases that never needed it.
+
+That is the measurement earning its keep. The slice shipped as learn-but-do-not-act
+specifically so this could be found out from data rather than discovered after
+something had been silenced.
+
+It was reachable only through the web console at first, which needs the network
+*and* the console password — and that password is printed when the SoftAP comes
+up and nowhere else. So a board with a screen and no browser to hand held this
+and had no way to say it: the same shape of fault as a brightness setting you
+cannot reach from a screen too dim to read.
+
 `/api/status` reports it as `census: {known, household, days}`. The pair is the
 interesting reading while nothing acts on this: `known` climbing while
 `household` stays at zero would mean the rule is never being satisfied, and

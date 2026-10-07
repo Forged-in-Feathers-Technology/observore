@@ -59,6 +59,7 @@
 #include "observore_nvs.h"
 #include "observore_runs.h"
 #include "observore_wifi.h"
+#include "observore_census.h"
 #include "observore_touchcal.h"
 #include "observore_touch.h"
 #include "observore_update.h"
@@ -1448,6 +1449,53 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
              st->device_count, st->device_count == 1 ? "" : "s",
              (unsigned long)st->total_sightings);
     line(r++, text, C_WHITE, C_BLACK);
+
+    /* The census, on the glass.
+     *
+     * It was reachable only through the web console, which needs the network
+     * and the console password -- and the password is printed when the SoftAP
+     * comes up and nowhere else. So on a board with a screen and no browser to
+     * hand, the device held this and had no way to say it. The same shape of
+     * fault as a brightness setting that cannot be reached from a screen too
+     * dim to read.
+     *
+     * The address spread is the second line because it is the number that
+     * decides whether suppression keyed on an advert fingerprint is viable:
+     * identities under one address mean a fingerprint names a device,
+     * identities at the ceiling mean it names a population. Nothing acts on
+     * the census yet, and this is how that judgement gets made. */
+    {
+        int day = observore_census_day(time(NULL));
+        int known = 0, household = 0;
+        observore_census_counts(day, &household, &known);
+        snprintf(text, sizeof(text), " census   %d known, %d household",
+                 known, household);
+        line(r++, text, C_WHITE, C_BLACK);
+
+        int one = 0, few = 0, many = 0;
+        observore_census_addr_spread(&one, &few, &many);
+        if (day == OBSERVORE_CENSUS_NO_DAY) {
+            /* Without a clock there is no day, so nothing is being recorded.
+             * Saying so beats showing zeroes that look like a quiet room. */
+            snprintf(text, sizeof(text), " addrs    no clock yet, not counting");
+        } else {
+            snprintf(text, sizeof(text), " addrs    %dx1  %dx2-7  %dx8+",
+                     one, few, many);
+        }
+        line(r++, text, C_WHITE, C_BLACK);
+
+        /* The intersection, which is the number that actually decides what
+         * the census may do. An identity at the ceiling is ambiguous; an
+         * identity that is household is one the census would be entitled to
+         * quiet. Where those overlap, quieting it could silence a whole class
+         * of device -- possibly the class this exists to notice. Neither the
+         * spread nor the household count shows it alone. */
+        if (day != OBSERVORE_CENSUS_NO_DAY && many > 0) {
+            snprintf(text, sizeof(text), " at cap   %d of %d household",
+                     observore_census_household_at_ceiling(day), many);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+    }
 
 #if CONFIG_OBSERVORE_DISPLAY_LDR_GPIO >= 0
     /* Only where the light sensor makes the setting ambiguous. Cycling a
