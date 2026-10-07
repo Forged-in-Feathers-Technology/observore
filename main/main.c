@@ -365,6 +365,46 @@ static void census_sweep(int64_t now_us)
         return;      /* no date yet; the first uplink will bring one */
     }
 
+    /* The household figures, once there is a clock to judge them against.
+     *
+     * The load-time log reports the address spread, which needs no date
+     * because addresses do not decay. It cannot report how many of those
+     * identities have become household, nor how many of the ambiguous ones
+     * have -- those are questions about *now*, and at load time the device
+     * does not know when now is. The clock arrives with the first uplink, or
+     * at boot from the hardware clock on the one board that has one.
+     *
+     * The alternative would be giving the census a clock earlier, and both
+     * ways of doing that are worse. Trusting the newest day already in the
+     * table would read "today" off a device that might have been in a drawer
+     * for a fortnight, and overstate membership in a way nothing would
+     * contradict. Waiting for the network before reading flash would delay
+     * every stored setting behind an uplink that may never come.
+     *
+     * So the part that needs a date is simply reported when it has one. Once
+     * per boot, on the first sweep with a day in hand. */
+    static bool s_said_household;
+    if (!s_said_household) {
+        s_said_household = true;
+        /* Only the ceiling bucket is wanted here; the full spread is already
+         * in the load-time line, which needs no date. */
+        int many = 0;
+        observore_census_addr_spread(NULL, NULL, &many);
+        int household = 0, known = 0;
+        observore_census_counts(day, &household, &known);
+        ESP_LOGI(TAG, "census: %d known, %d household", known, household);
+        if (many > 0) {
+            /* The overlap, said plainly, because it is the finding that
+             * decides what the census may do rather than a statistic. */
+            int risky = observore_census_household_at_ceiling(day);
+            ESP_LOGW(TAG, "census: %d of %d identities at the %d-address "
+                          "ceiling %s household -- quieting those by advert "
+                          "shape would risk a whole kind of device",
+                     risky, many, OBSERVORE_CENSUS_ADDRS,
+                     risky == 1 ? "is" : "are");
+        }
+    }
+
     /* Chunked, like the baseline: a snapshot of all 192 slots is ~23 KB and
      * the boards that most need this have no PSRAM to put it in. */
     observore_event_t chunk[16];

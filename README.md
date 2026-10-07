@@ -1709,6 +1709,34 @@ That is the measurement earning its keep. The slice shipped as learn-but-do-not-
 specifically so this could be found out from data rather than discovered after
 something had been silenced.
 
+**And the overlap turned out to be total.** The figure that decides it is how
+many of the ceiling identities have become household, which needs a clock and
+so is reported on the first sweep that has one:
+
+```
+census: 21 known -- addresses 12x1 3x2-7 6x8+
+census: 21 known, 10 household
+census: 6 of 6 identities at the 8-address ceiling are household
+```
+
+Six of ten household identities are ambiguous, and **every ambiguous identity
+is household**. There is no safe subset: the identities the census most wants
+to quiet are exactly the ones whose advert shape may name a kind of device
+rather than one.
+
+So suppression keyed on a fingerprint is not going to be built. What the data
+supports instead is two rules:
+
+- **household and below the ceiling** — one device, identifiable, safe to
+  quiet. Four of ten here: the doorbell, the printer, the things that do not
+  rotate.
+- **household and at the ceiling** — down-weighted, never silenced. A
+  household identity contributes fewer points rather than none, so if the
+  shape really is one rotating phone the noise goes away, and if it covers a
+  population a stranger's device still registers. The failure mode becomes
+  under-alarmed rather than blind, which matters on a device that has been
+  blinded twice before.
+
 It was reachable only through the web console at first, which needs the network
 *and* the console password — and that password is printed when the SoftAP comes
 up and nowhere else. So a board with a screen and no browser to hand held this
