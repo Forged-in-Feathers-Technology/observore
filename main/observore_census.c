@@ -401,7 +401,32 @@ static void census_load(void)
         s_count = 0;
         return;
     }
-    ESP_LOGI(TAG, "census: %u known", (unsigned)s_count);
+    /* The spread as well as the count, at a level that survives a release
+     * build.
+     *
+     * The system page shows this, which covers four of the boards here and not
+     * the fifth: the devkit is headless, and /api/census needs the console
+     * password. So the one board that can only ever be read over a cable was
+     * the one board that could not report the measurement the census exists to
+     * produce. A log line costs nothing and covers every board.
+     *
+     * The day is not known yet at load time -- the clock arrives with the
+     * first uplink -- so membership cannot be judged here and the at-cap
+     * figure is left to the screen and the console. The spread does not depend
+     * on the day, because addresses do not decay. */
+    int one = 0, few = 0, many = 0;
+    observore_census_addr_spread(&one, &few, &many);
+    ESP_LOGI(TAG, "census: %u known -- addresses %dx1 %dx2-%d %dx%d+",
+             (unsigned)s_count, one, few, OBSERVORE_CENSUS_ADDRS - 1,
+             many, OBSERVORE_CENSUS_ADDRS);
+    if (many > 0) {
+        /* Said plainly because it is the finding that decides what the census
+         * may do, not a statistic: at the ceiling an advert shape names a
+         * population rather than a device. */
+        ESP_LOGW(TAG, "%d identit%s wear %d or more addresses -- a fingerprint "
+                      "there names a kind of device, not one",
+                 many, many == 1 ? "y" : "ies", OBSERVORE_CENSUS_ADDRS);
+    }
 }
 
 static void census_save(void)
