@@ -1,32 +1,152 @@
 #include "observore_clock.h"
 
+#include <time.h>
+
+/* The two pure pieces come first and are built on the host as well: the rule
+ * about which source wins is the part worth testing and the part that cannot
+ * be tested through the rest of this module, which needs a real
+ * settimeofday() and a chip on an I2C bus. */
+
+const char *observore_clock_source_name(observore_clock_source_t src)
+{
+    switch (src) {
+    case OBSERVORE_CLOCK_PERSON:  return "person";
+    case OBSERVORE_CLOCK_CHIP:    return "chip";
+    case OBSERVORE_CLOCK_NETWORK: return "network";
+    default:                      return "none";
+    }
+}
+
+observore_clock_ruling_t observore_clock_rule(observore_clock_source_t have,
+                                              bool have_time,
+                                              observore_clock_source_t src,
+                                              time_t when)
+{
+    /* Nothing is not a source. Asking to set the clock from nowhere is a
+     * caller bug, and treating it as "clear the clock" would give every
+     * caller a way to un-date the device. */
+    if (src == OBSERVORE_CLOCK_NONE) {
+        return OBSERVORE_CLOCK_OUT_OF_RANGE;
+    }
+    if (when < OBSERVORE_CLOCK_SANE_FROM || when >= OBSERVORE_CLOCK_SANE_UNTIL) {
+        return OBSERVORE_CLOCK_OUT_OF_RANGE;
+    }
+    /* A worse source does not get to undo a better one -- but only while
+     * there is a better one to undo. Both halves matter: the case for the
+     * first is a browser tab left open on the console, which offers to set
+     * the clock and must not replace an SNTP answer with its own opinion on
+     * every reload. The case for the second is a power cycle, which leaves
+     * the recorded source behind in a chip that no longer knows the time; a
+     * ranking honoured then would refuse every answer forever. */
+    if (have > src && have_time) {
+        return OBSERVORE_CLOCK_WORSE;
+    }
+    return OBSERVORE_CLOCK_TAKE;
+}
+
+#ifndef OBSERVORE_HOST_TEST
+
 #include <string.h>
 #include <sys/time.h>
 
 #include "esp_log.h"
 #include <stdlib.h>
-#include <time.h>
 
 #include "esp_netif_sntp.h"
 
+#include "observore_census.h"
 #include "observore_rtc.h"
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "observore.clock";
 
-/* Any plausible "now" is far past this; the epoch that an unsynced ESP reports
- * is not.  Comparing against a fixed instant rather than tracking a flag also
- * survives a clock set by something other than this module. */
-#define SANE_EPOCH 1735689600L   /* 2025-01-01T00:00:00Z */
+/* Any plausible "now" is far past the floor; the epoch an unsynced ESP
+ * reports is not. The ceiling is there because a time set by hand can be
+ * wrong in the other direction too -- a browser with its year typed wrong is
+ * no more usable than 1970, and a date beyond what the census day number can
+ * hold would be stored as a different date entirely. Both ends are refused
+ * rather than clamped: a clock the device will not use is honest, and one
+ * silently moved to the nearest allowed instant is not. */
+#define SANE_EPOCH OBSERVORE_CLOCK_SANE_FROM
 
 static int64_t s_synced_at_us;
+
+/* The source travels in RTC memory, with the clock it describes.
+ *
+ * System time survives esp_restart -- an OTA reboot, a panic, the console's
+ * restart -- because ESP-IDF keeps the boot time in RTC slow memory. It does
+ * not survive a power cycle. A source kept in an ordinary static would be
+ * lost on a restart while the clock it describes survived, which would turn a
+ * known time into an unknown one across every OTA. A source kept in NVS would
+ * do the opposite and outlive the clock it describes, claiming a synced time
+ * on a board that has just been plugged in. This memory has exactly the right
+ * lifetime, which is the whole reason for using it rather than either.
+ *
+ * It is not initialised at power-on, so it is read through a magic word --
+ * without that, the first boot reports whichever source the previous
+ * occupant's bits happen to spell. */
+#define SOURCE_MAGIC 0x4F43534Bu   /* "OCSK" */
+static RTC_NOINIT_ATTR uint32_t s_source_magic;
+static RTC_NOINIT_ATTR uint32_t s_source;
+
+observore_clock_source_t observore_clock_source(void)
+{
+    if (s_source_magic != SOURCE_MAGIC || s_source > OBSERVORE_CLOCK_NETWORK) {
+        return OBSERVORE_CLOCK_NONE;
+    }
+    return (observore_clock_source_t)s_source;
+}
+
+static void note_source(observore_clock_source_t src)
+{
+    s_source_magic = SOURCE_MAGIC;
+    s_source = (uint32_t)src;
+}
+
+bool observore_clock_set(time_t when, observore_clock_source_t src)
+{
+    observore_clock_source_t have = observore_clock_source();
+    switch (observore_clock_rule(have, time(NULL) >= SANE_EPOCH, src, when)) {
+    case OBSERVORE_CLOCK_OUT_OF_RANGE:
+        ESP_LOGW(TAG, "refusing a time from the %s: %lld is outside the window "
+                      "a running device can be in",
+                 observore_clock_source_name(src), (long long)when);
+        return false;
+    case OBSERVORE_CLOCK_WORSE:
+        ESP_LOGI(TAG, "keeping the time from the %s over an answer from the %s",
+                 observore_clock_source_name(have),
+                 observore_clock_source_name(src));
+        return false;
+    case OBSERVORE_CLOCK_TAKE:
+        break;
+    }
+
+    struct timeval tv = {.tv_sec = when, .tv_usec = 0};
+    settimeofday(&tv, NULL);
+    note_source(src);
+    s_synced_at_us = esp_timer_get_time();
+
+    char iso[32];
+    if (observore_clock_iso(s_synced_at_us, iso, sizeof(iso))) {
+        ESP_LOGI(TAG, "clock set from the %s to %s",
+                 observore_clock_source_name(src), iso);
+    }
+    /* Straight into the chip where there is one, so a time handed in by a
+     * person survives the power cycle that loses it everywhere else. */
+    if (src != OBSERVORE_CLOCK_CHIP && observore_rtc_available()) {
+        observore_rtc_write();
+    }
+    return true;
+}
 
 static void on_sync(struct timeval *tv)
 {
     (void)tv;
     bool first = s_synced_at_us == 0;
     s_synced_at_us = esp_timer_get_time();
+    note_source(OBSERVORE_CLOCK_NETWORK);
 
     char when[32];
     if (observore_clock_iso(s_synced_at_us, when, sizeof(when))) {
@@ -82,7 +202,8 @@ void observore_clock_init(void)
 
 bool observore_clock_valid(void)
 {
-    return time(NULL) >= SANE_EPOCH;
+    return observore_clock_source() != OBSERVORE_CLOCK_NONE &&
+           time(NULL) >= SANE_EPOCH;
 }
 
 time_t observore_clock_at(int64_t uptime_us)
@@ -120,3 +241,13 @@ int64_t observore_clock_synced_at(void)
 {
     return s_synced_at_us;
 }
+
+int observore_clock_day(void)
+{
+    if (!observore_clock_valid()) {
+        return OBSERVORE_CENSUS_NO_DAY;
+    }
+    return observore_census_day(time(NULL));
+}
+
+#endif /* OBSERVORE_HOST_TEST */

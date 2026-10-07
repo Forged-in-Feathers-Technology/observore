@@ -119,6 +119,10 @@
 <header>
   <h1>Observore</h1>
   <span class="sub" id="uptime"></span>
+  <span class="sub" id="clock"></span>
+  <button id="setclock" hidden
+    title="hand this device the time from this browser: the only clock available to a board with no RTC chip and no reachable NTP server">set
+    the clock from this browser</button>
   <span class="sub" id="runs" title="how long the previous runs lasted and how each ended -- on battery, that is the battery"></span>
   <span class="sub" id="heap" title="internal RAM: free now, and the lowest it has been since boot"></span>
 </header>
@@ -508,8 +512,17 @@ function renderStatus(s) {
   // How this boot started is how the last run ended. "brownout" after a night
   // on battery is the battery; "panic" or a watchdog is us.
   $('uptime').textContent = 'up ' + ago(s.uptime_s) +
-    (s.reset_reason && s.reset_reason !== 'power-on' ? ' after ' + s.reset_reason : '') +
-    (s.time_valid ? '' : ' \u00b7 clock not set');
+    (s.reset_reason && s.reset_reason !== 'power-on' ? ' after ' + s.reset_reason : '');
+  // Where the time came from, which is a different question from whether it
+  // looks plausible. A board with no RTC chip and no route to an NTP server
+  // sits at 1970 forever, and until it is dated the census cannot count a
+  // single day -- so the offer to set it is next to the statement that it is
+  // not set, and the button goes away once the network has done better.
+  const src = s.clock || 'none';
+  $('clock').textContent = s.time_valid
+    ? 'clock from the ' + src
+    : 'clock not set';
+  $('setclock').hidden = (src === 'network');
   renderRuns(s.runs);
   renderBright(s);
   renderUpdate(s);
@@ -893,6 +906,13 @@ async function refreshConfig() {
 }
 
 // ---- actions ------------------------------------------------------------
+
+// The browser's own clock, to the second. Sent as an epoch so no date format
+// has to be agreed between here and the device, and refused there if it is
+// outside the window a running device can plausibly be in.
+$('setclock').onclick = () =>
+  post('/api/time?epoch=' + Math.floor(Date.now() / 1000),
+       'clock set from this browser');
 
 async function post(query, okMsg, noteEl) {
   try {

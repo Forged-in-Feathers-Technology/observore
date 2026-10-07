@@ -324,7 +324,7 @@ static void census_sweep(int64_t now_us)
     }
     s_last_us = now_us;
 
-    int day = observore_census_day(time(NULL));
+    int day = observore_clock_day();
     if (day == OBSERVORE_CENSUS_NO_DAY) {
         return;      /* no date yet; the first uplink will bring one */
     }

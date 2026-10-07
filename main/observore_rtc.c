@@ -43,10 +43,10 @@ time_t observore_timegm(const struct tm *tm)
 #if CONFIG_OBSERVORE_RTC
 
 #include <string.h>
-#include <sys/time.h>
 
 #include "esp_log.h"
 
+#include "observore_clock.h"
 #include "observore_i2c.h"
 
 static const char *TAG = "observore.rtc";
@@ -106,8 +106,14 @@ bool observore_rtc_read(void)
     if (t <= 0) {
         return false;
     }
-    struct timeval tv = {.tv_sec = t, .tv_usec = 0};
-    settimeofday(&tv, NULL);
+    /* Through the clock rather than straight to settimeofday, so the time
+     * arrives with a source attached. A clock set behind the module's back
+     * looks exactly like a clock nobody set, and since the census counts days
+     * that difference decides whether the device is allowed to call anything
+     * furniture. */
+    if (!observore_clock_set(t, OBSERVORE_CLOCK_CHIP)) {
+        return false;
+    }
     ESP_LOGI(TAG, "time from the chip: %04d-%02d-%02d %02d:%02d:%02d UTC",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec);
