@@ -2834,9 +2834,12 @@ browser tab left open on the console offers to set the clock on every reload
 and must not be able to replace an SNTP answer with its own opinion.
 
 **The source lives in RTC memory, with the clock it describes.** System time
-survives `esp_restart` — an OTA reboot, a panic, the console's restart —
-because ESP-IDF keeps the boot time in RTC slow memory; it does not survive a
-power cycle. A source kept in an ordinary static would be lost on a restart
+survives `esp_restart` — which here means an update installing itself, or a
+panic or watchdog — because ESP-IDF keeps the boot time in RTC slow memory. On
+the bench it survived an EN-pin reset as well: a watch reset over USB came back
+holding both the time and `network` as its source, and correctly declined its
+own RTC chip's answer in favour of the better one it already had. It does not
+survive a power cycle. A source kept in an ordinary static would be lost on a restart
 while the clock it describes survived, turning a known time into an unknown
 one across every OTA. A source kept in NVS would do the opposite and outlive
 the clock, claiming a synced time on a board that has just been plugged in.
@@ -2883,6 +2886,10 @@ It is a *source*, not an override:
   because the time is secret — because a clock now decides what the census
   suppresses, and an unauthenticated endpoint that moves the date is an
   unauthenticated endpoint that decides what the device stops reporting.
+- **The two refusals say different things.** A time outside the window is
+  yours to correct; a clock already set from somewhere better is not a problem
+  at all. The first version answered both with one message and could not say
+  which had happened, which the bench demonstrated within a minute.
 
 The decision itself is a pure function, `observore_clock_rule()`, and the host
 tests drive it. The rest of the clock needs a real `settimeofday()` and a chip

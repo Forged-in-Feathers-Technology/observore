@@ -111,7 +111,7 @@ bool observore_rtc_read(void)
      * looks exactly like a clock nobody set, and since the census counts days
      * that difference decides whether the device is allowed to call anything
      * furniture. */
-    if (!observore_clock_set(t, OBSERVORE_CLOCK_CHIP)) {
+    if (observore_clock_set(t, OBSERVORE_CLOCK_CHIP) != OBSERVORE_CLOCK_TAKE) {
         return false;
     }
     ESP_LOGI(TAG, "time from the chip: %04d-%02d-%02d %02d:%02d:%02d UTC",

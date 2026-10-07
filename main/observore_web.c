@@ -918,10 +918,19 @@ static esp_err_t time_handler(httpd_req_t *req)
     if (end == value || (end && *end)) {
         return fail(req, "epoch must be a whole number of seconds");
     }
-    if (!observore_clock_set((time_t)epoch, OBSERVORE_CLOCK_PERSON)) {
-        return fail(req, "that time was refused: either it is outside the "
-                         "window a running device can be in, or the clock is "
-                         "already set from a better source");
+    /* Which refusal it was, because they are different things to tell a
+     * person: a time outside the window is theirs to correct, and a clock
+     * already set from somewhere better is not a problem at all. The first
+     * version of this said both at once and could not say which, which the
+     * bench promptly demonstrated. */
+    switch (observore_clock_set((time_t)epoch, OBSERVORE_CLOCK_PERSON)) {
+    case OBSERVORE_CLOCK_OUT_OF_RANGE:
+        return fail(req, "that time is outside the window a running device "
+                         "can be in");
+    case OBSERVORE_CLOCK_WORSE:
+        return fail(req, "the clock is already set from a better source");
+    case OBSERVORE_CLOCK_TAKE:
+        break;
     }
     return ok(req);
 }
