@@ -1,6 +1,10 @@
 # Host build of the radio-independent logic.  No ESP-IDF required.
 CC      ?= cc
-CFLAGS  ?= -std=c11 -Wall -Wextra -Werror -O1 -g -DOBSERVORE_HOST_TEST
+# The device table is per board on the device, so the suite names its own
+# size rather than inheriting whichever board was configured last -- a
+# test whose meaning changes with an unrelated board profile is not a test.
+CFLAGS  ?= -std=c11 -Wall -Wextra -Werror -O1 -g -DOBSERVORE_HOST_TEST \
+           -DOBSERVORE_MAX_DEVICES=192
 INCS     = -I../main
 SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
            ../main/observore_mute.c ../main/observore_util.c \

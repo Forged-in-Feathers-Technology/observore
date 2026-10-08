@@ -70,4 +70,19 @@ CONFIG_OBSERVORE_BUTTON_GPIO=0
 # ESP32 with no PSRAM is the board least able to afford the TLS behind them.
 # CONFIG_OBSERVORE_NOTIFIER is not set
 
+# Half the usual device table, which is 13 KB of internal RAM back.
+#
+# This is the tightest board here by a wide margin. Measured against the pool
+# allocations actually come from, it ran at a low-water mark of 820 bytes: a
+# 480x320 panel with no PSRAM to hold a framebuffer, Wi-Fi and BLE both up,
+# and 98 KB of static DRAM in this firmware's own symbols -- 26 KB of which
+# was this one table. It took an unexplained SW_CPU_RESET on the bench and
+# could not serve its own status page.
+#
+# Only this profile. The 2.8" boards share the chip but drive a smaller panel
+# and sat at 11,452 bytes with a 10,240-byte largest block, which is thin and
+# not failing; picking a number for them without a measurement would be the
+# guess this whole exercise was about avoiding.
+CONFIG_OBSERVORE_MAX_DEVICES=96
+
 CONFIG_OBSERVORE_BOARD="cyd-3248s035r-st7796"
