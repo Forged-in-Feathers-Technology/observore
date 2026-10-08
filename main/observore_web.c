@@ -868,9 +868,10 @@ static esp_err_t census_handler(httpd_req_t *req)
     observore_jb_init(&jb, body, s_body_cap, 2);
     observore_jb_printf(&jb,
         "{\"day\":%d,\"min_days\":%d,\"window\":%d,\"addr_limit\":%d"
-        ",\"members\":[",
+        ",\"max\":%d,\"full\":%s,\"members\":[",
         day, OBSERVORE_CENSUS_MIN_DAYS, OBSERVORE_CENSUS_WINDOW,
-        OBSERVORE_CENSUS_ADDRS);
+        OBSERVORE_CENSUS_ADDRS, OBSERVORE_CENSUS_MAX,
+        observore_census_full() ? "true" : "false");
     for (size_t i = 0; i < n; i++) {
         bool over = false;
         int addrs = observore_census_addresses(tab[i].id, &over);

@@ -1826,6 +1826,45 @@ decay with the day window: a device that rotated through eight addresses a
 fortnight ago really has been seen under eight. Membership is a claim about
 now; this is a claim about what the identity is.
 
+**What a full table gives up, and why it was wrong.** The table holds 64
+identities. When it filled, the entry with the oldest day went — on the
+reasoning that anything genuinely around every day is among the most recently
+seen. The reasoning is sound; the implementation of it had a hole.
+
+On a stationary board everything in range is seen again every day, so every
+entry carries today's date, no entry is older than any other, and a scan for
+the smallest date returns the *first slot every time* — whatever is in it. One
+slot becomes a revolving door while the other sixty-three never move, and what
+is in that slot may be two days into becoming furniture while fifty-four
+single-day strangers sit untouched beside it. The cost is bounded — one entry,
+not the table — but it is paid by the same entry every run, so that identity
+can never establish itself.
+
+The date was never the thing worth ranking on. How much an entry has shown is:
+
+1. **Not household before household.** The table exists to remember furniture;
+   evicting furniture to make room for a stranger is the one move that defeats
+   the whole structure.
+2. **Fewer distinct days before more.** A single-day entry has shown nothing
+   yet; a two-day entry is one evening away.
+3. **Older before newer** — the original rule, kept as the tie-break it should
+   always have been.
+
+Household-ness is measured against the day being asked about rather than the
+stored mask, so an identity whose three days have fallen out of the window is
+not furniture any more and its place is exactly the one that should go.
+
+The test for this was written twice. The first version passed under both
+rules, because the scenario it built had entries with mixed dates — which is
+the case the old rule handles correctly. The one that bites needs every entry
+to carry the same date and *different* numbers of days behind it, which is an
+ordinary morning on a board that does not move.
+
+**A full table says so.** The bench board sat at `64 known, 2 household` for
+days and nothing distinguished a census that had stopped learning from one
+that had finished. The count now reads `64 known (full)` on the screen and in
+the boot log, and `/api/census` reports `max` and `full`.
+
 **A census saved by v0.13.0 is discarded on upgrade**, because the stored entry
 grew to hold the address set. The blob now carries a header saying which code
 wrote it, and the reason is worth stating: the old entry was eight bytes and

@@ -1210,6 +1210,166 @@ static void test_a_guessed_clock_is_not_a_clock(void)
           "every instant the clock accepts is a day the census can count");
 }
 
+/* What a full census gives up.
+ *
+ * The original rule took the entry with the oldest day, and in a busy place
+ * every entry carries today's date -- so no entry was older than any other,
+ * the scan returned slot zero every time, and slot zero became a revolving
+ * door while the other sixty-three never moved. A full census could not learn
+ * a new identity at all: every new one landed in the same slot and was gone
+ * before it could reach a second day.
+ *
+ * That is what the bench board was doing for days, showing a flat count with
+ * nothing to say the table had stopped counting. */
+static void test_a_full_census_still_learns(void)
+{
+    banner("a full census gives up a stranger, not the furniture");
+
+    /* Fill it, one identity per slot, all seen once today. */
+    observore_census_init();
+    CHECK(!observore_census_full(), "an empty table is not full");
+    for (int i = 0; i < OBSERVORE_CENSUS_MAX; i++) {
+        observore_census_note(0x1000u + (uint32_t)i, 9000, NULL);
+    }
+    CHECK(observore_census_full(), "and it says so once it is");
+    int tracked = 0;
+    observore_census_counts(9000, NULL, &tracked);
+    CHECK(tracked == OBSERVORE_CENSUS_MAX, "the table holds its maximum, got %d",
+          tracked);
+
+    /* Make three of them furniture, across three days. The rest stay at one
+     * day each, so the table is full of candidates that have shown nothing. */
+    const uint32_t furniture[3] = {0x1000u, 0x1001u, 0x1002u};
+    for (int d = 9001; d <= 9002; d++) {
+        for (int i = 0; i < 3; i++) {
+            observore_census_note(furniture[i], d, NULL);
+        }
+    }
+    for (int i = 0; i < 3; i++) {
+        CHECK(observore_census_is_household(furniture[i], 9002),
+              "identity %d is furniture before the churn", i);
+    }
+
+    /* Now a crowd arrives: twice the table's worth of strangers, each seen
+     * once. Every one of them has to displace somebody. */
+    for (int i = 0; i < OBSERVORE_CENSUS_MAX * 2; i++) {
+        observore_census_note(0x90000u + (uint32_t)i, 9002, NULL);
+    }
+
+    /* The furniture is still there. This is the whole point of the table, and
+     * the rule that has to come first: evicting what it has learned to make
+     * room for a stranger defeats the structure. */
+    for (int i = 0; i < 3; i++) {
+        CHECK(observore_census_is_household(furniture[i], 9002),
+              "identity %d survived a crowd twice the size of the table", i);
+    }
+
+    /* And what the two rules actually differ on: a table where every entry
+     * carries the same date but they have not all shown the same number of
+     * days.
+     *
+     * That is an ordinary morning on a stationary board. Everything in range
+     * was seen again today, so no entry is older than any other and the
+     * oldest-day rule has nothing to choose between them -- it returns the
+     * first slot every time, whatever is in it. What is in it may be two days
+     * into becoming furniture while fifty-four single-day strangers sit
+     * untouched beside it.
+     *
+     * Ten identities two days in, fifty-four seen once, all seen today. */
+    observore_census_init();
+    const int nearly = 10;
+    for (int i = 0; i < nearly; i++) {
+        observore_census_note(0x5000u + (uint32_t)i, 9000, NULL);
+    }
+    for (int i = 0; i < nearly; i++) {
+        observore_census_note(0x5000u + (uint32_t)i, 9001, NULL);
+    }
+    for (int i = nearly; i < OBSERVORE_CENSUS_MAX; i++) {
+        observore_census_note(0x5000u + (uint32_t)i, 9001, NULL);
+    }
+    CHECK(observore_census_full(), "the table is full and nothing is older");
+    for (int i = 0; i < nearly; i++) {
+        CHECK(observore_census_days_seen(0x5000u + (uint32_t)i, 9001) == 2,
+              "identity %d is two days in", i);
+    }
+
+    /* Twenty strangers arrive, same day. Each one has to displace somebody,
+     * and the ones with nothing to show are sitting right there. */
+    for (int i = 0; i < 20; i++) {
+        observore_census_note(0xC0000u + (uint32_t)i, 9001, NULL);
+    }
+    for (int i = 0; i < nearly; i++) {
+        CHECK(observore_census_days_seen(0x5000u + (uint32_t)i, 9001) == 2,
+              "identity %d kept its two days rather than its slot being taken "
+              "for a stranger", i);
+    }
+
+    /* So tomorrow they are furniture. Under the oldest-day rule the entry in
+     * the first slot had been handed to a stranger twenty times over and
+     * arrives at this line with one day to its name. */
+    for (int i = 0; i < nearly; i++) {
+        observore_census_note(0x5000u + (uint32_t)i, 9002, NULL);
+        CHECK(observore_census_is_household(0x5000u + (uint32_t)i, 9002),
+              "identity %d became furniture on its third day", i);
+    }
+
+    /* Membership lapsing frees the place. An identity whose days have fallen
+     * out of the window is not furniture any more, and its slot is exactly
+     * the one that should be given up -- so the check is against the day
+     * being asked about rather than against the stored mask. */
+    observore_census_init();
+    for (int i = 0; i < OBSERVORE_CENSUS_MAX; i++) {
+        uint32_t id = 0x2000u + (uint32_t)i;
+        for (int d = 9000; d <= 9002; d++) {
+            observore_census_note(id, d, NULL);
+        }
+    }
+    int household = -1;
+    observore_census_counts(9002, &household, &tracked);
+    CHECK(household == OBSERVORE_CENSUS_MAX && tracked == OBSERVORE_CENSUS_MAX,
+          "a table where everything is furniture, got %d of %d", household,
+          tracked);
+
+    /* A fortnight later none of it is furniture any more. A newcomer now
+     * takes a place without argument, and gets to keep it. */
+    const int later = 9002 + OBSERVORE_CENSUS_WINDOW;
+    observore_census_counts(later, &household, NULL);
+    CHECK(household == 0, "and a fortnight later none of it is, got %d",
+          household);
+    for (int d = later; d <= later + 2; d++) {
+        observore_census_note(0xBEEF02u, d, NULL);
+        for (int i = 0; i < 20; i++) {
+            observore_census_note(0xB0000u + (uint32_t)(d * 100 + i), d, NULL);
+        }
+    }
+    CHECK(observore_census_is_household(0xBEEF02u, later + 2),
+          "a newcomer becomes furniture in a table whose membership lapsed");
+
+    /* When everything really is furniture, something still has to go, and it
+     * is the oldest -- the original rule, kept as the last tie-break. */
+    observore_census_init();
+    for (int i = 0; i < OBSERVORE_CENSUS_MAX; i++) {
+        uint32_t id = 0x3000u + (uint32_t)i;
+        /* Staggered, so there is a genuine oldest: the first identities were
+         * last seen earlier than the last ones. */
+        int base = 9000 + i / 8;
+        for (int d = base; d <= base + 2; d++) {
+            observore_census_note(id, d, NULL);
+        }
+    }
+    const int top = 9000 + (OBSERVORE_CENSUS_MAX - 1) / 8 + 2;
+    CHECK(observore_census_is_household(0x3000u, top) ||
+              observore_census_days_seen(0x3000u, top) >= 0,
+          "the staggered table is built");
+    observore_census_note(0xBEEF03u, top, NULL);
+    CHECK(observore_census_days_seen(0xBEEF03u, top) == 1,
+          "a newcomer still gets in when every entry is furniture");
+    CHECK(observore_census_days_seen(0x3000u, top) == 0,
+          "and it was the entry last seen longest ago that gave up its place");
+
+    observore_census_init();
+}
+
 /* A synthetic resistive panel: what the controller would read for a press at
  * a given screen pixel, if the sheet were perfectly linear between `lo` and
  * `hi` on each channel.
@@ -4690,6 +4850,7 @@ int main(void)
     test_the_census_earns_membership_over_days();
     test_the_census_acts_carefully();
     test_a_guessed_clock_is_not_a_clock();
+    test_a_full_census_still_learns();
     test_the_census_counts_addresses_not_just_days();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();

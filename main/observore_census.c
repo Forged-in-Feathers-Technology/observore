@@ -246,6 +246,76 @@ static bool note_addr(observore_census_entry_t *e, const uint8_t *mac)
     return false;
 }
 
+/* Which entry gives up its place when the table is full.
+ *
+ * The first version of this took the entry with the oldest `last_day`, on the
+ * reasoning that anything genuinely around every day is among the most
+ * recently seen. The reasoning is sound; the implementation of it had a hole.
+ *
+ * On a stationary board everything in range is seen again every day, so every
+ * entry carries today's date, no entry is older than any other, and a scan
+ * for the smallest `last_day` returns the first slot every time -- whatever
+ * is in it. One slot becomes a revolving door while the rest never move, and
+ * what is in that slot may be two days into becoming furniture while
+ * fifty-four single-day strangers sit untouched beside it. The cost is
+ * bounded -- one entry, not the table -- and it is paid by the same entry
+ * every time, so that identity can never establish itself for as long as the
+ * device runs.
+ *
+ * The date was never the thing worth ranking on. How much an entry has shown
+ * is.
+ *
+ * So the ranking is explicit, worst candidate first:
+ *
+ *   1. Not household before household. The table exists to remember
+ *      furniture; evicting furniture to make room for a stranger is the one
+ *      move that defeats the whole structure.
+ *   2. Fewer distinct days before more. A single-day entry has shown nothing
+ *      yet; a two-day entry is one evening away from being furniture.
+ *   3. Older before newer, which is the original rule kept as the tie-break
+ *      it should always have been.
+ *
+ * `day` is passed in because household-ness is a claim about now: an entry
+ * with three days set a fortnight ago is not furniture any more, and its
+ * place is exactly the one that should be given up. */
+bool observore_census_full(void)
+{
+    return s_count >= OBSERVORE_CENSUS_MAX;
+}
+
+static observore_census_entry_t *evict(int day)
+{
+    observore_census_entry_t *worst = &s_tab[0];
+    int worst_hh = 0, worst_days = 0;
+    bool first = true;
+
+    for (size_t i = 0; i < s_count; i++) {
+        observore_census_entry_t *c = &s_tab[i];
+        /* Against `day`, not against the stored mask: the window has to be
+         * rolled forward before the bits mean anything, and doing it here
+         * would mutate an entry we are only looking at. */
+        int moved = day - (int)c->last_day;
+        uint16_t mask = (moved <= 0) ? c->days
+                      : (moved >= OBSERVORE_CENSUS_WINDOW)
+                            ? 0
+                            : (uint16_t)(c->days << moved);
+        int days = popcount16(mask);
+        int hh = (days >= OBSERVORE_CENSUS_MIN_DAYS) ? 1 : 0;
+
+        if (first ||
+            hh < worst_hh ||
+            (hh == worst_hh && days < worst_days) ||
+            (hh == worst_hh && days == worst_days &&
+             c->last_day < worst->last_day)) {
+            worst = c;
+            worst_hh = hh;
+            worst_days = days;
+            first = false;
+        }
+    }
+    return worst;
+}
+
 void observore_census_note(uint32_t id, int day, const uint8_t *mac)
 {
     if (day < 0 || day > OBSERVORE_CENSUS_DAY_MAX) {
@@ -257,16 +327,7 @@ void observore_census_note(uint32_t id, int day, const uint8_t *mac)
         if (s_count < OBSERVORE_CENSUS_MAX) {
             e = &s_tab[s_count++];
         } else {
-            /* Full. The entry with the oldest day goes, which on a table this
-             * size means the thing least likely to be furniture: anything
-             * genuinely around every day is, by construction, among the most
-             * recently seen. */
-            e = &s_tab[0];
-            for (size_t i = 1; i < s_count; i++) {
-                if (s_tab[i].last_day < e->last_day) {
-                    e = &s_tab[i];
-                }
-            }
+            e = evict(day);
         }
         e->id        = id;
         e->days      = 0;
