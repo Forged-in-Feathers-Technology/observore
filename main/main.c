@@ -549,6 +549,11 @@ void app_main(void)
         }
 
         note_heap_low_water(now);
+        /* The cell reading goes in before the tick, so whichever write the
+         * tick decides to make carries the current voltage rather than the
+         * one from five minutes ago. Zero on a board with no battery sense,
+         * which the record treats as "not measured". */
+        observore_runs_note_mv((uint16_t)observore_battery_mv());
         observore_runs_tick();
 
         /* Confirm a freshly installed image once it has completed a patrol

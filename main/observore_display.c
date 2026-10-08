@@ -1667,8 +1667,23 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         snprintf(dur, sizeof(dur), "%lluh%02llum",
                  (unsigned long long)(runs[i].up_s / 3600),
                  (unsigned long long)((runs[i].up_s % 3600) / 60));
-        snprintf(text, sizeof(text), "   %-8.8s ended by %.18s", dur,
-                 observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
+        /* The cell span where there is one, which is what makes a run's
+         * length mean anything: a run that starts and ends at 4.20 V was
+         * plugged in, however long it lasted. It replaces "ended by" rather
+         * than joining it, because the narrowest panel here is forty columns
+         * and a truncated reset reason is worse than an implied one. */
+        if (runs[i].mv_start > 0) {
+            snprintf(text, sizeof(text), "   %-7.7s %u.%02u>%u.%02uV %.10s",
+                     dur,
+                     (unsigned)(runs[i].mv_start / 1000),
+                     (unsigned)((runs[i].mv_start % 1000) / 10),
+                     (unsigned)(runs[i].mv_end / 1000),
+                     (unsigned)((runs[i].mv_end % 1000) / 10),
+                     observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
+        } else {
+            snprintf(text, sizeof(text), "   %-8.8s ended by %.18s", dur,
+                     observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
+        }
         line(row, text, C_WHITE, C_BLACK);
     }
     if (nr == 0 && row < ROWS - BAR_LAST) {
