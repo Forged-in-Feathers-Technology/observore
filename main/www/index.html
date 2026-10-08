@@ -617,11 +617,20 @@ function renderUpdate(s) {
 function renderRuns(runs) {
   const el = $('runs');
   if (!runs || !runs.length) { el.textContent = ''; return; }
-  const one = r => dur(r.up_s) + ' (' + r.end + ')';
+  // The cell span is what makes a run's length mean something. A run from
+  // 4.20 V to 3.20 V spent itself on battery; one that starts and ends at
+  // 4.20 V was plugged in, and its length says nothing about the battery at
+  // all -- which is how a 4 h 25 battery run came to be recorded as 21 h 44
+  // and repeated to a person as fact.
+  const volts = r => (r.mv_start ? ' ' + (r.mv_start / 1000).toFixed(2) + 'V\u2192' +
+                                   (r.mv_end / 1000).toFixed(2) + 'V' : '');
+  const one = r => dur(r.up_s) + volts(r) + ' (' + r.end + ')';
   el.textContent = 'previous run ' + one(runs[0]);
   el.title = runs.map(one).join(' \u2190 ') +
-    '\n\nhow long each previous run lasted and how it ended, newest first; ' +
-    'to within five minutes. On battery, a run ending in power-on or brownout is the battery.';
+    '\n\nhow long each previous run lasted, what the cell did across it, and how ' +
+    'it ended, newest first; to within five minutes. A run whose voltage barely ' +
+    'moved was plugged in, however long it lasted. Boards with no battery sense ' +
+    'show no voltages.';
 }
 
 // The low-water mark alone is a puzzle; the moment it happened is a lead. Say

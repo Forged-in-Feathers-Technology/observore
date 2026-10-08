@@ -2567,12 +2567,43 @@ plugged in. Five times the real figure, reported with complete confidence. If
 a run began on USB, the only honest reading is to subtract by hand from when
 you know it was unplugged.
 
-The round board is the one that could do better, because it is the only board
-that can measure its own supply. Detecting the transition and recording
-battery-only time is not implemented, and until it is, that board's figures
-need the same hand arithmetic as everyone else's.
+**So each run now records what the cell did across it** ([#165](https://github.com/Forged-in-Feathers-Technology/observore/issues/165)).
+The first voltage reading of a run is kept as its start and never replaced;
+every later one replaces its end. That is enough on its own:
 
-The same list is on `/api/status` under `runs`, newest first.
+| span | what it means |
+|---|---|
+| 4.20 V → 3.20 V | a battery run that went the distance |
+| 4.20 V → 4.20 V | plugged in throughout — its length says nothing about the battery |
+| 4.20 V → 3.90 V | a short battery run, or a long one on a tiring cell |
+
+It also shows **how deeply each run discharged**, which is what says whether a
+cell is getting worse rather than only how long it lasted this time.
+
+**No transition detection**, deliberately. Watching for a sustained decline to
+infer "now on battery" is flakier than it sounds: a full cell sitting on USB
+looks much like a full cell on battery, and a weak USB supply that cannot hold
+the cell up looks exactly like being unplugged — which this project has
+already met, on a laptop port that could not supply charge current and the
+Wi-Fi radio's turn-on surge together.
+
+**Only the round AMOLED board can do this**, because it is the only board that
+can measure its own supply. The CYDs and the devkit have their usable ADC pins
+taken by the display and touch, established by probing. Those boards record
+zero, which the console and the screen read as "not measured" and show
+nothing — not a flat cell.
+
+The record's format version went to 2 for the two new fields, and the old
+records are **carried forward** rather than discarded: their lengths and
+endings are still true and their voltages simply were not recorded. The census
+discarded its old format on a similar change and was right to, because there
+an old blob divided evenly into the new entry size and would have restored as
+garbage; the danger was misreading, not upgrading. Here the version byte is
+checked before either layout is read, and the runs being carried over are
+measurements somebody made by leaving a board on a battery overnight.
+
+The same list is on `/api/status` under `runs`, newest first, with `mv_start`
+and `mv_end`.
 
 **Measured: 25.1 hours.** An ESP32-C5 devkit on a 2,000 mAh cell, running
 v0.8.3 untouched from a full charge until the cell's protection cut off —

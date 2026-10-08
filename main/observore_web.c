@@ -382,9 +382,16 @@ static esp_err_t status_handler(httpd_req_t *req)
     size_t nruns = observore_runs_list(runs, OBSERVORE_RUNS_MAX);
     observore_jb_printf(&jb, "},\"runs\":[");
     for (size_t i = 0; i < nruns; i++) {
-        observore_jb_printf(&jb, "%s{\"up_s\":%" PRIu32 ",\"end\":\"%s\"}",
-                            i ? "," : "", runs[i].up_s,
-                            observore_reset_reason_name((esp_reset_reason_t)runs[i].end));
+        /* The voltages are reported as zero when the board cannot measure
+         * its own supply, and the console says nothing rather than drawing a
+         * flat cell. Only the round AMOLED board has the sense pin; the CYDs
+         * and the devkit have theirs taken by the display and touch. */
+        observore_jb_printf(&jb,
+            "%s{\"up_s\":%" PRIu32 ",\"end\":\"%s\""
+            ",\"mv_start\":%u,\"mv_end\":%u}",
+            i ? "," : "", runs[i].up_s,
+            observore_reset_reason_name((esp_reset_reason_t)runs[i].end),
+            (unsigned)runs[i].mv_start, (unsigned)runs[i].mv_end);
     }
     observore_jb_close(&jb, "]}");
     return send_json(req, body);
