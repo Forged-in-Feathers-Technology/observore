@@ -2948,6 +2948,47 @@ ISO-8601 UTC. A client with no clock of its own still needs the first.
 page on the screen shows the time with the source beside it — `not set` where
 there is none, and where to set it.
 
+### The heap figure was measuring the wrong pool
+
+Every number this device reported about its own memory — the boot log, the
+uplink line, `/api/status`, the heap-watch ring — was taken with
+`MALLOC_CAP_INTERNAL`. On the classic ESP32 that includes regions which are
+**32-bit access only**: IRAM that no `malloc()` will hand out for ordinary
+data. So the "largest free block" being compared against allocations that
+failed was, in part, a block that could never have satisfied them.
+
+It was found from the other end. On the 3.5" CYD the console could log you in
+but `/api/status` answered `503 not enough memory right now` for an entire
+uplink window — minute after minute — while the device reported 16,164 bytes
+free with a 10,240-byte largest block and the buffer it could not get was
+4,096 bytes. Those two statements cannot both be true.
+
+Measured against `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT`, which is what every
+allocation in this firmware actually draws from:
+
+| | reported before | actually available |
+|---|---|---|
+| free | 16,164 | **5,324** |
+| low-water | 11,896 | **932** |
+| largest free block | 10,240 | **4,608** |
+
+The console's internal fallback asks for 2,880 bytes of device snapshot and a
+4,096-byte JSON buffer. The first fits in a 4,608-byte block and leaves about
+1,700 behind; the second cannot be had. That is the 503, exactly, and it was
+invisible for as long as the figures were three times too high.
+
+The caps are now named once, in `observore_heapwatch.h`, and mean "internal
+RAM that can hold data". A number that cannot be compared against the
+allocation it is being used to explain is worse than no number, because it
+sends the search somewhere else — which it has now done at least twice here.
+
+**Two things follow from the honest numbers, and neither is fixed yet:** the
+console's internal budget is sized for memory this board does not have, and a
+932-byte low-water mark on a board that is merely sitting in an uplink window
+is far too close to nothing. Both need tuning against figures that can be
+trusted, which is why they are not being tuned in the same change that started
+trusting them.
+
 ## Notifications, TLS and memory
 
 A device left on a battery overnight came back having logged **10,019 failed
@@ -2958,8 +2999,15 @@ only because it ran for a night rather than a minute.
 `mbedtls_ssl_setup returned -0x7F00`, which is `MBEDTLS_ERR_SSL_ALLOC_FAILED`.
 No packet was ever sent, so nothing appeared in the network logs, and the
 obvious suspicion of a firewall was wrong. mbedTLS wanted one 16 KB contiguous
-allocation and the largest free block was 15,360 bytes. Short by a kilobyte,
-every time.
+allocation and the largest free block was reported as 15,360 bytes. Short by a
+kilobyte, every time.
+
+**That figure was measured against the wrong pool** — see below. It was
+`MALLOC_CAP_INTERNAL`, which on the classic ESP32 includes 32-bit-only IRAM
+that cannot hold data, so the block mbedTLS could actually have had was
+smaller than 15,360 and the shortfall was larger than a kilobyte. The
+diagnosis and the three fixes were right; the number quoted alongside them was
+flattering.
 
 Internal RAM is genuinely oversubscribed on these parts: Wi-Fi, BLE, lwip and
 the console share roughly 160 KB. Three changes together:

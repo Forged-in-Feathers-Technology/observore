@@ -1,3 +1,4 @@
+#include "observore_heapwatch.h"
 #include "observore_update.h"
 
 #include <string.h>
@@ -152,7 +153,7 @@ void observore_update_check(void)
          * and the error alone ("cannot connect") points at the network
          * instead. It cost a release to learn that here. */
         ESP_LOGW(TAG, "update check failed: %s (internal heap %" PRIu32 " free)",
-                 s_error, (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                 s_error, (uint32_t)heap_caps_get_free_size(OBSERVORE_HEAP_CAPS));
         /* A check someone asked for gets one more go a few seconds on. On
          * the bench the first attempt seven seconds after the uplink came up
          * failed to connect and the next, seconds later, succeeded; a button
@@ -340,10 +341,10 @@ void observore_update_service(void)
      * needs the same kind, and MBEDTLS_EXTERNAL_MEM_ALLOC cannot move that to
      * PSRAM. With the stack resident the handshake fails on "esp-aes: Failed to
      * allocate memory" before a byte is downloaded. */
-    unsigned before = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    unsigned before = (unsigned)heap_caps_get_free_size(OBSERVORE_HEAP_CAPS);
     observore_ble_stop();
     ESP_LOGI(TAG, "stopped BLE for the download: internal heap %u -> %u bytes",
-             before, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+             before, (unsigned)heap_caps_get_free_size(OBSERVORE_HEAP_CAPS));
 
     esp_http_client_config_t http = {
         .url               = s_image_url,

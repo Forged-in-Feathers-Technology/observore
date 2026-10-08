@@ -15,6 +15,25 @@
  * Kept free of ESP-IDF so the ring can be tested on the host; the caller passes
  * in the measurements. */
 
+/* The pool every allocation in this firmware actually draws from.
+ *
+ * MALLOC_CAP_INTERNAL on its own includes regions that are 32-bit-access only
+ * -- IRAM that cannot hold ordinary data -- so a "largest free block"
+ * measured that way can be a block no malloc() will ever return. Every figure
+ * this device reports about its heap was measured that way, and the figures
+ * were used to judge whether allocations would fit. On the 3.5" CYD that read
+ * 16,164 bytes free with a 10,240-byte largest block while the console's
+ * 4,096-byte buffer could not be had at all.
+ *
+ * So the caps are named once, here, and mean "internal RAM that can hold
+ * data". A number that cannot be compared against the allocation it is being
+ * used to explain is worse than no number, because it sends the search
+ * somewhere else -- which it has done at least twice in this project.
+ *
+ * Callers include esp_heap_caps.h; this header stays free of ESP-IDF so the
+ * ring can be tested on the host. */
+#define OBSERVORE_HEAP_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+
 #define OBSERVORE_HEAPWATCH_EVENTS 8
 
 /* Only a drop this large past the last recorded one is a new event, so a slow
