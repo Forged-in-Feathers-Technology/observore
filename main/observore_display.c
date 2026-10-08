@@ -1515,8 +1515,11 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         int day = observore_clock_day();
         int known = 0, household = 0;
         observore_census_counts(day, &household, &known);
-        snprintf(text, sizeof(text), " census   %d known, %d household",
-                 known, household);
+        /* "(full)" because a table at its cap has stopped being able to
+         * learn: a new identity now costs an existing one its place. A flat
+         * count looks the same as a finished one. */
+        snprintf(text, sizeof(text), " census   %d known%s, %d household",
+                 known, observore_census_full() ? " (full)" : "", household);
         line(r++, text, C_WHITE, C_BLACK);
 
         int one = 0, few = 0, many = 0;

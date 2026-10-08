@@ -362,7 +362,10 @@ static void census_sweep(int64_t now_us)
         observore_census_addr_spread(NULL, NULL, &many);
         int household = 0, known = 0;
         observore_census_counts(day, &household, &known);
-        ESP_LOGI(TAG, "census: %d known, %d household", known, household);
+        ESP_LOGI(TAG, "census: %d known%s, %d household", known,
+                 observore_census_full() ? " (full -- a new identity now costs "
+                                           "an old one its place)" : "",
+                 household);
         if (many > 0) {
             /* The overlap, said plainly, because it is the finding that
              * decides what the census may do rather than a statistic. */

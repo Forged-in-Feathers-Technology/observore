@@ -232,6 +232,15 @@ int observore_census_household_at_ceiling(int day);
  * entries and points `out` at them. */
 size_t observore_census_entries(const observore_census_entry_t **out);
 
+/* Whether the table is full.
+ *
+ * Worth asking separately because a full census is a different thing from a
+ * busy one: it is still counting days for what it holds, but a new identity
+ * now costs an existing one its place. The bench board sat at the cap for
+ * days showing a flat count and nothing said so, which is how a table that
+ * had stopped learning looked exactly like one that had finished. */
+bool observore_census_full(void);
+
 /* Serialise the table, header and all, into `out`. Returns the number of
  * bytes the blob needs; with `out` NULL or `cap` too small it writes nothing
  * and returns that size, so a caller can ask first. */
