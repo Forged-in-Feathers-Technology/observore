@@ -92,8 +92,8 @@ static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
  * so a dip on the uplink is filed under the uplink. */
 static void note_heap_low_water(int64_t now)
 {
-    uint32_t low     = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-    uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    uint32_t low     = heap_caps_get_minimum_free_size(OBSERVORE_HEAP_CAPS);
+    uint32_t largest = heap_caps_get_largest_free_block(OBSERVORE_HEAP_CAPS);
     if (observore_heapwatch_note(low, largest,
                                  (uint32_t)observore_notify_pending(),
                                  observore_mode_name(observore_wifi_mode()),
@@ -598,9 +598,9 @@ void app_main(void)
                      observore_level_name(st.level), st.score, st.device_count,
                      st.total_sightings, observore_wifi_sniffed_frames(),
                      observore_wifi_sniffer_calls(), observore_notify_pending(),
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                     (unsigned)heap_caps_get_free_size(OBSERVORE_HEAP_CAPS),
+                     (unsigned)heap_caps_get_minimum_free_size(OBSERVORE_HEAP_CAPS),
+                     (unsigned)heap_caps_get_largest_free_block(OBSERVORE_HEAP_CAPS));
         }
 
         /* Alternate patrol and uplink.  Console mode is never alternated out

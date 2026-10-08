@@ -1,3 +1,4 @@
+#include "observore_heapwatch.h"
 #include "observore_display.h"
 
 #include <stdio.h>
@@ -1630,8 +1631,8 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
 #endif
 
     snprintf(text, sizeof(text), " heap     %u free, %u least",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+             (unsigned)heap_caps_get_free_size(OBSERVORE_HEAP_CAPS),
+             (unsigned)heap_caps_get_minimum_free_size(OBSERVORE_HEAP_CAPS));
     line(r++, text, C_WHITE, C_BLACK);
 
     /* The address, which is the one fact on this page a person has to take
