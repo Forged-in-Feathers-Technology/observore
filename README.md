@@ -3002,10 +3002,40 @@ once, and the table evicts the device heard from longest ago, so in a crowded
 place it holds a shorter window of the room. Mute rules, the census and the
 detection history are separate and untouched.
 
-**Only that profile.** The 2.8" boards share the chip but drive a smaller
-panel and sat at 11,452 bytes with a 10,240-byte largest block, which is thin
-and not failing. Picking a number for them without a measurement would be the
-guess this whole exercise was about avoiding.
+**Then the same setting on three more profiles**, once they had been measured
+properly. The 2.8" boards and the NM-CYD-C5 were left at 192 on the strength
+of one reading apiece — 11,452 bytes on the 2.8" — which was precisely the
+thin evidence this exercise was about avoiding. The low-water figure is a
+running *minimum*, so a high one means only that nothing had dipped yet
+during however long you happened to watch. Ten minutes of watching gave
+**1,588** and **2,544**.
+
+| board | before | after |
+|---|---|---|
+| NM-CYD-C5 | 2,544 | **14,140** |
+| 2.8" CYD, resting free heap | 11,064 | **23,764** |
+| 2.8" CYD, low-water | 1,588 | 1,468 |
+
+The last row is not a failure of the change and is worth reading carefully.
+The 2.8" board's low-water before its first update check was **20,444**; what
+takes it to 1,468 is the TLS handshake behind that check, which succeeds:
+
+```
+I (311022) esp-x509-crt-bundle: Certificate validated
+I (312422) observore.update: up to date on v0.13.0-23-gb059acb-dirty
+W (313432) internal heap low-water fell to 1468 bytes (largest block 11776)
+```
+
+So the table gave that board thirteen kilobytes back for the whole time it is
+not shaking hands with GitHub, and its remaining exposure is a two-second peak
+once per check rather than its baseline. That peak is a separate problem with
+a separate fix, and naming it is better than letting a single number stand for
+both.
+
+The NM-CYD-C5 is the one that makes the point about where the table lives: it
+has PSRAM and was still tight, because the table is a **static array**. PSRAM
+takes the console's scratch and the framebuffer, both allocated at runtime, and
+cannot take a symbol the linker has already placed in internal RAM.
 
 **What this does not claim.** A listener held the serial port for the panic
 text and the crash did not recur, so the `SW_CPU_RESET` remains unexplained.

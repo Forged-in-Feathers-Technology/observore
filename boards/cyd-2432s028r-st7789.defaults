@@ -49,4 +49,21 @@ CONFIG_OBSERVORE_BUTTON_GPIO=0
 # ESP32 with no PSRAM is the board least able to afford the TLS behind them.
 # CONFIG_OBSERVORE_NOTIFIER is not set
 
+# Half the usual device table, which is 13 KB of internal RAM back.
+#
+# Measured against the pool allocations actually come from, this board's
+# low-water mark was 1,588 bytes over a ten-minute watch, with a 6,144-byte largest
+# free block at that point. The device table is the largest single static
+# allocation this firmware makes -- 136 bytes a slot, 26 KB at 192 -- and
+# PSRAM does not help it, because it is a static array rather than something
+# allocated at runtime.
+#
+# Afterwards its resting free heap went from 11,064 to 23,764 bytes and its
+# low-water before the first update check was 20,444. The figure that still
+# reads low, 1,468, is the TLS handshake behind that check -- which succeeds.
+# Two different numbers, and only one of them is this table's doing: the
+# remaining exposure on this board is a two-second peak once per check, not
+# its baseline.
+CONFIG_OBSERVORE_MAX_DEVICES=96
+
 CONFIG_OBSERVORE_BOARD="cyd-2432s028r-st7789"

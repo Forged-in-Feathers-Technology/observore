@@ -79,10 +79,12 @@ CONFIG_OBSERVORE_BUTTON_GPIO=0
 # was this one table. It took an unexplained SW_CPU_RESET on the bench and
 # could not serve its own status page.
 #
-# Only this profile. The 2.8" boards share the chip but drive a smaller panel
-# and sat at 11,452 bytes with a 10,240-byte largest block, which is thin and
-# not failing; picking a number for them without a measurement would be the
-# guess this whole exercise was about avoiding.
+# The 2.8" boards and the NM-CYD-C5 carry the same setting now, for the same
+# reason. They were left at 192 at first on the strength of one reading apiece
+# -- 11,452 bytes on the 2.8" -- which was the thin evidence this exercise was
+# supposed to be about avoiding: the low-water figure is a running minimum, so
+# a high one only means nothing had yet dipped during however long you
+# happened to watch. Ten minutes of watching gave 1,588 and 2,544.
 CONFIG_OBSERVORE_MAX_DEVICES=96
 
 CONFIG_OBSERVORE_BOARD="cyd-3248s035r-st7796"
