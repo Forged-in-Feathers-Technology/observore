@@ -75,51 +75,81 @@ static size_t             s_snap_cap;
 static char              *s_body;
 static size_t             s_body_cap;
 
-static bool scratch_alloc(void)
+/* The body buffer, taken on its own.
+ *
+ * It used to be one decision with the snapshot: both or neither. /api/status
+ * needs only the body, and on the 3.5" CYD the pair does not fit while the
+ * body alone does -- so the board least able to report on itself was the one
+ * that could not serve its own status, which is also the one that has been
+ * rebooting. The instrument has to work before the fault can be read.
+ *
+ * The internal size steps down to what the heap can actually give. With the
+ * caps corrected (see observore_heapwatch.h) that board's largest free block
+ * is about 4.6 KB and its low-water mark has been under 1.4 KB, so a fixed
+ * 4 KB request is a request it cannot always meet. */
+static const size_t BODY_STEPS[] = {JSON_BUF_INTERNAL, 3 * 1024, 2 * 1024};
+
+static bool body_alloc(void)
 {
-    if (s_snap && s_body) {
+    if (s_body) {
         return true;
     }
-
-    s_snap = heap_caps_malloc(sizeof(observore_event_t) * OBSERVORE_MAX_DEVICES,
-                              MALLOC_CAP_SPIRAM);
     s_body = heap_caps_malloc(JSON_BUF_PSRAM, MALLOC_CAP_SPIRAM);
-    if (s_snap && s_body) {
-        s_snap_cap = OBSERVORE_MAX_DEVICES;
+    if (s_body) {
         s_body_cap = JSON_BUF_PSRAM;
         return true;
     }
+    for (size_t i = 0; i < sizeof(BODY_STEPS) / sizeof(BODY_STEPS[0]); i++) {
+        s_body = malloc(BODY_STEPS[i]);
+        if (s_body) {
+            s_body_cap = BODY_STEPS[i];
+            return true;
+        }
+    }
+    s_body_cap = 0;
+    return false;
+}
 
-    /* No PSRAM, or not enough of it. Fall back to a deliberately smaller
-     * budget in internal memory -- large enough to be useful, small enough
-     * not to repeat the starvation described above. */
-    free(s_snap);
-    free(s_body);
+/* The device-table snapshot, likewise. Only the three handlers that walk the
+ * table need it, and on a tight board it is the larger half of the pair. */
+static bool snap_alloc(void)
+{
+    if (s_snap) {
+        return true;
+    }
+    s_snap = heap_caps_malloc(sizeof(observore_event_t) * OBSERVORE_MAX_DEVICES,
+                              MALLOC_CAP_SPIRAM);
+    if (s_snap) {
+        s_snap_cap = OBSERVORE_MAX_DEVICES;
+        return true;
+    }
     s_snap = malloc(sizeof(observore_event_t) * SNAP_INTERNAL);
-    s_body = malloc(JSON_BUF_INTERNAL);
-    if (!s_snap || !s_body) {
-        ESP_LOGE(TAG, "no room for console scratch in PSRAM or internal RAM");
-        free(s_snap);
-        free(s_body);
-        s_snap = NULL;
-        s_body = NULL;
-        return false;
+    if (s_snap) {
+        s_snap_cap = SNAP_INTERNAL;
+        return true;
     }
-    s_snap_cap = SNAP_INTERNAL;
-    s_body_cap = JSON_BUF_INTERNAL;
-    /* Worth saying once. The scratch is taken afresh for every uplink window,
-     * and a warning repeated every few minutes for the life of the device --
-     * 536 times in one night on a board that has never had PSRAM -- is not a
-     * warning any more, just the log getting harder to read. */
+    s_snap_cap = 0;
+    return false;
+}
+
+/* Said once, not once per uplink window: a warning repeated every few minutes
+ * for the life of the device -- 536 times in one night on a board that has
+ * never had PSRAM -- is not a warning any more, just the log getting harder
+ * to read. */
+static void say_budget_once(void)
+{
     static bool s_said;
-    if (!s_said) {
-        s_said = true;
-        ESP_LOGW(TAG, "no PSRAM: console scratch is %d KB of internal RAM and "
-                      "reports at most %d devices per request",
-                 (int)((sizeof(observore_event_t) * SNAP_INTERNAL +
-                        JSON_BUF_INTERNAL) / 1024), SNAP_INTERNAL);
+    if (s_said || s_body_cap == 0 || s_body_cap == JSON_BUF_PSRAM) {
+        return;
     }
-    return true;
+    s_said = true;
+    /* The body only. The snapshot is a separate allocation now and may not
+     * have been attempted yet, so naming its capacity here reported "at most
+     * 0 devices" on a board whose snapshot was simply not asked for -- a
+     * number about nothing, which is the kind this project has just spent a
+     * day removing. */
+    ESP_LOGW(TAG, "no PSRAM: console body buffer is %u bytes of internal RAM",
+             (unsigned)s_body_cap);
 }
 
 static void scratch_free(void)
@@ -175,14 +205,48 @@ static esp_err_t index_handler(httpd_req_t *req)
  * construction: a handler that uses the buffer has to obtain it here, and one
  * that does not never asks. A flag can be forgotten by the next route, and
  * forgetting it would mean writing into a null pointer. */
+static esp_err_t no_room(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    return send_json(req,
+        "{\"ok\":false,\"error\":\"not enough memory right now\"}");
+}
+
 static char *scratch_body(httpd_req_t *req)
 {
-    if (scratch_alloc()) {
+    if (body_alloc()) {
+        say_budget_once();
         return s_body;
     }
-    httpd_resp_set_status(req, "503 Service Unavailable");
-    send_json(req, "{\"ok\":false,\"error\":\"not enough memory right now\"}");
+    no_room(req);
     return NULL;
+}
+
+/* The snapshot, for the three handlers that walk the device table. Separate
+ * from the body so a handler asks for what it uses and no more. */
+static observore_event_t *scratch_snap(httpd_req_t *req)
+{
+    if (snap_alloc()) {
+        return s_snap;
+    }
+    no_room(req);
+    return NULL;
+}
+
+/* The one write that cannot be allowed to be dropped.
+ *
+ * The buffer drops a write whole rather than truncating it, which keeps a
+ * *list* parseable: the elements that fitted, then the closing bracket from
+ * the reserve. It does not keep a single large object parseable. /api/status
+ * is one printf, so a body too small loses the whole thing, and the reserve
+ * then closes a document that never opened -- the response is `}}`.
+ *
+ * observore_jb_full() has existed all along and nothing read it, so this was
+ * waiting to happen the first time the buffer got smaller. Checked right
+ * after a document's opening write, where it means there is no document. */
+static bool opened(observore_jbuf_t *jb)
+{
+    return !observore_jb_full(jb);
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
@@ -295,6 +359,17 @@ static esp_err_t status_handler(httpd_req_t *req)
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS,
         st.census_quieted, st.census_dampened);
 
+    /* Everything above is one write, so if it did not fit there is nothing
+     * to send: the reserve would close a document that never opened and the
+     * reply would be `}}`. An error is the honest answer, and the body
+     * stepping down to what a tight board can give is what makes this
+     * reachable rather than theoretical. */
+    if (!opened(&jb)) {
+        ESP_LOGW(TAG, "the status did not fit a %u-byte body",
+                 (unsigned)s_body_cap);
+        return no_room(req);
+    }
+
     for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
         observore_jb_printf(&jb, "%s\"%s\":%" PRIu32, c > 1 ? "," : "",
                             observore_class_name(c), st.class_counts[c]);
@@ -317,7 +392,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 
 static esp_err_t devices_handler(httpd_req_t *req)
 {
-    if (!scratch_body(req)) {
+    if (!scratch_body(req) || !scratch_snap(req)) {
         return ESP_OK;
     }
     observore_event_t *snap = s_snap;
@@ -685,7 +760,7 @@ static esp_err_t history_handler(httpd_req_t *req)
 
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
-    if (!scratch_body(req)) {
+    if (!scratch_body(req) || !scratch_snap(req)) {
         return ESP_OK;
     }
     observore_event_t *snap = s_snap;
@@ -735,7 +810,10 @@ static esp_err_t nearby_handler(httpd_req_t *req)
  * the action is fully reversible from the same panel. */
 static esp_err_t baseline_handler(httpd_req_t *req)
 {
-    if (!scratch_body(req)) {
+    /* The snapshot only: this one answers from a stack buffer, so asking for
+     * the JSON body as well would be asking a tight board for memory the
+     * reply never touches. */
+    if (!scratch_snap(req)) {
         return ESP_OK;
     }
     observore_baseline_t b;
