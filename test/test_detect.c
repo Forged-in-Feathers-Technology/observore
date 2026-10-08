@@ -1177,6 +1177,18 @@ static void test_a_guessed_clock_is_not_a_clock(void)
               OBSERVORE_CLOCK_TAKE,
           "a recorded source with no clock behind it does not outrank a real answer");
 
+    /* TAKE is zero and is the only success, because observore_clock_set()
+     * hands this ruling straight back to its callers and one of them is a
+     * `!= OBSERVORE_CLOCK_TAKE` test. A reordering of this enum would turn
+     * "refused" into "stored". */
+    CHECK((int)OBSERVORE_CLOCK_TAKE == 0, "the ruling that means yes is zero");
+    CHECK((int)OBSERVORE_CLOCK_OUT_OF_RANGE != 0 &&
+              (int)OBSERVORE_CLOCK_WORSE != 0,
+          "and neither refusal can be mistaken for it");
+    CHECK(OBSERVORE_CLOCK_OUT_OF_RANGE != OBSERVORE_CLOCK_WORSE,
+          "the two refusals are distinguishable, so a person can be told "
+          "which one happened");
+
     /* The names, which end up in a log, in /api/status and on the glass. */
     CHECK(strcmp(observore_clock_source_name(OBSERVORE_CLOCK_NONE), "none") == 0,
           "an unset clock is named rather than left blank");

@@ -75,9 +75,10 @@ static int64_t s_synced_at_us;
 
 /* The source travels in RTC memory, with the clock it describes.
  *
- * System time survives esp_restart -- an OTA reboot, a panic, the console's
- * restart -- because ESP-IDF keeps the boot time in RTC slow memory. It does
- * not survive a power cycle. A source kept in an ordinary static would be
+ * System time survives esp_restart -- which here means an update installing
+ * itself, or a panic or watchdog -- because ESP-IDF keeps the boot time in
+ * RTC slow memory. It survived an EN-pin reset on the bench too. It does not
+ * survive a power cycle. A source kept in an ordinary static would be
  * lost on a restart while the clock it describes survived, which would turn a
  * known time into an unknown one across every OTA. A source kept in NVS would
  * do the opposite and outlive the clock it describes, claiming a synced time
@@ -105,20 +106,23 @@ static void note_source(observore_clock_source_t src)
     s_source = (uint32_t)src;
 }
 
-bool observore_clock_set(time_t when, observore_clock_source_t src)
+observore_clock_ruling_t observore_clock_set(time_t when,
+                                             observore_clock_source_t src)
 {
     observore_clock_source_t have = observore_clock_source();
-    switch (observore_clock_rule(have, time(NULL) >= SANE_EPOCH, src, when)) {
+    observore_clock_ruling_t ruling =
+        observore_clock_rule(have, time(NULL) >= SANE_EPOCH, src, when);
+    switch (ruling) {
     case OBSERVORE_CLOCK_OUT_OF_RANGE:
         ESP_LOGW(TAG, "refusing a time from the %s: %lld is outside the window "
                       "a running device can be in",
                  observore_clock_source_name(src), (long long)when);
-        return false;
+        return ruling;
     case OBSERVORE_CLOCK_WORSE:
         ESP_LOGI(TAG, "keeping the time from the %s over an answer from the %s",
                  observore_clock_source_name(have),
                  observore_clock_source_name(src));
-        return false;
+        return ruling;
     case OBSERVORE_CLOCK_TAKE:
         break;
     }
@@ -138,13 +142,18 @@ bool observore_clock_set(time_t when, observore_clock_source_t src)
     if (src != OBSERVORE_CLOCK_CHIP && observore_rtc_available()) {
         observore_rtc_write();
     }
-    return true;
+    return OBSERVORE_CLOCK_TAKE;
 }
 
 static void on_sync(struct timeval *tv)
 {
     (void)tv;
-    bool first = s_synced_at_us == 0;
+    /* "Set" against "resynced" is about whether the device already knew the
+     * time, not about whether this module is the one that told it. A clock
+     * retained across a restart, or seeded from the chip, is already a set
+     * clock -- and reporting the first SNTP reply after one as "clock set"
+     * reads as though the device had been adrift until then. */
+    bool first = !observore_clock_valid();
     s_synced_at_us = esp_timer_get_time();
     note_source(OBSERVORE_CLOCK_NETWORK);
 

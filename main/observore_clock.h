@@ -53,6 +53,12 @@ const char *observore_clock_source_name(observore_clock_source_t src);
  * seed would leave. */
 bool observore_clock_valid(void);
 
+typedef enum {
+    OBSERVORE_CLOCK_TAKE = 0,       /* use it                                */
+    OBSERVORE_CLOCK_OUT_OF_RANGE,   /* no running device is at that instant   */
+    OBSERVORE_CLOCK_WORSE,          /* something better already set the clock */
+} observore_clock_ruling_t;
+
 /* Set the clock by hand, from a person at the console.
  *
  * The one way a board with no RTC chip and no reachable NTP server can be
@@ -62,8 +68,16 @@ bool observore_clock_valid(void);
  *
  * It is a *source*, not an override: a time that the device could not
  * plausibly be running at is refused rather than stored, and a later SNTP
- * reply replaces it without asking. Returns false if the time was refused. */
-bool observore_clock_set(time_t when, observore_clock_source_t src);
+ * reply replaces it without asking.
+ *
+ * Returns the ruling rather than a bool, because the two ways of being
+ * refused are different things to tell a person: a time outside the window is
+ * theirs to correct, and a clock already set from somewhere better is not a
+ * problem at all. One message covering both was what the console showed at
+ * first, and it could not say which had happened. TAKE is zero and is the
+ * only success. */
+observore_clock_ruling_t observore_clock_set(time_t when,
+                                             observore_clock_source_t src);
 
 /* The decision inside observore_clock_set(), separated from the act of
  * carrying it out.
@@ -73,12 +87,6 @@ bool observore_clock_set(time_t when, observore_clock_source_t src);
  * up never exercised anywhere. `have` and `have_time` describe the clock as
  * it stands -- its source, and whether what it currently reads is inside the
  * window at all. */
-typedef enum {
-    OBSERVORE_CLOCK_TAKE = 0,       /* use it                                */
-    OBSERVORE_CLOCK_OUT_OF_RANGE,   /* no running device is at that instant   */
-    OBSERVORE_CLOCK_WORSE,          /* something better already set the clock */
-} observore_clock_ruling_t;
-
 observore_clock_ruling_t observore_clock_rule(observore_clock_source_t have,
                                               bool have_time,
                                               observore_clock_source_t src,

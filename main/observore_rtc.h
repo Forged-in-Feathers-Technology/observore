@@ -21,9 +21,15 @@ void observore_rtc_init(void);
 /* True where there is a chip answering. */
 bool observore_rtc_available(void);
 
-/* Seed the system clock from the chip. False if there is no chip or it says
- * its own contents are unreliable -- which it does after losing power, and
- * which is worth believing rather than reading anyway. */
+/* Seed the system clock from the chip.
+ *
+ * False if there is no chip, or it says its own contents are unreliable --
+ * which it does after losing power, and which is worth believing rather than
+ * reading anyway -- or the clock already holds a better answer. That last one
+ * is the ordinary case on a board that is on a network: SNTP can land while
+ * the display is still starting, and on the bench it did, so the chip's
+ * answer was declined and this returned false on a board whose chip is
+ * working perfectly. The caller is seeding, not checking the hardware. */
 bool observore_rtc_read(void);
 
 /* Write the system clock into the chip. Called when SNTP lands. */
