@@ -159,6 +159,49 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
 bool observore_peer_from_advert(const uint8_t *adv, size_t adv_len,
                                observore_peer_warning_t *out);
 
+/* This node's id, from its own address.
+ *
+ * Sixteen bits, and coarse on purpose. Over the handful of nodes that can be
+ * in BLE range of each other a collision is unlikely, and when it happens two
+ * nodes' warnings merge into one entry -- a little precision lost and nothing
+ * unsafe. It is also not an identity: the address on the air is random and
+ * regenerated for every burst, so this is what a receiver can group warnings
+ * by and nothing more.
+ *
+ * Stable across reboots, because the replay check on the receiving side keys
+ * on the node and would treat a node that renamed itself every boot as a new
+ * neighbour each time.
+ *
+ * Takes the address rather than reading it, so it stays pure and the host
+ * tests can check that it is stable and that it never returns zero -- zero
+ * being a value a receiver would see as a node that had not set one. */
+uint16_t observore_peer_node_id(const uint8_t mac[6]);
+
+/* Build a warning payload, from the magic to the last optional field.
+ *
+ * The inverse of observore_peer_parse(), and tested against it: a warning
+ * built here and read back there has to come out with the same fields. That
+ * round trip is the only check that actually pins the wire format, because
+ * every other test of the parser feeds it bytes a person typed.
+ *
+ * `w->trusted` is ignored. There is no key management, so nothing here can
+ * sign anything, and emitting a tag this device cannot produce would invite a
+ * receiver to believe it. The flag exists so the format need not change when
+ * keys arrive.
+ *
+ * Returns the length written, or 0 if it would not fit. */
+size_t observore_peer_build(const observore_peer_warning_t *w,
+                            uint8_t *out, size_t cap);
+
+/* The same thing as a complete manufacturer-specific AD element, ready to
+ * hand to the BLE stack: length, type, company, then the payload.
+ *
+ * Here rather than at the call site for the same reason the matching decoder
+ * is: "which element, which company, which magic" is written once, and the
+ * radio layer should not have to know the format in order to send it. */
+size_t observore_peer_advert(const observore_peer_warning_t *w,
+                             uint8_t *out, size_t cap);
+
 void observore_peer_init(void);
 
 /* Record a warning, or drop it as a replay or a duplicate. Returns true when

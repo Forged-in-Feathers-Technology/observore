@@ -1,0 +1,7 @@
+# Mesh transmit, for the build that proves the option still compiles.
+#
+# CONFIG_OBSERVORE_MESH_TX is off in all nine board profiles, by design -- it
+# spends the device's passivity and is nobody's default. That also means
+# nothing in the ordinary matrix ever compiles the advertising path, and code
+# no build touches is code that rots. One target builds with it on.
+CONFIG_OBSERVORE_MESH_TX=y

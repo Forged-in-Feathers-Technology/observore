@@ -202,6 +202,75 @@ reports what is *new* rather than the whole neighbourhood.
 nothing. A silent device is the normal state, not a broken one. The heartbeat
 on the serial log tells you it is still watching.
 
+### Warning the neighbours
+
+Several nodes see more than one does, and a second vantage point is the
+discriminator this project keeps failing to find on its own — three revisions
+of the `tailing` class each reached for a property of the *suspect* when the
+useful question was always about the surroundings
+([#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)).
+The listening half shipped first: a node hears its neighbours' warnings and
+costs nothing to do it, because the radio is already scanning.
+
+`CONFIG_OBSERVORE_MESH_TX` is the other half, and it is **off by default**.
+
+**What it spends is the property this device is built on.** Everything else
+here is receive-only. A node that warns can be found by direction-finding, and
+"there is an observer here" is the one thing a counter-surveillance device
+should not announce. There is an irony to pay for as well: this project
+classifies SquachWatch as a `peer-detector` precisely *because* it announces
+itself in mesh mode, so a warning Observore becomes a peer-detector in
+somebody else's device — including another Observore.
+
+**Off means the capability is absent, not disabled.** The option selects
+NimBLE's broadcaster role, so without it the code that advertises is not
+compiled and there is no runtime path to an emission. That is worth more than
+a boolean somebody could flip, and it is the same construction that keeps
+automatic suppression out of the monitors: by not having the caller.
+
+**A node with nothing to warn about stays silent.** It transmits when it has a
+finding worth passing on and not otherwise, so an idle node is exactly as
+quiet as a build without this.
+
+What it will not warn about, and why each one matters:
+
+- **anything with its monitor off** — the owner said stop reporting this, and
+  a warning is a report that leaves the box
+- **anything the census quieted** — household furniture is household *here*,
+  and broadcasting it asks the neighbours to carry a judgement about a room
+  they cannot see
+- **anything worth no points** — a peer detector or a fixture is a fact about
+  the room rather than a threat in it, and the cheapest attack on a mesh is to
+  fill it with true but useless statements
+
+One finding per burst, the heaviest currently in front of the radio. The
+findings list is already filtered by the monitors and the census, so the thing
+warned about is exactly the thing this node would report to its owner: it
+never tells a neighbour something it would not tell the person holding it.
+
+**The address is random and regenerated every burst.** The payload's node id
+is sixteen bits and deliberately coarse; leaving the device's own BLE address
+on the air would undo that, because an address that does not change says "this
+same box was here yesterday" to anyone keeping a list. A fresh non-resolvable
+address says only "an Observore is near", which is the claim being made on
+purpose.
+
+**The interval is randomised**, 90 to 150 seconds. A fixed cadence is itself a
+fingerprint: something listening for a beacon every ninety seconds exactly has
+an easier job than something listening for one in a window.
+
+**It says so while it is doing it**, in the three places that cannot be
+missed: the coloured band on the glass carries `TX` *and the peer count*, the
+system page says `mesh  warning, N peers in range` or `listen only, never
+transmits`, and `/api/status` reports `peers: {nodes, warnings, tx}`. The
+count matters more than the state — `TX 0` means the exposure is being paid
+for and nothing is coming back, and an on/off mark hides exactly that case.
+
+No position is sent. The format carries one and the decoder reads one, but
+this device has no fix to put there; a GPS node is where that field starts
+being filled, and the encoder refuses zeroes rather than claiming the Gulf of
+Guinea.
+
 ## What it does
 
 **While patrolling, it listens and does not answer.** Nothing it observes can
@@ -212,6 +281,11 @@ observe it back, because nothing leaves the radio:
 | BLE scan | passive — no `SCAN_REQ` is ever emitted |
 | Wi-Fi access-point scan | **passive**, no probe requests |
 | Wi-Fi sniff | receive-only |
+| BLE warning bursts | **off unless built in** — see below |
+
+That last row is the one exception, and it is off in every default build. See
+[Warning the neighbours](#warning-the-neighbours) for what it costs and how a
+build without it cannot do it at all.
 
 The Wi-Fi scan being passive matters as much as the BLE one. An active scan
 broadcasts probe requests carrying the device's own MAC on every channel, every

@@ -125,6 +125,92 @@ bool observore_peer_from_advert(const uint8_t *adv, size_t adv_len,
     return observore_peer_parse(mfg + 2, mfg_len - 2, out);
 }
 
+uint16_t observore_peer_node_id(const uint8_t mac[6])
+{
+    if (!mac) {
+        return 1;
+    }
+    /* FNV-1a folded to sixteen bits, with the basis nudged so this cannot
+     * collide with the census's address hash by being the same arithmetic
+     * over the same bytes. */
+    uint32_t h = 0x811C9DC5u ^ 0x4E4F4445u;      /* "NODE" */
+    for (int i = 0; i < 6; i++) {
+        h = (h ^ mac[i]) * 16777619u;
+    }
+    uint16_t id = (uint16_t)((h >> 16) ^ (h & 0xFFFFu));
+    return id ? id : 1u;     /* zero reads as "no id set" */
+}
+
+static void le16_put(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/* Three signed bytes, little-endian, of degrees-times-ten-million divided by
+ * 256. The division is arithmetic rather than a shift: shifting a negative
+ * value right is implementation-defined, and the whole point of a power-of-two
+ * divisor is that the arithmetic is exact in both directions. */
+static void le24s_put(uint8_t *p, int32_t e7)
+{
+    int32_t v = e7 / COARSE_SHIFT;
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)((v >> 8) & 0xFF);
+    p[2] = (uint8_t)((v >> 16) & 0xFF);
+}
+
+size_t observore_peer_build(const observore_peer_warning_t *w,
+                            uint8_t *out, size_t cap)
+{
+    if (!w || !out) {
+        return 0;
+    }
+    bool pos = w->have_pos && position_usable(w->lat_e7, w->lon_e7);
+    size_t need = BASE_LEN + (pos ? POSITION_LEN : 0);
+    if (cap < need) {
+        return 0;
+    }
+
+    memcpy(out, OBSERVORE_PEER_MAGIC, 4);
+    out[4] = OBSERVORE_PEER_VERSION;
+    out[5] = pos ? FLAG_POSITION : 0;
+    le16_put(&out[6], w->node);
+    /* A class this build does not have cannot be described, so it is sent as
+     * unknown rather than as a number a receiver would read as some other
+     * class entirely. */
+    out[8] = (w->cls < OBSERVORE_CLASS_MAX) ? w->cls : OBSERVORE_CLASS_UNKNOWN;
+    le16_put(&out[9], w->seq);
+    /* One byte, and warnings expire at five minutes, so anything older than
+     * the field can hold is clamped rather than wrapped: 255 seconds reads as
+     * "a while ago", where a wrap would read as "just now". */
+    out[11] = (w->age_s > 255) ? 255 : (uint8_t)w->age_s;
+
+    if (pos) {
+        le24s_put(&out[12], w->lat_e7);
+        le24s_put(&out[15], w->lon_e7);
+    }
+    return need;
+}
+
+size_t observore_peer_advert(const observore_peer_warning_t *w,
+                             uint8_t *out, size_t cap)
+{
+    /* length, type, company low, company high, then the payload. The length
+     * byte counts everything after itself, which is the one part of an AD
+     * element that is easy to get wrong by one. */
+    if (!out || cap < 4) {
+        return 0;
+    }
+    size_t n = observore_peer_build(w, out + 4, cap - 4);
+    if (n == 0) {
+        return 0;
+    }
+    out[0] = (uint8_t)(1 + 2 + n);          /* type + company + payload */
+    out[1] = AD_TYPE_MFG_DATA;
+    le16_put(&out[2], COMPANY_NONPRODUCTION);
+    return n + 4;
+}
+
 void observore_peer_init(void)
 {
     s_count = 0;

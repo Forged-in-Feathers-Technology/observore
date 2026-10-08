@@ -11,6 +11,7 @@
 #include "observore_mute.h"
 #include "observore_netcfg.h"
 #include "observore_auth.h"
+#include "observore_ble.h"
 #include "observore_clock.h"
 #include "observore_history.h"
 #include "observore_notify.h"
@@ -310,7 +311,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
-        ",\"peers\":{\"nodes\":%d,\"warnings\":%d}"
+        ",\"peers\":{\"nodes\":%d,\"warnings\":%d,\"tx\":%s}"
         ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d"
         ",\"quieted\":%d,\"dampened\":%d}"
         ",\"counts\":{",
@@ -356,6 +357,12 @@ static esp_err_t status_handler(httpd_req_t *req)
         (unsigned)observore_display_taps(),
         st.monitors_off, (unsigned long)observore_monitors_off_mask(),
         peer_nodes, peer_warnings,
+        /* Whether this build can transmit at all. Asked of the radio layer
+         * rather than read from the config, so what is reported and what is
+         * possible cannot drift: without CONFIG_OBSERVORE_MESH_TX the
+         * advertising code is not compiled and this is false by
+         * construction. */
+        observore_ble_can_warn() ? "true" : "false",
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS,
         st.census_quieted, st.census_dampened);
 

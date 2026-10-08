@@ -109,6 +109,8 @@ static void start_scan(void)
     }
 }
 
+static bool s_synced;
+
 static void on_sync(void)
 {
     int rc = ble_hs_util_ensure_addr(0);
@@ -121,11 +123,13 @@ static void on_sync(void)
         ESP_LOGE(TAG, "ble_hs_id_infer_auto failed: %d", rc);
         return;
     }
+    s_synced = true;
     start_scan();
 }
 
 static void on_reset(int reason)
 {
+    s_synced = false;
     ESP_LOGW(TAG, "BLE host reset, reason %d", reason);
 }
 
@@ -135,6 +139,138 @@ static void host_task(void *param)
     nimble_port_run();               /* returns only on nimble_port_stop() */
     nimble_port_freertos_deinit();
 }
+
+
+#if CONFIG_OBSERVORE_MESH_TX
+
+/* Warning other nodes, which is the only thing this device ever transmits
+ * while patrolling (#132).
+ *
+ * A burst rather than a standing advert. A node advertising continuously is
+ * findable continuously, and the point is to pass on a finding, not to
+ * announce a presence -- so it speaks when it has something to say and is
+ * otherwise exactly as quiet as a build without this compiled in.
+ *
+ * The address is random and regenerated for every burst. The payload's node
+ * id is sixteen bits and deliberately coarse; leaving the device's own public
+ * BLE address on the air would undo that, because an address that does not
+ * change says "this same box was also here yesterday" to anybody keeping a
+ * list. A fresh non-resolvable address each time says only "an Observore is
+ * near", which is the claim being made on purpose.
+ *
+ * Non-connectable and non-discoverable: there is nothing to connect to, and a
+ * scan response would be a second emission answering a stranger's question.
+ */
+#define WARN_BURST_MS      180
+#define WARN_ITVL_MIN_MS    40
+#define WARN_ITVL_MAX_MS    60
+
+static uint16_t s_warn_seq;
+
+bool observore_ble_warn(const observore_peer_warning_t *w)
+{
+    if (!w || !s_synced) {
+        return false;
+    }
+
+    uint8_t element[31];
+    observore_peer_warning_t out = *w;
+    out.seq = ++s_warn_seq;
+    size_t n = observore_peer_advert(&out, element, sizeof(element));
+    if (n == 0) {
+        return false;
+    }
+
+    /* A fresh random address per burst. ble_hs_id_gen_rnd(1, ...) asks for a
+     * non-resolvable private address, which is the one kind that carries no
+     * identity at all -- it cannot be resolved back to this device by anyone,
+     * including a receiver we would have liked to be recognised by. That is
+     * the right trade: the node id in the payload is what identifies us, at
+     * sixteen bits, and it is ours to choose. */
+    /* Stop scanning before touching the address.
+     *
+     * The controller refuses LE Set Random Address while a scan, an advert or
+     * a connection attempt is running -- the Bluetooth spec says so, and it
+     * arrives here as 524: 0x20C, the HCI error base plus 12, "command
+     * disallowed". This device scans forever, so every attempt failed, and
+     * the first version of the code ignored the return value and asked to
+     * advertise from an address that had never been set.
+     *
+     * So the radio goes deaf for the few milliseconds it takes to issue three
+     * HCI commands. That is the honest shape of a single radio: it cannot
+     * listen while it arranges to speak. The alternative was setting one
+     * address at startup and keeping it for the life of the boot, which costs
+     * the rotation the burst was designed around. */
+    ble_gap_adv_stop();
+    ble_gap_disc_cancel();
+
+    ble_addr_t addr;
+    int arc = ble_hs_id_gen_rnd(1, &addr);
+    if (arc == 0) {
+        arc = ble_hs_id_set_rnd(addr.val);
+    }
+    if (arc != 0) {
+        /* No private address, no transmission.
+         *
+         * The first version of this ignored both return values, and then
+         * asked the stack to advertise from BLE_OWN_ADDR_RANDOM anyway --
+         * which failed with 21, BLE_HS_ENOADDR, every time. Silently: the
+         * only clue was the advert never starting.
+         *
+         * Refusing is also the right behaviour rather than merely the safe
+         * one. Falling back to the device's own public address would transmit
+         * something that does not change, and an address that does not change
+         * says "this same box was here yesterday" to anyone keeping a list.
+         * That is the property the burst was designed around, so losing it is
+         * a reason not to send, not a detail to carry on past. */
+        ESP_LOGW(TAG, "no private address for a warning advert (%d); "
+                      "not transmitting", arc);
+        start_scan();
+        return false;
+    }
+
+    int rc = ble_gap_adv_set_data(element, (int)n);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "could not set the warning advert: %d", rc);
+        start_scan();
+        return false;
+    }
+
+    struct ble_gap_adv_params params = {
+        .conn_mode = BLE_GAP_CONN_MODE_NON,
+        .disc_mode = BLE_GAP_DISC_MODE_NON,
+        .itvl_min  = MS_TO_UNITS(WARN_ITVL_MIN_MS),
+        .itvl_max  = MS_TO_UNITS(WARN_ITVL_MAX_MS),
+    };
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_RANDOM, NULL, WARN_BURST_MS,
+                           &params, NULL, NULL);
+    /* Listening resumes either way. A failed burst must not leave the device
+     * deaf, which is a worse outcome than not having warned: the whole point
+     * of the thing is receiving. */
+    start_scan();
+    if (rc != 0) {
+        ESP_LOGW(TAG, "could not start the warning advert: %d", rc);
+        return false;
+    }
+    return true;
+}
+
+bool observore_ble_can_warn(void) { return true; }
+
+#else
+
+/* Not compiled, not merely switched off. There is no runtime path from here
+ * to an emission, which is the point of the Kconfig option selecting the
+ * NimBLE broadcaster role rather than guarding a call. */
+bool observore_ble_warn(const observore_peer_warning_t *w)
+{
+    (void)w;
+    return false;
+}
+
+bool observore_ble_can_warn(void) { return false; }
+
+#endif /* CONFIG_OBSERVORE_MESH_TX */
 
 esp_err_t observore_ble_start(void)
 {

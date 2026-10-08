@@ -60,6 +60,7 @@
 #include "observore_nvs.h"
 #include "observore_runs.h"
 #include "observore_wifi.h"
+#include "observore_ble.h"
 #include "observore_census.h"
 #include "observore_touchcal.h"
 #include "observore_touch.h"
@@ -1050,6 +1051,20 @@ static void draw_watch(const observore_status_t *st,
     if (st->census_quieted > 0) {
         BAR_ADD("   %d quiet", st->census_quieted);
     }
+    /* Transmitting goes in the band, which is the only place on the device a
+     * person cannot miss. Everything else this detector does is
+     * receive-only; a node that warns has spent that, and a passive device
+     * that quietly starts emitting is worse than one that never could.
+     *
+     * The count comes with it, because it is the reading people will
+     * actually want: TX with nobody reachable means the exposure is being
+     * paid for and nothing is coming back, and an on/off mark hides exactly
+     * that case. */
+    if (observore_ble_can_warn()) {
+        int nodes = 0;
+        observore_peer_counts(now_us, &nodes, NULL);
+        BAR_ADD("   TX %d", nodes);
+    }
     if (st->monitors_off == 0 && st->census_quieted == 0) {
         BAR_ADD("   %lu sightings", (unsigned long)st->total_sightings);
     }
@@ -1494,6 +1509,18 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         /* Short enough for the narrowest panel here, which is forty columns:
          * the first version of this line was truncated at compile time. */
         snprintf(text, sizeof(text), " clock    not set -- set from console");
+    }
+    line(r++, text, C_WHITE, C_BLACK);
+
+    /* Whether this node transmits, said in full where there is room for it.
+     * The band has the state and the count; this says what it means. */
+    if (observore_ble_can_warn()) {
+        int nodes = 0, warnings = 0;
+        observore_peer_counts(now_us, &nodes, &warnings);
+        snprintf(text, sizeof(text), " mesh     warning, %d peer%s in range",
+                 nodes, nodes == 1 ? "" : "s");
+    } else {
+        snprintf(text, sizeof(text), " mesh     listen only, never transmits");
     }
     line(r++, text, C_WHITE, C_BLACK);
 
