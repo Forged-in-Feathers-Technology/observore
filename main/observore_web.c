@@ -157,6 +157,34 @@ static esp_err_t index_handler(httpd_req_t *req)
                            index_html_end - index_html_start);
 }
 
+/* The console's scratch, or NULL with a 503 already sent.
+ *
+ * Asked for by the handlers that need a buffer, rather than taken for every
+ * request by the dispatcher. That arrangement cost the one thing the console
+ * is for on a board that has just booted: at 3.5 seconds the device announces
+ * `console at http://...` while Wi-Fi and BLE are still starting, internal
+ * heap is at twelve kilobytes with a ten-kilobyte largest block, and the
+ * scratch does not fit. /api/login was then refused with 503 -- a login that
+ * writes `{"ok":true}` and needs no buffer at all.
+ *
+ * That is the worst possible moment to be locked out, because a board with no
+ * RTC chip is undated for those first seconds and setting the clock by hand
+ * is exactly what somebody would be logging in to do.
+ *
+ * A helper rather than a flag in the route table, so the rule is kept by
+ * construction: a handler that uses the buffer has to obtain it here, and one
+ * that does not never asks. A flag can be forgotten by the next route, and
+ * forgetting it would mean writing into a null pointer. */
+static char *scratch_body(httpd_req_t *req)
+{
+    if (scratch_alloc()) {
+        return s_body;
+    }
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    send_json(req, "{\"ok\":false,\"error\":\"not enough memory right now\"}");
+    return NULL;
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     int64_t now = esp_timer_get_time();
@@ -193,7 +221,10 @@ static esp_err_t status_handler(httpd_req_t *req)
     /* The shared scratch rather than the stack: the status grew past what a
      * handler's stack frame should carry once it started listing runs, and
      * esp_http_server serves one request at a time, so nothing else is in it. */
-    char *body = s_body;
+    char *body = scratch_body(req);
+    if (!body) {
+        return ESP_OK;
+    }
     observore_jbuf_t jb;
     observore_jb_init(&jb, body, s_body_cap, 2);   /* room for "}}" */
 
@@ -286,6 +317,9 @@ static esp_err_t status_handler(httpd_req_t *req)
 
 static esp_err_t devices_handler(httpd_req_t *req)
 {
+    if (!scratch_body(req)) {
+        return ESP_OK;
+    }
     observore_event_t *snap = s_snap;
     int64_t now = esp_timer_get_time();
     size_t count = observore_track_snapshot(snap, s_snap_cap);
@@ -383,6 +417,9 @@ static esp_err_t fail(httpd_req_t *req, const char *why)
 
 static esp_err_t mutes_handler(httpd_req_t *req)
 {
+    if (!scratch_body(req)) {
+        return ESP_OK;
+    }
     /* Walked by index into the PSRAM scratch.  A static copy of the whole rule
      * table was 6 KB of internal RAM duplicating observore_mute's own, resident
      * even while the server is stopped. */
@@ -601,6 +638,9 @@ static esp_err_t history_clear_handler(httpd_req_t *req)
  * detection from three days ago as though it were happening now. */
 static esp_err_t history_handler(httpd_req_t *req)
 {
+    if (!scratch_body(req)) {
+        return ESP_OK;
+    }
     static observore_history_entry_t rows[OBSERVORE_HISTORY_MAX];
     size_t count = observore_history_copy(rows, OBSERVORE_ARRLEN(rows));
 
@@ -645,6 +685,9 @@ static esp_err_t history_handler(httpd_req_t *req)
 
 static esp_err_t nearby_handler(httpd_req_t *req)
 {
+    if (!scratch_body(req)) {
+        return ESP_OK;
+    }
     observore_event_t *snap = s_snap;
     int64_t now = esp_timer_get_time();
     size_t count = observore_track_nearby(snap,
@@ -692,6 +735,9 @@ static esp_err_t nearby_handler(httpd_req_t *req)
  * the action is fully reversible from the same panel. */
 static esp_err_t baseline_handler(httpd_req_t *req)
 {
+    if (!scratch_body(req)) {
+        return ESP_OK;
+    }
     observore_baseline_t b;
     observore_mute_baseline(s_snap, s_snap_cap, &b);
 
@@ -851,6 +897,9 @@ static esp_err_t heap_handler(httpd_req_t *req)
 
 static esp_err_t census_handler(httpd_req_t *req)
 {
+    if (!scratch_body(req)) {
+        return ESP_OK;
+    }
     /* What the census knows, so that it can be judged before it is trusted.
      *
      * The address count is the number this exists to show. An identity seen
@@ -1094,21 +1143,16 @@ static esp_err_t dispatch(httpd_req_t *req)
     if (!r->open_route && !observore_auth_ok(req)) {
         return unauthorized(req);
     }
-    /* Taken on the first request of a window rather than when the server
-     * starts, and released when the window closes.
-     *
-     * The server is up for every uplink window whether or not anybody is
-     * looking, and on a board with no PSRAM its scratch is the largest single
-     * block in the heap. Held from the start of the window, it left no
-     * contiguous room for the certificate check behind the daily update
-     * request: 31 KB free, and a 4,437-byte allocation for an RSA signature
-     * failing anyway. A console nobody opens now costs nothing, and a console
-     * somebody is using is worth more than a version check that can wait for
-     * the next window. */
-    if (!scratch_alloc()) {
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        return send_json(req, "{\"ok\":false,\"error\":\"not enough memory right now\"}");
-    }
+    /* The scratch is taken by whichever handler needs it -- see
+     * scratch_body() -- and not here. It is still taken on a request rather
+     * than when the server starts, and released when the window closes: the
+     * server is up for every uplink window whether or not anybody is looking,
+     * and on a board with no PSRAM its scratch is the largest single block in
+     * the heap. Held from the start of the window, it left no contiguous room
+     * for the certificate check behind the daily update request: 31 KB free,
+     * and a 4,437-byte allocation for an RSA signature failing anyway. A
+     * console nobody opens costs nothing, and a console somebody is using is
+     * worth more than a version check that can wait for the next window. */
     return r->fn(req);
 }
 
