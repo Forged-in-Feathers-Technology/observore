@@ -86,4 +86,14 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # screen to say it on.
 # CONFIG_OBSERVORE_NOTIFIER is not set
 
+# Half the usual device table, which is 13 KB of internal RAM back.
+#
+# Measured against the pool allocations actually come from, this board's
+# low-water mark was 2,544 bytes over a ten-minute watch, with a 6,144-byte largest
+# free block at that point. The device table is the largest single static
+# allocation this firmware makes -- 136 bytes a slot, 26 KB at 192 -- and
+# PSRAM does not help it, because it is a static array rather than something
+# allocated at runtime.
+CONFIG_OBSERVORE_MAX_DEVICES=96
+
 CONFIG_OBSERVORE_BOARD="nm-cyd-c5"
