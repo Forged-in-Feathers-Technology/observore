@@ -149,6 +149,35 @@ config OBSERVORE_PATROL_WINDOW_S
         entirely.  So it alternates: patrol for this long, then join the
         network briefly to push what it found.
 
+config OBSERVORE_MAX_DEVICES
+    int "Devices tracked at once"
+    default 192
+    range 32 512
+    help
+        How many devices the tracker holds simultaneously. The table lives in
+        internal RAM and is walked linearly on every sighting, so it is also
+        the largest single static allocation this firmware makes: at 136 bytes
+        a slot, 192 slots is 26 KB.
+
+        Per board rather than global, because the boards differ by more than
+        taste. Measured with the heap caps corrected (see
+        observore_heapwatch.h), the 3.5" Cheap Yellow Display was running at a
+        low-water mark of 820 bytes: a 480x320 panel with no PSRAM to put a
+        framebuffer in, Wi-Fi and BLE both up, and 98 KB of static DRAM in
+        this firmware's own symbols. That board took an unexplained
+        SW_CPU_RESET on the bench and could not serve its own status page,
+        which is how the margin came to be measured at all.
+
+        The cost of a smaller table is a shorter window of what is nearby, not
+        a loss of memory: the table evicts the device heard from longest ago,
+        so in a crowded place it holds less history of the room. Mute rules,
+        the household census and the detection history are all separate and
+        are untouched.
+
+        Keep this at 32 or more. Nothing enforces a relationship with
+        OBSERVORE_HISTORY_MAX, but a table smaller than what the console shows
+        in one page makes the two views disagree for no gain.
+
 menu "Display"
 
 # Peripherals that are not the panel.

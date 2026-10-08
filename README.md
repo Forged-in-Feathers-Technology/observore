@@ -2948,6 +2948,71 @@ ISO-8601 UTC. A client with no clock of its own still needs the first.
 page on the screen shows the time with the source beside it — `not set` where
 there is none, and where to set it.
 
+### Where the internal RAM actually went
+
+With the figures honest, the next question was answerable: what is using it?
+`idf.py size-components` says `libmain.a` holds 62 KB of DRAM — more than the
+Wi-Fi stack, the Bluetooth controller and lwIP put together. That is this
+firmware's own static allocation, and it is worth being careful about, because
+the first reading of it was wrong twice over.
+
+`nm` reported `OBSERVORE_VENDOR_OUIS` at 41 KB with section type `d`, which
+looks like 41 KB of vendor name strings sitting in RAM. Its address is
+`0x3f420058`, which is flash-mapped DROM — exactly where a `const` table
+belongs. The section label says what kind of symbol it is; only the address
+says where it lives. And `size-components`' DRAM column for an archive
+includes flash rodata, so 62 KB was never 62 KB of RAM either.
+
+Filtering by address range instead gives the real picture: **98.6 KB** of
+static symbols in internal DRAM, and one of them is a quarter of it.
+
+| symbol | bytes | what |
+|---|---|---|
+| `s_devices` | **26,112** | the device table, 192 slots at 136 bytes |
+| `s_rules` | 6,144 | mute rules |
+| `s_hist` | 3,456 | detection history |
+| `rows` (console) | 3,456 | one page of history, for the console |
+| `records` (Wi-Fi) | 2,944 | the access-point scan |
+| `s_store` | 1,796 | the household census |
+
+Same class of mistake as the heap caps, caught the same way: check what the
+number is measuring before believing it.
+
+### The device table is per board now
+
+The tracker holds 192 devices, and the table is the largest single static
+allocation this firmware makes. That is affordable on most boards and was not
+affordable on one: the 3.5" Cheap Yellow Display drives a 480x320 panel with
+no PSRAM to hold a framebuffer, runs Wi-Fi and BLE together, and was sitting
+at a low-water mark of **820 bytes**. It took an unexplained `SW_CPU_RESET`
+during a bench sweep and could not serve its own status page.
+
+`OBSERVORE_MAX_DEVICES` is a Kconfig option, set to 96 on that profile alone:
+
+| | before | after |
+|---|---|---|
+| low-water | **820** | **5,008** |
+| largest free block | 4,864 | 12,288 |
+| console body buffer | stepped down to 2–3 KB | the full 4 KB |
+| `/api/status` | 503, then transport failures | answers |
+
+Thirteen kilobytes back, and the board can report on itself for the first
+time. The cost is stated rather than hidden: it tracks half as many devices at
+once, and the table evicts the device heard from longest ago, so in a crowded
+place it holds a shorter window of the room. Mute rules, the census and the
+detection history are separate and untouched.
+
+**Only that profile.** The 2.8" boards share the chip but drive a smaller
+panel and sat at 11,452 bytes with a 10,240-byte largest block, which is thin
+and not failing. Picking a number for them without a measurement would be the
+guess this whole exercise was about avoiding.
+
+**What this does not claim.** A listener held the serial port for the panic
+text and the crash did not recur, so the `SW_CPU_RESET` remains unexplained.
+What is fixed is the margin, which was not survivable; whether it was the
+cause of that particular reset is not established. The device table being
+tunable is also what makes the next such measurement cheap.
+
 ### The heap figure was measuring the wrong pool
 
 Every number this device reported about its own memory — the boot log, the

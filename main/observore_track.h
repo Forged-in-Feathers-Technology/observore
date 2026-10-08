@@ -2,9 +2,29 @@
 
 #include "observore_detect.h"
 
-/* Sizing.  The table lives in internal RAM and is walked linearly on every
- * sighting, so it is kept small enough that a full scan is cheap. */
+/* Sizing.
+ *
+ * The table lives in internal RAM and is walked linearly on every sighting,
+ * so it is kept small enough that a full scan is cheap -- and, it turns out,
+ * it is the largest single static allocation this firmware makes: 136 bytes a
+ * slot, so 192 slots is 26 KB of the 98 KB of static DRAM in our own symbols.
+ *
+ * Per board, through Kconfig, because the boards differ by more than taste.
+ * The 3.5" Cheap Yellow Display drives a 480x320 panel with no PSRAM to put a
+ * framebuffer in and runs Wi-Fi and BLE together; once the heap figures were
+ * measured against the pool allocations actually come from, its low-water
+ * mark was 820 bytes. It took an unexplained SW_CPU_RESET on the bench and
+ * could not serve its own status page.
+ *
+ * The host tests set their own value, so the suite does not change meaning
+ * with whichever board was configured last. */
+#ifndef OBSERVORE_MAX_DEVICES
+#ifdef CONFIG_OBSERVORE_MAX_DEVICES
+#define OBSERVORE_MAX_DEVICES CONFIG_OBSERVORE_MAX_DEVICES
+#else
 #define OBSERVORE_MAX_DEVICES 192
+#endif
+#endif
 
 /* Follower heuristic: an unclassified BLE address seen at least this many
  * times, spanning at least this long, is reported as following you.  Two
