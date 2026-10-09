@@ -187,6 +187,15 @@ size_t observore_history_count(void)
     return s_count;
 }
 
+size_t observore_history_entries(const observore_history_entry_t **out)
+{
+    backfill_epochs();
+    if (out) {
+        *out = s_hist;
+    }
+    return s_count;
+}
+
 size_t observore_history_copy(observore_history_entry_t *out, size_t max)
 {
     size_t n = s_count < max ? s_count : max;

@@ -730,8 +730,13 @@ static esp_err_t history_handler(httpd_req_t *req)
     if (!scratch_body(req)) {
         return ESP_OK;
     }
-    static observore_history_entry_t rows[OBSERVORE_HISTORY_MAX];
-    size_t count = observore_history_copy(rows, OBSERVORE_ARRLEN(rows));
+    /* Borrowed, not copied. A second array the size of the history itself was
+     * 3,456 bytes held permanently for a page nobody may ever open -- a fifth
+     * of what the 3.5" CYD has left during an uplink window, on the board
+     * that cannot currently finish an update handshake for want of about
+     * 3 KB. See observore_history_entries() for the one caveat. */
+    const observore_history_entry_t *rows = NULL;
+    size_t count = observore_history_entries(&rows);
 
     observore_jbuf_t jb;
     observore_jb_init(&jb, s_body, s_body_cap, 2);
