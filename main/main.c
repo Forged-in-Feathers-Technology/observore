@@ -96,14 +96,29 @@ static void note_heap_low_water(int64_t now)
 {
     uint32_t low     = heap_caps_get_minimum_free_size(OBSERVORE_HEAP_CAPS);
     uint32_t largest = heap_caps_get_largest_free_block(OBSERVORE_HEAP_CAPS);
+    /* What the device was doing, not merely which radio mode it was in.
+     *
+     * A TLS session for an update is the single hungriest thing here, and it
+     * only ever happens inside an uplink window -- so recording the window
+     * labelled every one of its dips "uplink", indistinguishable from the
+     * ordinary pressure of being associated. On the 2.8" CYD the difference is
+     * 22 KB against 1,468 bytes. A number that cannot say which activity took
+     * the memory sends the next person looking in the wrong place, which is
+     * the whole lesson of the heap caps being measured against the wrong pool.
+     *
+     * Asked as a latch, because the session blocks this loop: by the time
+     * execution gets back here it is over, and a flag asking "is one open"
+     * answered false every time. The first sample after a session is that
+     * session's. */
+    const char *what = observore_update_take_tls_mark()
+                           ? "update"
+                           : observore_mode_name(observore_wifi_mode());
     if (observore_heapwatch_note(low, largest,
                                  (uint32_t)observore_notify_pending(),
-                                 observore_mode_name(observore_wifi_mode()),
-                                 now)) {
+                                 what, now)) {
         ESP_LOGW(TAG, "internal heap low-water fell to %" PRIu32 " bytes "
                       "(%s, %zu queued, largest block %" PRIu32 ")",
-                 low, observore_mode_name(observore_wifi_mode()),
-                 observore_notify_pending(), largest);
+                 low, what, observore_notify_pending(), largest);
     }
 }
 

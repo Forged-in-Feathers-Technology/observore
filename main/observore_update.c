@@ -43,6 +43,32 @@ static bool     s_check_pending;
 static bool     s_check_retried;
 static char     s_doc[DOC_MAX];
 
+/* That a TLS session has run since the heap was last looked at.
+ *
+ * A latch, not a "busy now" flag, and the difference is the whole point. The
+ * handshake blocks the main loop, so by the time the loop reaches the heap
+ * record the session is closed: a flag that answered "is a session open" read
+ * false every time, and the dip it was meant to explain had already happened.
+ * The bench said so plainly -- the check finished at 312023 ms and the record
+ * was written at 313033, a second later, still labelled "uplink".
+ *
+ * So the first heap sample after a session is that session's, and this says
+ * so once and clears. What it buys: a dip during an uplink window otherwise
+ * reads as "uplink" whether it was ordinary radio pressure or the certificate
+ * verification behind an update, and on the 2.8" CYD those are 22 KB and
+ * about 2 KB.
+ *
+ * Distinct from s_check_pending, which means somebody asked for a check and
+ * stays true across a window boundary. */
+static bool     s_tls_mark;
+
+bool observore_update_take_tls_mark(void)
+{
+    bool was = s_tls_mark;
+    s_tls_mark = false;
+    return was;
+}
+
 void observore_update_init(void)
 {
     s_latest[0]     = '\0';
@@ -147,7 +173,9 @@ void observore_update_check(void)
         return;
     }
 
-    if (fetch(s_doc, sizeof(s_doc)) != ESP_OK) {
+    s_tls_mark = true;
+    esp_err_t fetched = fetch(s_doc, sizeof(s_doc));
+    if (fetched != ESP_OK) {
         /* With the free heap, because the first thing that goes when a board
          * without PSRAM runs short is the TLS handshake behind this request,
          * and the error alone ("cannot connect") points at the network
@@ -380,6 +408,14 @@ void observore_update_service(void)
     };
 
     esp_https_ota_handle_t h = NULL;
+    /* The download holds a TLS session for far longer than the check does, so
+     * it is bracketed too: a dip while 1.4 MB is coming over the wire is the
+     * download's, not the uplink's.
+     *
+     * A latch rather than a span, for the reason given where it is declared:
+     * this call blocks the main loop for the whole download, so nothing reads
+     * the heap until it is over. */
+    s_tls_mark = true;
     esp_err_t err = esp_https_ota_begin(&cfg, &h);
     if (err != ESP_OK || !h) {
         snprintf(s_error, sizeof(s_error), "%s", esp_err_to_name(err));

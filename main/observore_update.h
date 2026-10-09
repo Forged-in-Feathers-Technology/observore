@@ -44,6 +44,25 @@ void observore_update_check_now(void);
 /* True between a check_now and the check that satisfies it. */
 bool observore_update_check_pending(void);
 
+/* Whether a TLS session for an update -- a check or a download -- has run
+ * since this was last asked. Asking clears it.
+ *
+ * Exported for the heap record rather than for this module's own use, and a
+ * latch rather than a "busy now" flag because of when the sampling happens.
+ * The handshake blocks the main loop, so by the time the loop reaches the
+ * heap record the session is closed; a flag answering "is one open" read
+ * false every time, and the dip it was meant to explain had already happened.
+ * The first sample after a session is that session's.
+ *
+ * What it buys: a low-water dip inside an uplink window otherwise reads as
+ * "uplink" whether it was ordinary radio pressure or the certificate
+ * verification behind an update, and on the 2.8" CYD those are about 22 KB
+ * and about 2 KB.
+ *
+ * Distinct from observore_update_check_pending(), which means somebody asked
+ * for a check and stays true across a window boundary. */
+bool observore_update_take_tls_mark(void);
+
 /* Installing. Separate from the check on purpose: the device notices a release
  * on its own, and only ever downloads one because somebody asked it to. */
 
