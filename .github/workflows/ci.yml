@@ -43,6 +43,36 @@ jobs:
   # Waveshare kit with a WS2812 and a UART bridge and once as a XIAO with a
   # plain LED and only native USB -- so the target matrix above does not cover
   # them.
+  # CONFIG_OBSERVORE_MESH_TX is off in every board profile, deliberately: it
+  # spends the device's passivity and is nobody's default. That also means
+  # nothing in the matrix above ever compiles the advertising path, and code
+  # no build touches is code that rots -- the more so here, because the option
+  # selects a NimBLE role, so the break would appear only on the machine of
+  # whoever turned it on.
+  #
+  # A job rather than another matrix row: the per-board steps check documented
+  # flash offsets and board names, and this is not a board.
+  mesh-tx:
+    name: Mesh transmit compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build with the warning path enabled
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32c5
+          command: >-
+            idf.py
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/mesh-tx.defaults"
+            build
+
+      - name: The option really did pull in the broadcaster role
+        run: |
+          grep -qx 'CONFIG_OBSERVORE_MESH_TX=y' sdkconfig
+          grep -qx 'CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y' sdkconfig
+          echo "transmit build confirmed: the role is on because the option selected it"
+
   boards:
     name: Board profile (${{ matrix.board }})
     runs-on: ubuntu-latest

@@ -149,6 +149,38 @@ config OBSERVORE_PATROL_WINDOW_S
         entirely.  So it alternates: patrol for this long, then join the
         network briefly to push what it found.
 
+config OBSERVORE_MESH_TX
+    bool "Warn other Observore nodes over BLE (spends the device's passivity)"
+    default n
+    select BT_NIMBLE_ROLE_BROADCASTER
+    help
+        Transmit what this node has found, as a BLE advert other Observore
+        nodes can hear (#132). Off by default, and off is the important case.
+
+        What it costs is the property that makes this device defensible.
+        Everything else it does is receive-only: the BLE scan emits no
+        SCAN_REQ, the Wi-Fi scan sends no probe requests, the sniffer only
+        listens. Nothing can locate it by listening. A node that warns can be
+        found by direction-finding, and "there is an observer here" is the one
+        thing a counter-surveillance device should not announce.
+
+        There is an irony to pay for as well: this project classifies
+        SquachWatch as a `peer-detector` precisely because it announces itself
+        in mesh mode. A warning Observore becomes a peer-detector in somebody
+        else's device, including another Observore.
+
+        Note what this option does rather than merely setting a flag. With it
+        unset, BT_NIMBLE_ROLE_BROADCASTER is unset too, so the code that
+        advertises is not compiled at all -- the build cannot transmit, and
+        there is no runtime path to make it. That is worth more than a boolean
+        somebody could flip by accident, and it is the same way the console
+        keeps automatic suppression out of the monitors: by not having the
+        caller.
+
+        A node with nothing to warn about stays silent. It transmits when it
+        has a finding worth passing on and not otherwise, so an idle node is
+        exactly as quiet as one built without this.
+
 config OBSERVORE_MAX_DEVICES
     int "Devices tracked at once"
     default 192

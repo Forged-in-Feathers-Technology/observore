@@ -1370,6 +1370,167 @@ static void test_a_full_census_still_learns(void)
     observore_census_init();
 }
 
+/* Building a warning, and reading it back.
+ *
+ * Every other test of the parser feeds it bytes someone typed, which checks
+ * the parser against a person's idea of the format. This checks the format
+ * against itself: a warning built by the encoder and read by the decoder has
+ * to arrive with the same fields, and a one-byte disagreement between the two
+ * shows up here and nowhere else.
+ *
+ * This is the half of #132 that spends the device's passivity, so the format
+ * is also the thing that has to be right before anything transmits. */
+static void test_a_warning_survives_the_round_trip(void)
+{
+    banner("a warning built here reads back the same");
+
+    uint8_t buf[64];
+    observore_peer_warning_t in = {
+        .node  = 0xBEEF,
+        .cls   = OBSERVORE_CLASS_DRONE,
+        .seq   = 0x1234,
+        .age_s = 42,
+    };
+    size_t n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(n == 12, "a bare warning is twelve bytes, got %zu", n);
+
+    observore_peer_warning_t out;
+    CHECK(observore_peer_parse(buf, n, &out), "and it parses");
+    CHECK(out.node == in.node, "the node id survives");
+    CHECK(out.cls == in.cls, "the class survives");
+    CHECK(out.seq == in.seq, "the sequence survives");
+    CHECK(out.age_s == in.age_s, "the age survives");
+    CHECK(!out.have_pos, "no position was claimed");
+    CHECK(!out.trusted, "and nothing unsigned arrives trusted");
+
+    /* With a position. Three bytes a coordinate, so the value comes back
+     * quantised to about 2.8 metres rather than exactly -- which is the whole
+     * design, and the test says so rather than pretending otherwise. */
+    in.have_pos = true;
+    in.lat_e7 = 515074000;        /* 51.5074 N */
+    in.lon_e7 = -1278000;         /* 0.1278 W */
+    n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(n == 18, "a positioned warning is eighteen bytes, got %zu", n);
+    CHECK(observore_peer_parse(buf, n, &out), "and it parses");
+    CHECK(out.have_pos, "the position arrives");
+    int32_t dlat = out.lat_e7 - in.lat_e7;
+    int32_t dlon = out.lon_e7 - in.lon_e7;
+    if (dlat < 0) { dlat = -dlat; }
+    if (dlon < 0) { dlon = -dlon; }
+    CHECK(dlat <= 256 && dlon <= 256,
+          "within one quantum of where it started (%ld, %ld)",
+          (long)dlat, (long)dlon);
+
+    /* The southern and western hemispheres, which is where a sign error
+     * hides: three bytes sign-extended by hand on the way in and on the way
+     * out, and a value that looks plausible either way. */
+    in.lat_e7 = -338688000;       /* 33.8688 S, Sydney */
+    in.lon_e7 = 1512093000;       /* 151.2093 E */
+    n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(observore_peer_parse(buf, n, &out), "a southern position parses");
+    CHECK(out.lat_e7 < 0, "and stays in the southern hemisphere: %ld",
+          (long)out.lat_e7);
+    CHECK(out.lon_e7 > 1500000000, "and the eastern one: %ld", (long)out.lon_e7);
+
+    in.lat_e7 = 404165000;        /* 40.4165 N, Madrid */
+    in.lon_e7 = -37038000;        /* 3.7038 W */
+    n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(observore_peer_parse(buf, n, &out), "a western position parses");
+    CHECK(out.lat_e7 > 0 && out.lon_e7 < 0,
+          "with the signs the right way round: %ld, %ld",
+          (long)out.lat_e7, (long)out.lon_e7);
+
+    /* Zero/zero is refused on the way in as well as on the way out. A node
+     * with no fix sends zeroes, and repeating them as a position would be a
+     * confident lie about the Gulf of Guinea. */
+    in.lat_e7 = 0;
+    in.lon_e7 = 0;
+    n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(n == 12, "a warning with no usable fix drops the position, got %zu", n);
+
+    /* The age is clamped, not wrapped. Warnings expire at five minutes, so a
+     * value past the field reads as "a while ago" where a wrap would read as
+     * "just now" -- the difference between a stale warning and a fresh one. */
+    in.have_pos = false;
+    in.age_s = 400;
+    n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(observore_peer_parse(buf, n, &out), "an over-age warning parses");
+    CHECK(out.age_s == 255, "and its age clamps rather than wrapping, got %u",
+          out.age_s);
+
+    /* A class this build does not have is sent as unknown rather than as a
+     * number the receiver would read as some other class entirely. */
+    in.age_s = 1;
+    in.cls = OBSERVORE_CLASS_MAX + 7;
+    n = observore_peer_build(&in, buf, sizeof(buf));
+    CHECK(observore_peer_parse(buf, n, &out), "a warning about nothing known parses");
+    CHECK(out.cls == OBSERVORE_CLASS_UNKNOWN,
+          "and arrives as unknown rather than as a neighbouring class");
+
+    /* It refuses to half-build. A buffer one byte short produces nothing, not
+     * a truncated warning that happens to parse as something else. */
+    in.cls = OBSERVORE_CLASS_TRACKER;
+    CHECK(observore_peer_build(&in, buf, 11) == 0, "eleven bytes is refused");
+    CHECK(observore_peer_build(&in, buf, 12) == 12, "twelve is enough");
+    in.have_pos = true;
+    in.lat_e7 = 515074000;
+    in.lon_e7 = -1278000;
+    CHECK(observore_peer_build(&in, buf, 17) == 0,
+          "and a positioned warning will not fit in seventeen");
+
+    /* The whole AD element, which is what the radio is handed. The length
+     * byte counts everything after itself, and being out by one there is the
+     * classic way an advert is silently ignored by every receiver. */
+    size_t a = observore_peer_advert(&in, buf, sizeof(buf));
+    CHECK(a == 22, "a positioned element is twenty-two bytes, got %zu", a);
+    CHECK(buf[0] == a - 1, "the length byte counts what follows it: %u vs %zu",
+          buf[0], a - 1);
+    CHECK(buf[1] == 0xFF, "manufacturer-specific data");
+    CHECK(buf[2] == 0xFF && buf[3] == 0xFF, "under company 0xFFFF");
+    CHECK(memcmp(&buf[4], "OBW1", 4) == 0, "and the magic makes it ours");
+
+    /* And the element goes back through the advert-level decoder, which is
+     * the path a real neighbour's radio takes. */
+    CHECK(observore_peer_from_advert(buf, a, &out),
+          "the element decodes as an advert");
+    CHECK(out.node == in.node && out.cls == in.cls && out.have_pos,
+          "with its fields intact");
+
+    /* It fits a legacy advert with room to spare, which is the constraint the
+     * whole format was tightened for: 31 bytes, three of which a flags
+     * element takes. Every board here can hear this, including the BLE 4.2
+     * classic ESP32s that cannot receive extended advertising at all. */
+    CHECK(a + 3 <= 31, "a positioned warning fits a legacy advert: %zu + 3",
+          a);
+
+    /* The node id. Stable, because the receiving side's replay check keys on
+     * it and would treat a node that renamed itself every boot as a new
+     * neighbour each time. */
+    const uint8_t mac_a[6] = {0x38, 0x44, 0xBE, 0xAA, 0x12, 0x94};
+    const uint8_t mac_b[6] = {0x38, 0x44, 0xBE, 0xAA, 0x12, 0x95};
+    uint16_t id_a = observore_peer_node_id(mac_a);
+    CHECK(id_a == observore_peer_node_id(mac_a),
+          "the same address gives the same id");
+    CHECK(id_a != observore_peer_node_id(mac_b),
+          "and one byte apart gives a different one");
+    CHECK(id_a != 0, "never zero, which a receiver would read as no id set");
+
+    /* Including for the addresses that would otherwise fold to nothing: a
+     * hash that can return zero has a node that is invisible to the replay
+     * check, once. */
+    const uint8_t zeros[6] = {0, 0, 0, 0, 0, 0};
+    CHECK(observore_peer_node_id(zeros) != 0, "nor for an all-zero address");
+    CHECK(observore_peer_node_id(NULL) != 0, "nor for no address at all");
+
+    /* A warning carrying a node id round-trips it, which is the field a
+     * neighbour groups by. */
+    observore_peer_warning_t idw = {.node = id_a, .cls = OBSERVORE_CLASS_HUNTER,
+                                    .age_s = 3};
+    size_t m = observore_peer_build(&idw, buf, sizeof(buf));
+    CHECK(observore_peer_parse(buf, m, &out) && out.node == id_a,
+          "and it survives the wire");
+}
+
 /* A synthetic resistive panel: what the controller would read for a press at
  * a given screen pixel, if the sheet were perfectly linear between `lo` and
  * `hi` on each channel.
@@ -4851,6 +5012,7 @@ int main(void)
     test_the_census_acts_carefully();
     test_a_guessed_clock_is_not_a_clock();
     test_a_full_census_still_learns();
+    test_a_warning_survives_the_round_trip();
     test_the_census_counts_addresses_not_just_days();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();

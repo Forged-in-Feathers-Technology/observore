@@ -493,10 +493,18 @@ function renderStatus(s) {
   // switched-off monitor leaves nothing in the data to find afterwards, and a
   // device the census quieted is absent from the findings as well, so if the
   // verdict does not carry it, nothing does.
+  // Transmitting is the one state a person must not have to go looking for.
+  // Everything else this device does is receive-only, so a node that warns
+  // has spent the property the rest of it is built on -- and the count is the
+  // part people will actually want: enabled with nobody reachable means the
+  // exposure is being paid for and nothing is coming back.
+  const tx = !!(s.peers && s.peers.tx);
+  const peers = (s.peers && s.peers.nodes) || 0;
   const monOff = (s.monitors && s.monitors.off) || 0;
   const quiet = (s.census && s.census.quieted) || 0;
   const half = (s.census && s.census.dampened) || 0;
   const notes = [];
+  if (tx) { notes.push('MESH TX \u2014 ' + peers + ' peer' + (peers === 1 ? '' : 's')); }
   if (monOff) { notes.push(monOff + ' monitor' + (monOff === 1 ? '' : 's') + ' off'); }
   if (quiet)  { notes.push(quiet + ' quieted as household'); }
   if (half)   { notes.push(half + ' at half weight'); }

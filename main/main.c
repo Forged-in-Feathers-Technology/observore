@@ -39,6 +39,8 @@
 #include "observore_wifi.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
+#include "esp_random.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -393,6 +395,104 @@ static void census_sweep(int64_t now_us)
     }
 }
 
+/* Telling the neighbours, on the builds that can (#132).
+ *
+ * One finding per burst, and only the heaviest thing currently in front of
+ * the radio. A node that warned about everything it could see would be
+ * transmitting most of the time, which spends the whole of the property this
+ * device is built on for the sake of repeating what a neighbour can see
+ * anyway. The useful message is "the worst thing here is a drone", once.
+ *
+ * What is deliberately not warned about:
+ *
+ *   Anything with its monitor switched off, because the owner said stop
+ *   reporting this and a warning is a report that leaves the box.
+ *
+ *   Anything the census quieted, for the same reason and with an extra one:
+ *   household furniture is household *here*, and broadcasting it would ask
+ *   the neighbours to carry a judgement about a room they cannot see.
+ *
+ *   Anything worth no points. A peer detector or a fixture is a fact about
+ *   the room, not a threat in it, and the cheapest attack on a mesh is to
+ *   fill it with true but useless statements.
+ *
+ * The interval is randomised within a window rather than fixed. A fixed
+ * cadence is itself a fingerprint: something listening for a beacon every
+ * ninety seconds exactly has an easier job than something listening for one
+ * every ninety to a hundred and fifty.
+ *
+ * No position is sent. The format carries one, the decoder reads one, and
+ * this device has no fix to put in it -- a GPS node is the point at which
+ * that field starts being filled, and sending zeroes would be refused by the
+ * encoder anyway. */
+#define WARN_MIN_GAP_US (90LL * 1000000)
+#define WARN_MAX_GAP_US (150LL * 1000000)
+
+static void mesh_warn(int64_t now_us)
+{
+    if (!observore_ble_can_warn()) {
+        return;
+    }
+
+    static int64_t s_next_us;
+    if (s_next_us != 0 && now_us < s_next_us) {
+        return;
+    }
+
+    /* The findings are already filtered by the monitors and by the census --
+     * observore_track_snapshot leaves out a switched-off class and anything
+     * the census quieted -- so the heaviest entry here is the heaviest thing
+     * this node would report to its owner. Warning about exactly that keeps
+     * the two consistent: a node never tells a neighbour something it would
+     * not tell the person holding it. */
+    /* Static, not on the stack. An observore_event_t is 136 bytes and the
+     * main task's stack is 1,536: putting one here was a stack protection
+     * fault on the first burst, and the board boot-looped. The draw call two
+     * lines below this already keeps its snapshot static for the same reason,
+     * and the display task logs its own headroom at 976 bytes of 3,072 --
+     * stack on this device is not a resource with slack in it.
+     *
+     * Safe as a static because the main loop is the only caller and there is
+     * one of it. */
+    static observore_event_t top[1];
+    if (observore_track_snapshot(top, 1) == 0) {
+        return;
+    }
+    if (observore_class_points(top[0].cls) == 0) {
+        return;
+    }
+
+    int64_t ago_us = now_us - top[0].last_seen_us;
+    if (ago_us < 0) {
+        ago_us = 0;
+    }
+
+    /* Read once: the base MAC does not change, and the id derived from it is
+     * what a neighbour groups our warnings by. */
+    static uint16_t s_node_id;
+    if (s_node_id == 0) {
+        uint8_t mac[6] = {0};
+        esp_read_mac(mac, ESP_MAC_BT);
+        s_node_id = observore_peer_node_id(mac);
+    }
+
+    observore_peer_warning_t w = {
+        .node  = s_node_id,
+        .cls   = (uint8_t)top[0].cls,
+        .age_s = (uint16_t)(ago_us / 1000000),
+    };
+    if (observore_ble_warn(&w)) {
+        /* Said once per burst, because an emission is the one thing about
+         * this device that a person should be able to find in the log
+         * afterwards. */
+        ESP_LOGI(TAG, "warned the neighbours: %s, seen %us ago",
+                 observore_class_desc(top[0].cls)->name, (unsigned)w.age_s);
+    }
+
+    uint32_t span = (uint32_t)(WARN_MAX_GAP_US - WARN_MIN_GAP_US);
+    s_next_us = now_us + WARN_MIN_GAP_US + (int64_t)(esp_random() % span);
+}
+
 void app_main(void)
 {
     /* The banner names the build, not just the program.
@@ -486,7 +586,6 @@ void app_main(void)
 
     int64_t last_heartbeat_us = 0;
     int64_t uplink_lost_us = 0;
-    int64_t last_census_us = 0;
 
     for (;;) {
         int64_t now = esp_timer_get_time();
@@ -535,6 +634,10 @@ void app_main(void)
         }
 
         observore_status_t st = publish();
+
+        /* After publish(), so a warning describes the same state the rest of
+         * the device has just agreed on. */
+        mesh_warn(now);
 
         /* The screen, on boards that have one. Rate limited here rather than
          * inside, so the snapshot it needs is only taken when it will be used. */
