@@ -61,6 +61,8 @@ static char     s_doc[DOC_MAX];
  * Distinct from s_check_pending, which means somebody asked for a check and
  * stays true across a window boundary. */
 static bool     s_tls_mark;
+/* The last fetched manifest did not fit the buffer. See fetch(). */
+static bool     s_doc_truncated;
 
 bool observore_update_take_tls_mark(void)
 {
@@ -160,8 +162,59 @@ static esp_err_t fetch(char *out, size_t out_len)
         return ESP_FAIL;
     }
     out[got] = '\0';
+
+    /* The document may not have fitted, and for a while it has not.
+     *
+     * The published manifest is 2,772 bytes and this buffer is 2,048, so 725
+     * bytes have been dropped on every check. It kept working for one reason:
+     * "version" is the first field in the JSON and the only field this device
+     * reads. That is luck, not design -- reorder the document, or let the
+     * board list grow above the field, and every device stops seeing updates
+     * with no error anywhere.
+     *
+     * The buffer is not simply enlarged, because it is static and the board
+     * that most needs the check working is the board with the least internal
+     * RAM to give. Saying so is what turns luck into a known condition: if
+     * the field is still found the check proceeds, and if it is not, the
+     * message says the document did not fit rather than "no version in the
+     * manifest", which would send somebody to look at the server. */
+    if (got >= (int)out_len - 1) {
+        ESP_LOGW(TAG, "the manifest filled the %zu-byte buffer and was cut; "
+                      "only the fields near the top can be read", out_len);
+        s_doc_truncated = true;
+    } else {
+        s_doc_truncated = false;
+    }
     return ESP_OK;
 }
+
+/* What the TLS handshake behind a check needs, measured rather than chosen.
+ *
+ * The 2.8" CYD holds 22 to 24 KB of data-capable internal heap through an
+ * uplink window and completes the handshake, bottoming out between 1,156 and
+ * 2,568 bytes across three runs. The 3.5" CYD holds about 17.5 KB and fails
+ * every single time -- twelve for twelve over six hours -- with
+ * ESP_ERR_HTTP_CONNECT, and the failed attempt takes its heap to **56 bytes**.
+ *
+ * So 20 KB is the demand with nothing to spare, and a board below it is not
+ * going to connect however many times it tries. Trying anyway is not merely
+ * futile: for a second or so the device has no memory for anything else, every
+ * half hour, on the board that has panicked five runs running.
+ *
+ * This is the guard I argued against in #179, on the grounds that refusing to
+ * check would stop the tightest board updating. The measurement says that
+ * board already cannot update, and that the attempt is what is dangerous. The
+ * argument was right and the premise was wrong.
+ *
+ * What the threshold buys is precise and worth not overstating: it is the line
+ * below which the attempt *cannot* succeed, not the line above which it is
+ * comfortable. A board just over it will still bottom out within a few
+ * hundred bytes of nothing -- with the history no longer copied for the
+ * console, the 3.5" board holds 21.5 KB, completes the check, and reaches
+ * 364 bytes doing it. That is six times better than the 56 it reached while
+ * failing, and still not room. It is reported as `update` rather than
+ * `uplink` (#179) so the next person can see it for what it is. */
+#define CHECK_MIN_HEAP 20480
 
 void observore_update_check(void)
 {
@@ -170,6 +223,26 @@ void observore_update_check(void)
     }
     int64_t now = esp_timer_get_time();
     if (now < s_next_check_us) {
+        return;
+    }
+
+    uint32_t free_now = (uint32_t)heap_caps_get_free_size(OBSERVORE_HEAP_CAPS);
+    if (free_now < CHECK_MIN_HEAP) {
+        /* Recorded where a person will find it, because a board that cannot
+         * take an update needs to say so rather than fail quietly twice an
+         * hour. The console shows this as the check error. */
+        snprintf(s_error, sizeof(s_error),
+                 "not enough memory to check (%lu free, needs %d)",
+                 (unsigned long)free_now, CHECK_MIN_HEAP);
+        /* Once per boot in the log. Twelve identical warnings in six hours is
+         * how the original failure hid in plain sight. */
+        static bool s_said;
+        if (!s_said) {
+            s_said = true;
+            ESP_LOGW(TAG, "%s -- not attempting the handshake", s_error);
+        }
+        s_check_pending = false;
+        s_next_check_us = now + RETRY_AFTER_US;
         return;
     }
 
@@ -200,7 +273,12 @@ void observore_update_check(void)
 
     char found[sizeof(s_latest)];
     if (!observore_json_string_field(s_doc, "version", found, sizeof(found))) {
-        snprintf(s_error, sizeof(s_error), "no version in the manifest");
+        /* Which of the two it is matters: a server problem and a buffer too
+         * small for a document that has grown want different people to look
+         * at them. */
+        snprintf(s_error, sizeof(s_error), "%s",
+                 s_doc_truncated ? "the manifest did not fit the buffer"
+                                 : "no version in the manifest");
         ESP_LOGW(TAG, "update check failed: %s", s_error);
         s_next_check_us = now + RETRY_AFTER_US;
         return;

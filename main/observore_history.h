@@ -50,5 +50,22 @@ void observore_history_flush(bool force);
 size_t observore_history_count(void);
 size_t observore_history_copy(observore_history_entry_t *out, size_t max);
 
+/* The table in place, for a reader that only formats it.
+ *
+ * The console used to take a copy, which meant a second array the same size
+ * as the history itself -- 3,456 bytes held for the life of the device, for a
+ * page nobody may ever open. On the 3.5" CYD that is a fifth of the internal
+ * heap left during an uplink window, and that board cannot currently complete
+ * the TLS handshake behind an update check for want of about 3 KB.
+ *
+ * The census has exposed its table this way since it was written. The same
+ * caveat applies and is worth stating rather than implying: the HTTP server
+ * runs in its own task, so the main loop can append while a handler is
+ * formatting. The count is read once and the array is fixed, so the worst
+ * case is one row printed half-old and half-new -- a cosmetic tear in a
+ * listing, not a read out of bounds. A caller must not keep the pointer
+ * across anything that could append. */
+size_t observore_history_entries(const observore_history_entry_t **out);
+
 /* Forget everything recorded, in RAM and in flash. */
 void observore_history_clear(void);
