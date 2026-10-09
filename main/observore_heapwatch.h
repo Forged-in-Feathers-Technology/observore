@@ -45,7 +45,11 @@ typedef struct {
     uint32_t largest;      /* largest free block at that moment */
     uint32_t queued;       /* notifications waiting to be sent */
     int64_t  at_us;        /* uptime */
-    char     mode[8];      /* patrol, uplink, console */
+    /* What the device was doing: patrol, uplink, console, or update -- the
+     * last being a TLS session for a check or a download, which is the one
+     * activity large enough to account for a dip on its own. Seven characters
+     * plus a terminator, which "console" exactly fills. */
+    char     mode[8];
 } observore_heap_event_t;
 
 void observore_heapwatch_init(void);

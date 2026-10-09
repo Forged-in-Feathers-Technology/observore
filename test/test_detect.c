@@ -4770,6 +4770,38 @@ static void test_heapwatch(void)
     const observore_heap_event_t *l = observore_heapwatch_latest();
     CHECK(l && l->free_min == 30000, "latest is the deepest, got %u", l ? l->free_min : 0);
     CHECK(l && strcmp(l->mode, "uplink") == 0, "mode travels with it: %s", l ? l->mode : "?");
+
+    /* The field has to hold every word that is put in it whole. A truncated
+     * one is worse than a wrong one: "consol" or "updat" reads as a typo
+     * rather than as a record of what the device was doing, and the point of
+     * this field is telling an uplink's own pressure apart from the TLS
+     * session for an update, which only ever happens inside an uplink. */
+    const char *words[] = {"patrol", "uplink", "console", "update"};
+    for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+        observore_heapwatch_init();
+        CHECK(observore_heapwatch_note(1000, 500, 0, words[i], 1),
+              "a %s event records", words[i]);
+        const observore_heap_event_t *e = observore_heapwatch_latest();
+        CHECK(e && strcmp(e->mode, words[i]) == 0,
+              "and \"%s\" survives whole, got \"%s\"", words[i],
+              e ? e->mode : "?");
+    }
+
+    /* And a word too long is cut rather than overrunning the field. Nothing
+     * passes one today; this is here so that adding one is a failing test
+     * rather than a buffer. */
+    observore_heapwatch_init();
+    observore_heapwatch_note(1000, 500, 0, "overlongmode", 1);
+    const observore_heap_event_t *o = observore_heapwatch_latest();
+    CHECK(o && strlen(o->mode) == sizeof(o->mode) - 1,
+          "an over-long mode is truncated to fit, got \"%s\"",
+          o ? o->mode : "?");
+
+    /* Rebuild the state the rest of this test reads. */
+    observore_heapwatch_init();
+    observore_heapwatch_note(40000, 30000, 0, "patrol", 1000000);
+    observore_heapwatch_note(30000, 20000, 3, "uplink", 3000000);
+    l = observore_heapwatch_latest();
     CHECK(l && l->queued == 3, "queue depth travels with it");
     CHECK(l && l->at_us == 3000000, "and so does the moment");
 

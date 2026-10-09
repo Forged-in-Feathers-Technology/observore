@@ -2614,6 +2614,33 @@ the notification queue depth say why. A drop only counts once it is 2 KB past
 the last one recorded, so a slow slide leaves a handful of milestones rather
 than filling the list with noise.
 
+**The mode distinguishes an update from the window it happened in.** A TLS
+session for a version check or a download only ever runs inside an uplink
+window, so every one of its dips used to record as `uplink` —
+indistinguishable from the ordinary pressure of being associated. On the 2.8"
+CYD those are not close: the board holds around 22 KB through a window and the
+handshake takes it to between one and three kilobytes. It now records as
+`update`:
+
+```
+I (311764) observore.update: up to date on v0.13.0-26-g901b14b
+W (312774) internal heap low-water fell to 1156 bytes (update, 0 queued, largest block 11776)
+```
+
+It had to be a latch rather than a flag, and the bench is what said so. The
+first attempt exported "is a TLS session open right now", which read **false
+every time**: the handshake blocks the main loop, so by the time execution
+returns to the heap sampler the session is closed and the dip it was meant to
+explain has already happened. The check finished at 312023 ms and the record
+was written at 313033, still labelled `uplink`. So the update marks that a
+session ran and the first sample afterwards consumes the mark — which is
+accurate rather than convenient, because `heap_caps_get_minimum_free_size()`
+is a running minimum that captured the dip while the loop was blocked.
+
+Three runs of the same check gave 1,468, 2,568 and 1,156 bytes. That the
+handshake's floor moves by more than a kilobyte between runs is itself only
+visible once the dips can be told apart.
+
 ### How long the last run lasted
 
 The header also says how long the previous run lasted and how it ended, and
