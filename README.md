@@ -2586,7 +2586,7 @@ cannot inject a field. There is a test for exactly that.
 ## Cutting a release
 
 ```bash
-git tag v0.13.0 && git push origin v0.13.0
+git tag v0.14.0 && git push origin v0.14.0
 ```
 
 That is the whole manual part. The tag push builds every shipped target,
@@ -2610,6 +2610,36 @@ The order matters and is easy to get backwards:
   restricted by ref, and a release-triggered run has a tag ref rather than a
   branch one. A `tag: v*` policy is what lets it deploy at all; without it the
   deploy job fails before running a single step.
+
+### Upgrading to v0.14.0
+
+Nothing stored is lost and nothing needs doing by hand, but three things
+change what a device already running v0.13.0 will do, and two of them make it
+report *less*.
+
+**The census now acts.** v0.13.0 learned what was always around and suppressed
+nothing. This one quiets a household device that is identifiable, and halves
+the weight of one whose advert shape may describe a population rather than a
+device. A protected class is never either. So a board that has been running
+for a fortnight will report fewer things than it did — and it says so: the
+verdict band carries the count of what it quieted, because "clear" and "clear,
+two quieted as household" are different claims.
+
+**Four board profiles track half as many devices at once.** Both 2.8" Cheap
+Yellow Displays, the 3.5", and the NM-CYD-C5 hold 96 rather than 192. The
+nearby list is correspondingly shorter in a crowded place. That is what bought
+the 3.5" board the memory to complete an over-the-air update at all, which it
+could not do before — twelve failed checks in six hours, each driving its heap
+to 56 bytes.
+
+**The clock has to say where it came from.** A device reports no time until
+something actually sets it, where v0.13.0 trusted any plausible-looking
+number. In practice this changes nothing except on a board with no RTC chip
+and no reachable NTP server, which now says `clock not set` rather than
+guessing — and can be given the time from a browser at the console.
+
+The run record's format went to 2 for the cell voltages, and version 1 records
+are carried forward rather than discarded. The mesh is off unless built in.
 
 ## Partition layout
 
