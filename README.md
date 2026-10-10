@@ -23,12 +23,13 @@ shows it on its own screen, depending on the board.
 Observer and omnivore: it eats surveillance signals.
 
 ![Three Cheap Yellow Display boards reading clear, a round AMOLED board in a
-pocket-watch case showing a clock face, and a second round board bare beside a
-2000 mAh cell](docs/images/boards.jpg)
+pocket-watch case showing a clock face, and an open case holding a bare board
+wired to a 2000 mAh lithium cell](docs/images/boards.jpg)
 
-*Four of the nine profiles: the 2.8" and 3.5" Cheap Yellow Displays, the C5
-display board that sees both bands, and the round AMOLED — wearing its watch
-face in company, and again bare beside the cell that runs it.*
+*Five of the nine profiles, one firmware: the 2.8" and 3.5" Cheap Yellow
+Displays, the C5 display board that sees both bands, and the round AMOLED
+wearing its watch face — with a headless node open on its cell beside them,
+running the same build with nothing to show it on.*
 
 ### Which board
 
