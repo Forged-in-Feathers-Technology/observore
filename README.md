@@ -2055,7 +2055,12 @@ above a list of findings: a body camera, a Remote ID drone, trackers and
 followers, each with its signal strength](docs/images/alert-in-hand.jpg)
 
 *Score 23 across 27 devices: a body camera at −65 dBm, a Remote ID drone, four
-trackers and two followers, with page, baseline and light under your thumb.*
+trackers and two followers, with page, baseline and light under your thumb.
+The body camera's and the drone's addresses are redacted below their vendor
+prefix, and the drone's Remote ID serial with them: those two are fixed public
+addresses that identify particular devices belonging to other people, where
+every row marked `random` is a rotating address that identifies nobody. A tool
+built to notice what is broadcast should not be the thing that publishes it.*
 
 The display boards — both 2.8" "Cheap Yellow Displays", the 3.5", the C5 one
 and the round AMOLED — all draw the same screen: the level as a coloured band with
