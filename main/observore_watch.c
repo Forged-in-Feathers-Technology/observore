@@ -147,7 +147,7 @@ void observore_watch_hand(const observore_canvas_t *c, int cx, int cy,
     }
 }
 
-void observore_watch_glyph(const observore_canvas_t *c, int x, int y, char ch,
+void observore_watch_glyph(const observore_canvas_t *c, int x, int y, uint8_t ch,
                            int scale, uint16_t colour)
 {
     if (ch < OBSERVORE_FONT_FIRST || ch > OBSERVORE_FONT_LAST) {
@@ -175,7 +175,7 @@ int observore_watch_text(const observore_canvas_t *c, int cx, int y,
     int w = n * OBSERVORE_FONT_W * scale;
     int x = cx - w / 2;
     for (int i = 0; i < n; i++) {
-        observore_watch_glyph(c, x + i * OBSERVORE_FONT_W * scale, y, s[i],
+        observore_watch_glyph(c, x + i * OBSERVORE_FONT_W * scale, y, (uint8_t)s[i],
                               scale, colour);
     }
     return w;

@@ -260,11 +260,40 @@ fingerprint: something listening for a beacon every ninety seconds exactly has
 an easier job than something listening for one in a window.
 
 **It says so while it is doing it**, in the three places that cannot be
-missed: the coloured band on the glass carries `TX` *and the peer count*, the
-system page says `mesh  warning, N peers in range` or `listen only, never
+missed: the coloured band on the glass carries a hexagon *and the peer count*,
+the system page says `mesh  warning, N peers in range` or `listen only, never
 transmits`, and `/api/status` reports `peers: {nodes, warnings, tx}`. The
-count matters more than the state — `TX 0` means the exposure is being paid
-for and nothing is coming back, and an on/off mark hides exactly that case.
+count matters more than the state — `⬡0` means the exposure is being paid for
+and nothing is coming back, and an on/off mark hides exactly that case.
+
+The hexagon is real work rather than a character. `tools/gen_font.py` renders
+DejaVuSansMono into an 8×16 cell and covered printable ASCII only, so there
+was no hexagon to print and the band said `TX` instead. Icons now follow
+ASCII in the table, rendered from the *proportional* face — because the
+monospace one has no hexagon and draws U+2B21 as its `.notdef` rectangle.
+
+That nearly shipped as a rectangle labelled "mesh". Pillow reports a mask size
+of (8, 12) for the missing glyph, which looks like a glyph until you print the
+pixels. Three things came out of it:
+
+- **The generator refuses to emit a notdef box.** It renders U+FFFF — a
+  noncharacter no font has — and any icon whose bitmap matches it stops the
+  build.
+- **The header shows the shape.** Each icon is emitted with an ASCII-art
+  drawing above it, so the glyph can be reviewed without a screen, which is
+  the only way the rectangle was caught in the first place.
+- **A host test refuses the shape of that failure** without pinning the exact
+  bitmap: a rectangle's top and bottom rows are the same long run, and a real
+  icon tapers. Re-rendering at another size should not fail a test; drawing a
+  box should.
+
+Raising the table's last code to 0x7F also made the compiler find a latent
+bug: `char` is signed on both toolchains, so `ch > OBSERVORE_FONT_LAST` became
+always-false and `-Werror=type-limits` refused it. Both glyph routines — the
+panel's and the round watch face's — took a signed `char`, so the *second*
+icon added would have arrived as a negative number and drawn a question mark.
+Both take a `uint8_t` now. #132 said the mesh mark would not be the last icon
+this project wants; adding one is a line in `ICONS` and sixteen bytes.
 
 No position is sent. The format carries one and the decoder reads one, but
 this device has no fix to put there; a GPS node is where that field starts
