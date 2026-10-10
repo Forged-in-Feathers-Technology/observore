@@ -14,6 +14,7 @@ idf_component_register(
         "observore_census.c"
         "observore_odid.c"
         "observore_peer.c"
+        "observore_meshkey.c"
         "observore_monitors.c"
         "observore_touchcal.c"
         "observore_tap.c"

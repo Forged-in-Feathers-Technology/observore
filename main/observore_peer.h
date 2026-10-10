@@ -177,6 +177,21 @@ bool observore_peer_from_advert(const uint8_t *adv, size_t adv_len,
  * being a value a receiver would see as a node that had not set one. */
 uint16_t observore_peer_node_id(const uint8_t mac[6]);
 
+/* The tag is four bytes of truncated HMAC-SHA256 over everything before it.
+ *
+ * Four, because that is what the format reserved and a legacy advert has to
+ * hold a signed positioned warning in 31 bytes. Thirty-two bits is not a
+ * strong signature and does not need to be: the asymmetry this mesh is built
+ * on means a stranger may warn and nothing may silence, so forging a tag buys
+ * an attacker *more weight* on a warning, never blindness. The cost of a
+ * forgery is bounded, which is what makes four bytes a reasonable trade
+ * against a field that must fit.
+ *
+ * What it is not: a defence against somebody who has the key. One household
+ * secret shared by your nodes means one compromised node compromises the
+ * tier, and the answer to that is to change the key. */
+#define OBSERVORE_PEER_TAG_LEN 4
+
 /* Build a warning payload, from the magic to the last optional field.
  *
  * The inverse of observore_peer_parse(), and tested against it: a warning
@@ -193,6 +208,31 @@ uint16_t observore_peer_node_id(const uint8_t mac[6]);
 size_t observore_peer_build(const observore_peer_warning_t *w,
                             uint8_t *out, size_t cap);
 
+/* The same, with a tag appended and its flag set. `tag` is
+ * OBSERVORE_PEER_TAG_LEN bytes, or NULL for an untagged warning -- in which
+ * case this is exactly observore_peer_build().
+ *
+ * The tag is supplied rather than computed here so this file stays free of a
+ * crypto library and keeps being driven by the host tests. Computing it is
+ * observore_meshkey_tag()'s job, over the bytes this returns a span for. */
+size_t observore_peer_build_tagged(const observore_peer_warning_t *w,
+                                   const uint8_t *tag,
+                                   uint8_t *out, size_t cap);
+
+/* Where a received payload's tag is, and what it covers.
+ *
+ * Returns the number of leading bytes the tag is computed over, with `tag`
+ * pointed at the four bytes that follow them. Zero when the payload carries
+ * no tag, or claims one that did not arrive.
+ *
+ * Separated from parsing because a verifier needs the *bytes*, not the
+ * decoded fields: re-encoding a parsed warning to check a signature would
+ * mean any difference between the encoder and the sender -- a clamped age, a
+ * quantised position -- silently failing verification. The span is the thing
+ * that was signed. */
+size_t observore_peer_tag_span(const uint8_t *payload, size_t len,
+                               const uint8_t **tag);
+
 /* The same thing as a complete manufacturer-specific AD element, ready to
  * hand to the BLE stack: length, type, company, then the payload.
  *
@@ -201,6 +241,18 @@ size_t observore_peer_build(const observore_peer_warning_t *w,
  * radio layer should not have to know the format in order to send it. */
 size_t observore_peer_advert(const observore_peer_warning_t *w,
                              uint8_t *out, size_t cap);
+
+/* The same with a tag, which is necessarily two passes at the call site.
+ *
+ * The tag covers every byte before it, including the flag that says a tag is
+ * present -- so the element has to be laid out before the tag over it can be
+ * computed. Pass a placeholder here, read the span back with
+ * observore_peer_tag_span(), and write the real tag into the last four bytes.
+ * Doing it in one pass would mean this file computing an HMAC, which is what
+ * keeps it pure and host-tested. */
+size_t observore_peer_advert_tagged(const observore_peer_warning_t *w,
+                                    const uint8_t *tag,
+                                    uint8_t *out, size_t cap);
 
 void observore_peer_init(void);
 
@@ -211,6 +263,15 @@ bool observore_peer_note(const observore_peer_warning_t *w, int64_t now_us);
 /* Warnings heard recently, newest first, excluding anything aged out. */
 size_t observore_peer_recent(observore_peer_warning_t *out, size_t max,
                              int64_t now_us);
+
+/* How many standing warnings came from a node that shares the household key.
+ *
+ * Reported because the tier has to be visible to be worth anything: a person
+ * looking at a node should be able to tell "three neighbours are warning"
+ * from "three neighbours are warning and one of them is mine". It is also the
+ * reading that shows a key is wrong -- warnings arriving with none of them
+ * trusted means the nodes disagree about the secret. */
+int observore_peer_trusted(int64_t now_us);
 
 /* How many distinct nodes have warned recently, and how many warnings stand.
  * Either pointer may be NULL. */

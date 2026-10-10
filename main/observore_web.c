@@ -13,6 +13,7 @@
 #include "observore_auth.h"
 #include "observore_ble.h"
 #include "observore_clock.h"
+#include "observore_meshkey.h"
 #include "observore_history.h"
 #include "observore_notify.h"
 #include "observore_util.h"
@@ -268,6 +269,7 @@ static esp_err_t status_handler(httpd_req_t *req)
      * that says whether that is working. */
     int peer_nodes = 0, peer_warnings = 0;
     observore_peer_counts(now, &peer_nodes, &peer_warnings);
+    int peer_trusted = observore_peer_trusted(now);
 
     /* What the census has learned, and what it is doing about it. "known"
      * climbing while "household" stays at nothing would mean the rule is
@@ -311,7 +313,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
-        ",\"peers\":{\"nodes\":%d,\"warnings\":%d,\"tx\":%s}"
+        ",\"peers\":{\"nodes\":%d,\"warnings\":%d,\"tx\":%s"
+        ",\"trusted\":%d,\"key\":%s}"
         ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d"
         ",\"quieted\":%d,\"dampened\":%d}"
         ",\"counts\":{",
@@ -363,6 +366,9 @@ static esp_err_t status_handler(httpd_req_t *req)
          * advertising code is not compiled and this is false by
          * construction. */
         observore_ble_can_warn() ? "true" : "false",
+        /* How many standing warnings came from a node sharing the household
+         * key, and whether this node has that key at all. Never the key. */
+        peer_trusted, observore_meshkey_present() ? "true" : "false",
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS,
         st.census_quieted, st.census_dampened);
 
@@ -1082,6 +1088,31 @@ static esp_err_t time_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* The household mesh key.
+ *
+ * Write-only, like the notifier tokens: it goes in and is never served back.
+ * The status reports only whether one is set, because a key served over the
+ * LAN is a key on the LAN, and until #11 that LAN is plain HTTP -- which is
+ * also why the help text asks for a key the owner already has rather than
+ * offering to generate one here.
+ *
+ * An empty key clears it, which is the revocation story for a shared secret:
+ * change it on the nodes you still trust. */
+static esp_err_t mesh_handler(httpd_req_t *req)
+{
+    char value[OBSERVORE_MESHKEY_HEX + 2];
+    if (!query_param(req, "key", value, sizeof(value))) {
+        return fail(req, "key is required (64 hex characters, or empty to clear)");
+    }
+    if (!observore_meshkey_set(value)) {
+        /* The length is named because that is the mistake people make, and
+         * the alternative message -- "invalid key" -- sends somebody looking
+         * for a typo in something that is simply the wrong size. */
+        return fail(req, "a mesh key is exactly 64 hex characters");
+    }
+    return ok(req);
+}
+
 static esp_err_t monitors_get_handler(httpd_req_t *req)
 {
     char body[768];
@@ -1284,6 +1315,7 @@ esp_err_t observore_web_start(void)
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/census",    HTTP_GET,  census_handler,     false},
         {"/api/time",      HTTP_POST, time_handler,       false},
+        {"/api/mesh",      HTTP_POST, mesh_handler,       false},
         {"/api/monitors",  HTTP_GET,  monitors_get_handler, false},
         {"/api/monitors",  HTTP_POST, monitors_set_handler, false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},

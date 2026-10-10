@@ -295,6 +295,68 @@ icon added would have arrived as a negative number and drawn a question mark.
 Both take a `uint8_t` now. #132 said the mesh mark would not be the last icon
 this project wants; adding one is a line in `ICONS` and sixteen bytes.
 
+### Warnings your own nodes signed
+
+`trusted` was permanently false until now: the field existed so the parser
+would know a tag might follow and not mistake it for payload, and nothing
+could ever set it. One household secret fills it in.
+
+**One shared key, not a keypair each.** Per-node keys would need a pairing
+step for every pair of boards, and a key id inside a four-byte field that is
+already the thing holding a signed, positioned warning inside a 31-byte
+legacy advert. A household secret needs no pairing, and revocation is "change
+the key on the nodes you still trust", which for a handful of boards is a real
+answer rather than a shrug. The cost is stated rather than hidden: one
+compromised node compromises the tier, because every node holds the same
+secret.
+
+`POST /api/mesh?key=<64 hex characters>`, and an empty key clears it. Stored in
+NVS and **never read back**, like the notifier tokens — `/api/status` reports
+`peers: {..., trusted, key}`, where `key` is only whether one is set. Nothing
+serves it, because a key served over the LAN is a key on the LAN, and until
+[#11](https://github.com/Forged-in-Feathers-Technology/observore/issues/11)
+that LAN is plain HTTP. For the same reason the device does not *generate* one:
+showing a secret would mean a second ritual like the console password's serial
+print, and taking a key the owner already has avoids inventing it.
+
+**Why thirty-two bits of tag is enough.** Truncated HMAC-SHA256. A blind
+forgery succeeds about once in four billion, and the receiver already refuses
+a sequence that does not advance, so an attacker cannot grind against a live
+node. More to the point, the asymmetry bounds the prize: a stranger may warn
+and nothing may silence, so forging a tag buys *more weight* on a warning,
+never blindness. What it does not survive is a weak key — a four-byte tag
+confirms an offline guess — so the key wants to be long and random rather than
+a passphrase somebody chose.
+
+**Verification uses the bytes that arrived**, not a re-encoding of the parsed
+fields. Re-encoding would mean any difference between sender and receiver — a
+clamped age, a quantised coordinate — failing verification and reading as a
+forgery. `observore_peer_tag_span()` hands back exactly what was signed, and
+refuses a payload that claims a tag which did not arrive, because verifying
+against bytes past the end of a buffer is the obvious attack on a truncated
+advert.
+
+**If signing fails, the warning goes out untagged.** A tag of zeroes is still a
+tag to a receiver, and one that fails to verify is indistinguishable from an
+attack. Better to be a stranger than to look like an attacker.
+
+Verified across two boards, in three states seven minutes apart:
+
+| the two nodes | nodes | warnings | trusted |
+|---|---|---|---|
+| same key | 1 | 1 | **1** |
+| different keys | 1 | 1 | **0** |
+| same key again | 1 | 1 | **1** |
+
+The middle row is the one that matters. `trusted` falls to zero while `nodes`
+and `warnings` stay at one: the warning is still heard, still counted, still
+reported — just not trusted. And it recovers, so the tier does not latch.
+
+**A trusted warning does not yet change the score.** Warnings still contribute
+zero, exactly as before. Making the tier real and visible before letting it
+act is the same order the census took, and "how much more should a friend's
+warning count" is a separate decision with its own way of going wrong.
+
 No position is sent. The format carries one and the decoder reads one, but
 this device has no fix to put there; a GPS node is where that field starts
 being filled, and the encoder refuses zeroes rather than claiming the Gulf of

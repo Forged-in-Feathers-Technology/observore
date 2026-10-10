@@ -1523,6 +1523,77 @@ static void test_a_warning_survives_the_round_trip(void)
     CHECK(observore_peer_node_id(zeros) != 0, "nor for an all-zero address");
     CHECK(observore_peer_node_id(NULL) != 0, "nor for no address at all");
 
+    /* The tag, and the span it covers.
+     *
+     * The span is the security-relevant part, so it is pinned here before any
+     * key touches it. A verifier checks the *bytes* that arrived rather than
+     * re-encoding the parsed fields: re-encoding would mean any difference
+     * between sender and receiver -- a clamped age, a quantised position --
+     * silently failing verification, which reads as a forged warning. */
+    const uint8_t tag[OBSERVORE_PEER_TAG_LEN] = {0xDE, 0xAD, 0xBE, 0xEF};
+    observore_peer_warning_t tw = {.node = 0x1234, .cls = OBSERVORE_CLASS_DRONE,
+                                   .age_s = 7};
+
+    size_t u = observore_peer_build(&tw, buf, sizeof(buf));
+    const uint8_t *got = (const uint8_t *)1;   /* must be cleared */
+    CHECK(observore_peer_tag_span(buf, u, &got) == 0 && got == NULL,
+          "an untagged warning has no span, and the pointer is cleared");
+
+    size_t tl = observore_peer_build_tagged(&tw, tag, buf, sizeof(buf));
+    CHECK(tl == u + OBSERVORE_PEER_TAG_LEN,
+          "a tag adds four bytes, got %zu against %zu", tl, u);
+    size_t span = observore_peer_tag_span(buf, tl, &got);
+    CHECK(span == u, "the span is everything before the tag, got %zu", span);
+    CHECK(got && memcmp(got, tag, OBSERVORE_PEER_TAG_LEN) == 0,
+          "and the tag itself comes back");
+    CHECK(got == buf + span, "immediately after the span");
+
+    /* Tagged and positioned, which is the largest warning the format makes
+     * and the one the four bytes were reserved to leave room for. */
+    tw.have_pos = true;
+    tw.lat_e7 = 515074000;
+    tw.lon_e7 = -1278000;
+    tl = observore_peer_build_tagged(&tw, tag, buf, sizeof(buf));
+    CHECK(tl == 22, "signed and positioned is twenty-two bytes, got %zu", tl);
+    CHECK(observore_peer_tag_span(buf, tl, &got) == 18,
+          "over the eighteen bytes before it");
+    CHECK(observore_peer_parse(buf, tl, &out),
+          "and it still parses as a warning");
+    CHECK(out.have_pos && out.node == tw.node, "with its fields intact");
+    CHECK(!out.trusted,
+          "but not trusted: the parser cannot check a tag, so it never claims "
+          "one has been checked");
+
+    /* A payload claiming a tag that did not arrive gets no span. Verifying
+     * against bytes past the end of the buffer is the mistake this prevents,
+     * and a truncated advert is the cheapest way to try it. */
+    CHECK(observore_peer_tag_span(buf, tl - 1, &got) == 0 && got == NULL,
+          "one byte short of its own tag is refused");
+    for (size_t cut = 1; cut <= OBSERVORE_PEER_TAG_LEN; cut++) {
+        CHECK(observore_peer_tag_span(buf, tl - cut, &got) == 0,
+              "and so is %zu bytes short", cut);
+    }
+
+    /* Refusing to half-build, as with a position. */
+    CHECK(observore_peer_build_tagged(&tw, tag, buf, 21) == 0,
+          "a tagged positioned warning will not fit in twenty-one");
+
+    /* The span must not depend on the tag's contents: a tag of zeroes is a
+     * tag. An implementation that treated empty bytes as absent would let a
+     * sender claim trust by sending nothing. */
+    const uint8_t zero_tag[OBSERVORE_PEER_TAG_LEN] = {0, 0, 0, 0};
+    tl = observore_peer_build_tagged(&tw, zero_tag, buf, sizeof(buf));
+    CHECK(observore_peer_tag_span(buf, tl, &got) == 18 && got != NULL,
+          "a tag of zeroes is still a tag");
+
+    /* And a bare build still leaves the flag clear, so an old receiver sees
+     * exactly what it saw before. */
+    tw.have_pos = false;
+    u = observore_peer_build(&tw, buf, sizeof(buf));
+    CHECK((buf[5] & 0x02) == 0, "the tag flag is clear on an untagged warning");
+    tl = observore_peer_build_tagged(&tw, tag, buf, sizeof(buf));
+    CHECK((buf[5] & 0x02) != 0, "and set on a tagged one");
+
     /* A warning carrying a node id round-trips it, which is the field a
      * neighbour groups by. */
     observore_peer_warning_t idw = {.node = id_a, .cls = OBSERVORE_CLASS_HUNTER,
