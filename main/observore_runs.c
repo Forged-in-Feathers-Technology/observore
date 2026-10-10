@@ -199,10 +199,30 @@ void observore_runs_init(void)
     s_last_write_us = esp_timer_get_time();
 }
 
+/* Above any cell this device runs on. A single lithium cell is 4.2 V charged
+ * and the boards here are fed from one, so anything past this is not a
+ * measurement -- it is a caller's mistake arriving as data. */
+#define MV_IMPLAUSIBLE 5000
+
 void observore_runs_note_mv(uint16_t mv)
 {
     if (mv == 0) {
         return;              /* no sense on this board, or no reading yet */
+    }
+    if (mv > MV_IMPLAUSIBLE) {
+        /* Refused rather than stored.
+         *
+         * The reading arrived as 65535 for a while: observore_battery_mv()
+         * answers -1 where there is no sense pin, and the caller cast it to
+         * uint16_t. The record took it, because the only value it rejected
+         * was zero, and a board with no battery spent a twelve-hour run
+         * claiming a 65.5 volt cell.
+         *
+         * The caller is fixed. This stays because the whole point of the
+         * field is telling a battery run from a mains one, and a stored
+         * number that cannot be true is worse than a missing one -- it is the
+         * 21-hour battery figure again, in a different costume. */
+        return;
     }
     if (s_rec.current_mv_start == 0) {
         s_rec.current_mv_start = mv;

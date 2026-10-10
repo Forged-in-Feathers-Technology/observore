@@ -669,9 +669,15 @@ void app_main(void)
         note_heap_low_water(now);
         /* The cell reading goes in before the tick, so whichever write the
          * tick decides to make carries the current voltage rather than the
-         * one from five minutes ago. Zero on a board with no battery sense,
-         * which the record treats as "not measured". */
-        observore_runs_note_mv((uint16_t)observore_battery_mv());
+         * one from five minutes ago.
+         *
+         * observore_battery_mv() returns -1 when there is no sense pin, and
+         * casting that straight to uint16_t gave 65535 -- which the record
+         * accepted, because it only refuses zero. The 3.5" CYD has no battery
+         * sense and spent a 12-hour run claiming a 65.5 volt cell. A negative
+         * reading is "not measured", which is what zero means here. */
+        int mv = observore_battery_mv();
+        observore_runs_note_mv(mv > 0 ? (uint16_t)mv : 0);
         observore_runs_tick();
 
         /* Confirm a freshly installed image once it has completed a patrol
