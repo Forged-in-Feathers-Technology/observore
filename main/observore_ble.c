@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "observore_ble.h"
+#include "observore_meshkey.h"
 #include "observore_peer.h"
 #include "sdkconfig.h"
 #include "observore_track.h"
@@ -77,6 +78,27 @@ static int on_gap_event(struct ble_gap_event *event, void *arg)
      * about what, with replay and ageing, lives in observore_peer. */
     observore_peer_warning_t warn;
     if (observore_peer_from_advert(d->data, d->length_data, &warn)) {
+        /* Whether this one came from a node that shares the household key.
+         *
+         * Checked over the bytes that arrived, not over a re-encoding of the
+         * parsed fields: any difference between sender and receiver -- a
+         * clamped age, a quantised coordinate -- would fail verification and
+         * read as a forgery. observore_peer_tag_span() hands back exactly
+         * what was signed.
+         *
+         * The payload is found again here rather than carried out of the
+         * parser because the parser is pure and host-tested and has no
+         * business knowing about keys. */
+        size_t mfg_len = 0;
+        const uint8_t *mfg = observore_adv_field(d->data, d->length_data,
+                                                 0xFF, &mfg_len);
+        if (mfg && mfg_len > 2) {
+            const uint8_t *tag = NULL;
+            size_t span = observore_peer_tag_span(mfg + 2, mfg_len - 2, &tag);
+            if (span > 0 && observore_meshkey_verify(mfg + 2, span, tag)) {
+                warn.trusted = true;
+            }
+        }
         observore_peer_note(&warn, now);
     }
 
@@ -176,9 +198,34 @@ bool observore_ble_warn(const observore_peer_warning_t *w)
     uint8_t element[31];
     observore_peer_warning_t out = *w;
     out.seq = ++s_warn_seq;
-    size_t n = observore_peer_advert(&out, element, sizeof(element));
+
+    /* Signed where there is a household key, and two passes because the tag
+     * covers the bytes before it -- the flag that says a tag is there
+     * included. Lay the element out with a placeholder, then compute the tag
+     * over the span that arrives and write it in. */
+    static const uint8_t PLACEHOLDER[OBSERVORE_PEER_TAG_LEN] = {0};
+    bool sign = observore_meshkey_present();
+    size_t n = observore_peer_advert_tagged(&out, sign ? PLACEHOLDER : NULL,
+                                            element, sizeof(element));
     if (n == 0) {
         return false;
+    }
+    if (sign) {
+        const uint8_t *at = NULL;
+        size_t span = observore_peer_tag_span(element + 4, n - 4, &at);
+        uint8_t tag[OBSERVORE_PEER_TAG_LEN];
+        if (span > 0 && observore_meshkey_tag(element + 4, span, tag)) {
+            memcpy(element + 4 + span, tag, sizeof(tag));
+        } else {
+            /* Could not sign. Sent untagged rather than carrying a
+             * placeholder: a tag of zeroes is still a tag to a receiver, and
+             * one that fails to verify is indistinguishable from a forgery.
+             * Better to be a stranger than to look like an attacker. */
+            n = observore_peer_advert(&out, element, sizeof(element));
+            if (n == 0) {
+                return false;
+            }
+        }
     }
 
     /* A fresh random address per burst. ble_hs_id_gen_rnd(1, ...) asks for a

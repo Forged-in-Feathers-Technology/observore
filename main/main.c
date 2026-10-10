@@ -24,6 +24,7 @@
 #include "observore_rtc.h"
 #include "observore_mute.h"
 #include "observore_monitors.h"
+#include "observore_meshkey.h"
 #include "observore_peer.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
@@ -546,6 +547,7 @@ void app_main(void)
     observore_census_init();
     observore_monitors_init();
     observore_peer_init();
+    observore_meshkey_init();
     /* Started here rather than on the first uplink: it renews its servers on
      * every new IP, so one init covers every window the device is associated
      * for, and the times it hands back are retroactive anyway. */

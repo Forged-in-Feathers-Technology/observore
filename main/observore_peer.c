@@ -10,7 +10,6 @@
 
 #define BASE_LEN      12    /* magic through age, with nothing optional */
 #define POSITION_LEN   6    /* three bytes a coordinate */
-#define TAG_LEN        4
 
 /* Coarse positions: degrees times ten million, divided by 256, in three
  * signed bytes. About 2.8 metres. A power of two so the arithmetic is exact
@@ -65,7 +64,7 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
     uint8_t flags = payload[5];
     size_t need = BASE_LEN;
     if (flags & FLAG_POSITION) { need += POSITION_LEN; }
-    if (flags & FLAG_TAG)      { need += TAG_LEN; }
+    if (flags & FLAG_TAG)      { need += OBSERVORE_PEER_TAG_LEN; }
     if (len < need) {
         return false;      /* it claims more than arrived */
     }
@@ -159,21 +158,23 @@ static void le24s_put(uint8_t *p, int32_t e7)
     p[2] = (uint8_t)((v >> 16) & 0xFF);
 }
 
-size_t observore_peer_build(const observore_peer_warning_t *w,
-                            uint8_t *out, size_t cap)
+size_t observore_peer_build_tagged(const observore_peer_warning_t *w,
+                                   const uint8_t *tag,
+                                   uint8_t *out, size_t cap)
 {
     if (!w || !out) {
         return 0;
     }
     bool pos = w->have_pos && position_usable(w->lat_e7, w->lon_e7);
-    size_t need = BASE_LEN + (pos ? POSITION_LEN : 0);
+    size_t need = BASE_LEN + (pos ? POSITION_LEN : 0) +
+                  (tag ? OBSERVORE_PEER_TAG_LEN : 0);
     if (cap < need) {
         return 0;
     }
 
     memcpy(out, OBSERVORE_PEER_MAGIC, 4);
     out[4] = OBSERVORE_PEER_VERSION;
-    out[5] = pos ? FLAG_POSITION : 0;
+    out[5] = (uint8_t)((pos ? FLAG_POSITION : 0) | (tag ? FLAG_TAG : 0));
     le16_put(&out[6], w->node);
     /* A class this build does not have cannot be described, so it is sent as
      * unknown rather than as a number a receiver would read as some other
@@ -189,11 +190,52 @@ size_t observore_peer_build(const observore_peer_warning_t *w,
         le24s_put(&out[12], w->lat_e7);
         le24s_put(&out[15], w->lon_e7);
     }
+    /* Last, over everything before it -- which is what the span returned to a
+     * verifier describes. */
+    if (tag) {
+        memcpy(out + need - OBSERVORE_PEER_TAG_LEN, tag, OBSERVORE_PEER_TAG_LEN);
+    }
     return need;
 }
 
-size_t observore_peer_advert(const observore_peer_warning_t *w,
-                             uint8_t *out, size_t cap)
+size_t observore_peer_build(const observore_peer_warning_t *w,
+                            uint8_t *out, size_t cap)
+{
+    return observore_peer_build_tagged(w, NULL, out, cap);
+}
+
+size_t observore_peer_tag_span(const uint8_t *payload, size_t len,
+                               const uint8_t **tag)
+{
+    if (tag) {
+        *tag = NULL;
+    }
+    if (!payload || len < BASE_LEN) {
+        return 0;
+    }
+    if (memcmp(payload, OBSERVORE_PEER_MAGIC, 4) != 0 ||
+        payload[4] != OBSERVORE_PEER_VERSION) {
+        return 0;
+    }
+    uint8_t flags = payload[5];
+    if (!(flags & FLAG_TAG)) {
+        return 0;
+    }
+    size_t span = BASE_LEN + ((flags & FLAG_POSITION) ? POSITION_LEN : 0);
+    /* A payload claiming a tag that did not arrive gets no span: verifying
+     * against bytes past the end is the mistake this exists to prevent. */
+    if (len < span + OBSERVORE_PEER_TAG_LEN) {
+        return 0;
+    }
+    if (tag) {
+        *tag = payload + span;
+    }
+    return span;
+}
+
+size_t observore_peer_advert_tagged(const observore_peer_warning_t *w,
+                                    const uint8_t *tag,
+                                    uint8_t *out, size_t cap)
 {
     /* length, type, company low, company high, then the payload. The length
      * byte counts everything after itself, which is the one part of an AD
@@ -201,7 +243,7 @@ size_t observore_peer_advert(const observore_peer_warning_t *w,
     if (!out || cap < 4) {
         return 0;
     }
-    size_t n = observore_peer_build(w, out + 4, cap - 4);
+    size_t n = observore_peer_build_tagged(w, tag, out + 4, cap - 4);
     if (n == 0) {
         return 0;
     }
@@ -295,6 +337,17 @@ size_t observore_peer_recent(observore_peer_warning_t *out, size_t max,
     return n;
 }
 
+int observore_peer_trusted(int64_t now_us)
+{
+    int n = 0;
+    for (size_t i = 0; i < s_count; i++) {
+        if (!expired(&s_tab[i], now_us) && s_tab[i].trusted) {
+            n++;
+        }
+    }
+    return n;
+}
+
 void observore_peer_counts(int64_t now_us, int *nodes, int *warnings)
 {
     int live = 0;
@@ -309,4 +362,10 @@ void observore_peer_counts(int64_t now_us, int *nodes, int *warnings)
      * out by the number changing meaning. */
     if (nodes)    { *nodes = live; }
     if (warnings) { *warnings = live; }
+}
+
+size_t observore_peer_advert(const observore_peer_warning_t *w,
+                             uint8_t *out, size_t cap)
+{
+    return observore_peer_advert_tagged(w, NULL, out, cap);
 }
