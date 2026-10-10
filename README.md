@@ -22,6 +22,15 @@ shows it on its own screen, depending on the board.
 
 Observer and omnivore: it eats surveillance signals.
 
+![Three Cheap Yellow Display boards reading clear, a round AMOLED board in a
+pocket-watch case showing a clock face, and an open case holding a bare board
+wired to a 2000 mAh lithium cell](docs/images/boards.jpg)
+
+*Five of the nine profiles, one firmware: the 2.8" and 3.5" Cheap Yellow
+Displays, the C5 display board that sees both bands, and the round AMOLED
+wearing its watch face — with a headless node open on its cell beside them,
+running the same build with nothing to show it on.*
+
 ### Which board
 
 The choice is not about speed or memory. It is whether the device reports to
@@ -2041,8 +2050,15 @@ recognise the shape. The device says so and rebuilds over the following days.
 
 ## The screen
 
-The ESP32-2432S028R — the 2.8" "Cheap Yellow Display" — is the one board here
-with a panel, and the firmware draws on it: the level as a coloured band with
+![The round AMOLED board held in one hand, a red alert band reading score 23
+above a list of findings: a body camera, a Remote ID drone, trackers and
+followers, each with its signal strength](docs/images/alert-in-hand.jpg)
+
+*Score 23 across 27 devices: a body camera at −65 dBm, a Remote ID drone, four
+trackers and two followers, with page, baseline and light under your thumb.*
+
+The display boards — both 2.8" "Cheap Yellow Displays", the 3.5", the C5 one
+and the round AMOLED — all draw the same screen: the level as a coloured band with
 the score and device count, the top findings one per line in the same words a
 digest uses, and uptime with the version along the bottom. It is a status
 screen, redrawn every couple of seconds, and only the lines that changed are
