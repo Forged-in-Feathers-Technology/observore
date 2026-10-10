@@ -207,6 +207,33 @@ jobs:
   # assignments constantly, so the job would go red for reasons that have
   # nothing to do with this repository being correct.  Regenerating stays a
   # deliberate manual step.
+  font:
+    name: Generated font matches its generator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      # The faces the generator renders from, and Pillow to read the pixels
+      # back. Without the fonts the generator cannot run at all, which is
+      # better than it running and quietly producing blanks.
+      - name: Install the typefaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-dejavu-core fonts-dejavu-extra
+          python3 -m pip install --quiet Pillow
+      # The header is generated and was checked by nothing. It now contains an
+      # icon whose existence depends on a face actually having the codepoint:
+      # the monospace face draws U+2B21 as an empty rectangle, and that very
+      # nearly shipped. The generator refuses to emit a notdef box; this
+      # refuses a header that has drifted from the generator by any other
+      # route, including a hand edit.
+      - name: Regenerate and compare
+        run: |
+          python3 tools/gen_font.py > /tmp/font.h
+          diff -u main/observore_font.h /tmp/font.h
+
   oui-table:
     name: OUI table invariants
     runs-on: ubuntu-latest

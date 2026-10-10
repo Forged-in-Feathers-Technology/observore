@@ -54,7 +54,12 @@ void observore_watch_hand(const observore_canvas_t *c, int cx, int cy,
                           uint16_t colour);
 
 /* One character from the project's font, scaled by an integer factor. */
-void observore_watch_glyph(const observore_canvas_t *c, int x, int y, char ch,
+/* `ch` is unsigned: the font runs past printable ASCII into icons, and a
+ * signed char would turn the second of them into a negative number that fails
+ * the range check. The compiler found this one -- raising the table's last
+ * code to 0x7F made `ch > LAST` always false for a signed char, which
+ * -Werror=type-limits refused. The same trap was in the panel's draw_glyph. */
+void observore_watch_glyph(const observore_canvas_t *c, int x, int y, uint8_t ch,
                            int scale, uint16_t colour);
 
 /* A string, centred on x. Returns the width it drew. */

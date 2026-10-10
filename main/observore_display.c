@@ -390,7 +390,15 @@ static void clear_panel(void)
     }
 }
 
-static void draw_glyph(int col, int row, char c, uint16_t fg, uint16_t bg)
+/* `c` is unsigned deliberately.
+ *
+ * The font now runs past printable ASCII into icons, and `char` is signed on
+ * both toolchains here -- so the first icon at 0x7F still fits, and the
+ * second one at 0x80 would arrive as -128, fail the range check and draw a
+ * question mark. That is a bug that would appear only when somebody added an
+ * icon, which #132 says is coming. Taking the byte unsigned costs nothing and
+ * removes the trap. */
+static void draw_glyph(int col, int row, uint8_t c, uint16_t fg, uint16_t bg)
 {
     if (c < OBSERVORE_FONT_FIRST || c > OBSERVORE_FONT_LAST) {
         c = '?';
@@ -418,7 +426,7 @@ static void line(int row, const char *text, uint16_t fg, uint16_t bg)
         return;
     }
     for (int col = 0; col < COLS; col++) {
-        draw_glyph(col, row, buf[col], fg, bg);
+        draw_glyph(col, row, (uint8_t)buf[col], fg, bg);
     }
     memcpy(s_shown[row], buf, sizeof(buf));
     s_shown_bg[row] = bg;
@@ -1063,7 +1071,11 @@ static void draw_watch(const observore_status_t *st,
     if (observore_ble_can_warn()) {
         int nodes = 0;
         observore_peer_counts(now_us, &nodes, NULL);
-        BAR_ADD("   TX %d", nodes);
+        /* The mark and the count, which #132 asked for: a hexagon says this
+         * node is transmitting and the number says what that is buying.
+         * Separate string literals on purpose -- a C hex escape is greedy, so
+         * the glyph and a following digit cannot share a literal. */
+        BAR_ADD("   " OBSERVORE_GLYPH_MESH "%d", nodes);
     }
     if (st->monitors_off == 0 && st->census_quieted == 0) {
         BAR_ADD("   %lu sightings", (unsigned long)st->total_sightings);
@@ -1821,7 +1833,7 @@ static void draw_buttons(void)
             int b = button_at(col * OBSERVORE_FONT_W, (ROWS - 1) * OBSERVORE_FONT_H);
             bool hot = (b == s_pressed);
             char ch = (r == ROWS - 1) ? text[col] : ' ';
-            draw_glyph(col, r, ch, hot ? C_BLACK : C_GREY,
+            draw_glyph(col, r, (uint8_t)ch, hot ? C_BLACK : C_GREY,
                        hot ? C_AMBER : C_DARK);
         }
         s_shown[r][0] = '\0';

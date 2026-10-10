@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "observore_detect.h"
+#include "observore_font.h"
 #include "observore_version.h"
 #include "observore_heapwatch.h"
 #include "observore_mute.h"
@@ -1529,6 +1530,72 @@ static void test_a_warning_survives_the_round_trip(void)
     size_t m = observore_peer_build(&idw, buf, sizeof(buf));
     CHECK(observore_peer_parse(buf, m, &out) && out.node == id_a,
           "and it survives the wire");
+}
+
+/* The font's icons, checked without a screen.
+ *
+ * The mesh mark was very nearly an empty rectangle. DejaVuSansMono has no
+ * hexagon and draws U+2B21 as its .notdef box, and PIL reports a mask size
+ * of (8, 12) for it -- which looks like a glyph until the pixels are printed.
+ * The generator now refuses to emit a glyph that renders the same as a
+ * codepoint known to be absent, and this is the other half: the header that
+ * ships is checked for the shape of that failure.
+ *
+ * Nothing here pins the exact bitmap. Re-rendering at another size would
+ * change every row and should not fail a test; drawing a rectangle should. */
+static void test_the_font_icons_are_not_boxes(void)
+{
+    banner("the font's icons are glyphs, not notdef boxes");
+
+    /* One character, inside the table. A define pointing past the end is the
+     * other way this goes wrong, and it would draw a question mark at best. */
+    CHECK(sizeof(OBSERVORE_GLYPH_MESH) == 2,
+          "the mesh glyph is one character plus its terminator, got %zu",
+          sizeof(OBSERVORE_GLYPH_MESH));
+    const uint8_t code = (uint8_t)OBSERVORE_GLYPH_MESH[0];
+    CHECK(code > 0x7E, "it lives past printable ASCII, got 0x%02X", code);
+    CHECK(code >= OBSERVORE_FONT_FIRST && code <= OBSERVORE_FONT_LAST,
+          "and inside the table, 0x%02X in 0x%02X..0x%02X", code,
+          OBSERVORE_FONT_FIRST, OBSERVORE_FONT_LAST);
+
+    const uint8_t *g = OBSERVORE_FONT[code - OBSERVORE_FONT_FIRST];
+
+    int first = -1, last = -1, ink = 0;
+    for (int y = 0; y < OBSERVORE_FONT_H; y++) {
+        if (g[y]) {
+            if (first < 0) { first = y; }
+            last = y;
+            ink++;
+        }
+    }
+    CHECK(ink > 0, "the glyph has ink in it");
+    CHECK(ink >= 6, "and enough of it to be a shape, got %d rows", ink);
+
+    /* The .notdef box is a rectangle: its top and bottom rows are the same
+     * long run of pixels. No icon worth having starts and ends identically. */
+    CHECK(g[first] != g[last],
+          "top and bottom rows differ, so it is not a rectangle "
+          "(0x%02X vs 0x%02X)", g[first], g[last]);
+
+    /* And the box's top row is nearly the full cell. A real icon tapers. */
+    int top_bits = 0;
+    for (int x = 0; x < OBSERVORE_FONT_W; x++) {
+        if ((g[first] >> x) & 1) { top_bits++; }
+    }
+    CHECK(top_bits < OBSERVORE_FONT_W - 2,
+          "its top row is not a full-width rule, got %d of %d bits set",
+          top_bits, OBSERVORE_FONT_W);
+
+    /* Every printable character still has ink, which catches a regenerated
+     * table that lost its alignment -- space excepted, which is the one
+     * glyph that is meant to be blank. */
+    for (uint8_t c = OBSERVORE_FONT_FIRST; c <= 0x7E; c++) {
+        if (c == ' ') { continue; }
+        const uint8_t *row = OBSERVORE_FONT[c - OBSERVORE_FONT_FIRST];
+        int any = 0;
+        for (int y = 0; y < OBSERVORE_FONT_H; y++) { any |= row[y]; }
+        CHECK(any != 0, "'%c' (0x%02X) has ink", (char)c, c);
+    }
 }
 
 /* A synthetic resistive panel: what the controller would read for a press at
@@ -5045,6 +5112,7 @@ int main(void)
     test_a_guessed_clock_is_not_a_clock();
     test_a_full_census_still_learns();
     test_a_warning_survives_the_round_trip();
+    test_the_font_icons_are_not_boxes();
     test_the_census_counts_addresses_not_just_days();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
