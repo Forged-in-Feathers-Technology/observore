@@ -14,7 +14,19 @@
  * setting silently at the next namespace change.  That had already happened:
  * "ap_pass" was added with the generated console password and never reached the
  * migration table.  Now the migration is derived from this list, so it cannot
- * fall behind. */
+ * fall behind.
+ *
+ * Deriving the migration from one list was necessary and was not sufficient,
+ * because nothing checked that a setting reached the list at all.  Five did
+ * not -- "bright", "touchcal", "census", "monitors" and "meshkey" -- so the
+ * registry built to survive a namespace change had quietly stopped describing
+ * the device.  No data was lost, only because all five post-date the rename
+ * and so never existed under the old name; the next rename would have erased
+ * them, since migrate() copies this list and then erases what it copied from.
+ *
+ * tools/check_nvs_registry.py now fails the build when a key is written
+ * through this helper and is not named here, which is the part that was
+ * missing.  A convention that has to be remembered is not a mechanism. */
 #define OBSERVORE_NVS_KEYS(X)                    \
     X(MUTES,      "mutes",      OBSERVORE_NVS_BLOB) \
     X(HISTORY,    "history",    OBSERVORE_NVS_BLOB) \
@@ -26,7 +38,12 @@
     X(NOTIFY_PROV, "notify_prov", OBSERVORE_NVS_STR) \
     X(NOTIFY_USER, "notify_user", OBSERVORE_NVS_STR) \
     X(RUNS,        "runs",        OBSERVORE_NVS_BLOB) \
-    X(RETIRED,     "retired",     OBSERVORE_NVS_BLOB)
+    X(RETIRED,     "retired",     OBSERVORE_NVS_BLOB) \
+    X(BRIGHT,      "bright",      OBSERVORE_NVS_BLOB) \
+    X(TOUCHCAL,    "touchcal",    OBSERVORE_NVS_BLOB) \
+    X(CENSUS,      "census",      OBSERVORE_NVS_BLOB) \
+    X(MONITORS,    "monitors",    OBSERVORE_NVS_BLOB) \
+    X(MESHKEY,     "meshkey",     OBSERVORE_NVS_STR)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 

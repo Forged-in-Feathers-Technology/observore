@@ -250,3 +250,19 @@ jobs:
           python-version: '3.x'
       - name: Validate the generated table
         run: python3 tools/check_oui_table.py
+
+  # Five settings had been added without reaching the registry the namespace
+  # migration is generated from -- including the touch calibration and the
+  # household mesh key, both expensive to lose and neither recoverable from
+  # anywhere else. Nothing had noticed, because everything works right up to
+  # the rename that erases them.
+  nvs-registry:
+    name: Every persisted setting is registered
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: Check the NVS registry
+        run: python3 tools/check_nvs_registry.py
