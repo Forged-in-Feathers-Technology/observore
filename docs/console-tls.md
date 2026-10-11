@@ -1,17 +1,19 @@
 # The console's certificate
 
-The console is plain HTTP. This is the first half of giving it TLS ([#11]):
-the device generates its own certificate and tells you its fingerprint. It
-does not serve HTTPS yet.
-
-That split is deliberate, and it is the shape the census and the mesh both
-shipped in. The part that can be wrong quietly — a key generated badly, a
-fingerprint that does not match what a browser shows, a certificate that
-costs more heap than the board has — goes out first and gets looked at on real
-hardware, before anything depends on it. Serving comes after.
+The console is plain HTTP by default. With this option on, a board with PSRAM
+generates its own certificate at first boot, tells you its fingerprint, and
+serves the console over TLS while it is on your own network ([#11]).
 
 Off by default. Turn it on under `idf.py menuconfig` → **Observore** →
 *Serve the console over HTTPS in uplink mode*.
+
+It shipped in two halves, deliberately, in the shape the census and the mesh
+both used. The parts that can be wrong quietly — a key generated badly, a
+fingerprint matching nothing a browser shows, a certificate costing more heap
+than the board has — went out first and were looked at on hardware before
+anything depended on them. That was the right call: the first board to run the
+generating half boot-looped, and the heap threshold the serving half inherited
+turned out to be wrong by 1,513 bytes.
 
 ## What the threat actually is
 
@@ -164,16 +166,110 @@ Worth noting what reported it: the next boot said
 the crash reporting from [firmware.md](firmware.md) doing its job on a bug
 introduced two commits earlier.
 
-### A figure that is still wrong
+### The threshold that was wrong, and what replaced it
 
-That same board's heartbeat reports an internal-heap low-water mark of
-**19,092 bytes** during an uplink window. The refusal threshold described
-below is 32 KB — so as written it would refuse to serve on the one board
-class this option is for, depending on when the check happens to run.
+The generating half carried a refusal threshold of 32 KB, described at the time
+as chosen rather than measured. On hardware it refused to serve at **31,255
+bytes free** — 1,513 short — on the one board class the option exists for.
 
-That is the threshold being chosen rather than measured, caught by putting it
-on hardware. It is the first thing the serving half has to fix, with a real
-measurement taken while something is actually serving.
+What actually costs internal RAM is **one task stack**. Espressif's note that
+"one socket uses ~40kB RAM with SSL" is about mbedTLS's session buffers, and
+this project sets `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`, so on a board with PSRAM
+those come out of PSRAM. `httpd` runs a single task for every socket, so that
+stack is paid once rather than per connection.
+
+The handshake and the JSON handlers share it **sequentially**, so it needs the
+larger of the two and not their sum. Getting that wrong would have cost 6 KB of
+internal RAM on a board that serves with about 17 KB free.
+
+So the floor is now derived from the stack rather than picked: `TLS_STACK` plus
+the same 8 KB again.
+
+## Serving it, measured
+
+Run at a 12,288-byte stack first and asked what it used, then cut to 8,192 —
+the same figure the plain server uses — and re-verified. Both numbers come off
+the board, not off a spreadsheet:
+
+| | 12,288-byte stack | **8,192 (shipped)** |
+|---|---|---|
+| internal heap to start the server | 16,872 | **12,764** |
+| idle low-water, serving | 12,832 | **17,152** |
+| low-water under authenticated load | 9,828 | **13,908** |
+| httpd stack actually used | 3,312 | **3,304** |
+
+The stack is not trimmed to the 3,304 measured. 8,192 leaves 59% headroom, and
+what is unmeasured is named rather than assumed away: this was TLS 1.2 with one
+self-signed P-256 certificate and no client certificate. A longer chain has not
+been through it. Cutting to the first number that fitted is what
+`observore_touch.c` carries a comment about.
+
+### A handshake from another implementation
+
+OpenSSL, over the network, to the board:
+
+```
+Protocol version: TLSv1.2
+Ciphersuite: ECDHE-ECDSA-AES256-GCM-SHA384
+Peer certificate: CN=observore-339464, O=Observore
+Signature type: ecdsa_secp256r1_sha256
+Verification error: self-signed certificate
+
+sha256 Fingerprint=18:5E:57:A3:5E:5A:67:B9:38:B9:BE:B2:8D:7C:2E:52:...
+```
+
+**That fingerprint is the one the device printed on its own serial log, byte for
+byte.** Which is the whole point: what the device shows you out of band is what
+a client sees on the wire. The verification error is the expected result and the
+warning the fingerprint answers.
+
+TLS 1.2 rather than 1.3 because ESP-IDF does not enable
+`MBEDTLS_SSL_PROTO_TLS1_3` by default; the suite negotiated is ECDHE with an
+ECDSA signature and AES-256-GCM.
+
+### It is not slow
+
+The issue expected a three-second handshake to be a problem against a
+thirty-second uplink window. Measured, a full request including the handshake:
+
+| | |
+|---|---|
+| console page, 15,248 bytes | **0.77 s** |
+| `/api/history`, 8,993 bytes | 0.62 s |
+| `/api/census`, 5,692 bytes | 0.72 s |
+
+Session tickets are on, which is why the option **selects**
+`ESP_TLS_SERVER_SESSION_TICKETS` rather than leaving it to be remembered: asking
+`esp_https_server` for tickets without that symbol makes `httpd_ssl_start` fail
+outright with `ESP_ERR_NOT_SUPPORTED`, and the console then comes up plain
+reporting a TLS failure whose cause is nowhere near the message. That cost an
+hour of looking at heap figures that were fine.
+
+### What happens when it cannot
+
+Every refusal says which reason it was, because a console that silently came up
+plain while the owner believed it was encrypted is worse than one that says it
+could not:
+
+```
+serving plain HTTP: no certificate was generated
+serving plain HTTP: 19104 bytes of internal heap free, below the 16384 this needs to serve TLS
+could not start HTTPS (ESP_ERR_NOT_SUPPORTED); serving plain HTTP
+```
+
+And the address the device prints carries the scheme actually in use, never the
+one that was intended:
+
+```
+console at https://172.25.42.89/ or https://observore.local/ on your network
+```
+
+Under thirty concurrent requests the log shows
+`mbedtls_ssl_handshake returned -0x0050` a few times, which is
+`MBEDTLS_ERR_NET_CONN_RESET`. That is this project's own tuning working as
+designed rather than a TLS fault: `max_open_sockets` is 3 and `linger_timeout`
+is 0, so the oldest connection is reset when a fourth arrives. One person
+reading a page never sees it.
 
 ## Why P-256 and not RSA
 

@@ -31,7 +31,8 @@
  * Set through the console, stored in NVS, and never read back -- the same
  * arrangement as the notifier tokens. The console reports only whether a key
  * is present. Nothing serves it, because a key served over the LAN is a key
- * on the LAN, and until #11 that LAN is plain HTTP.
+ * on the LAN -- and that LAN is plain HTTP unless the build turns on
+ * OBSERVORE_CONSOLE_HTTPS (#11), which is off by default and needs PSRAM.
  *
  * Supplied rather than generated here, deliberately. Generating one would
  * mean showing it to somebody, and the only safe place this project shows a

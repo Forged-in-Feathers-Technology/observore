@@ -1375,9 +1375,8 @@ why each decision was made, and what went wrong on hardware before it worked.
   this firmware actually lives under
 - [Knowing what time it is](docs/time.md) — where the clock comes from, and how it
   says which source set it
-- [The console's certificate](docs/console-tls.md) — the first half of serving the
-  console over TLS: what the threat actually is, and why the fingerprint goes on
-  the glass
+- [The console over TLS](docs/console-tls.md) — what the threat actually is, why
+  the fingerprint goes on the glass, and what serving it costs a board
 - [Working on Observore](docs/development.md) — the checks, the host tests, the
   generated tables
 - [XIAO verification notes](docs/xiao-verification.md) — what is unverified on the

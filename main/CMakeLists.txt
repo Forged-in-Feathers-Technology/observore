@@ -47,6 +47,7 @@ idf_component_register(
         driver
         esp_event
         esp_http_server
+        esp_https_server
         esp_netif
         esp_timer
         espressif__mdns

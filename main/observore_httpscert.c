@@ -82,19 +82,6 @@ static const char *TAG = "observore.httpscert";
 #define CERT_PEM_MAX 1024
 #define KEY_PEM_MAX  512
 
-/* Serving a handshake costs more than making one. The outbound guard in
- * observore_update.c refuses below 20 KB; a server also holds a session for
- * the life of the connection, so this asks for more.
- *
- * Be clear that this number is CHOSEN, not measured. Nothing serves TLS yet,
- * so there is no serving measurement to derive it from: 20 KB is the figure
- * the outbound path earned, and this is that plus headroom. It wants replacing
- * with a measured low-water mark once the server exists. Calling a chosen
- * number measured is how 15,360 bytes got quoted against the wrong heap pool.
- *
- * It is a refusal, not a clamp. A console that answers over HTTP is worth more
- * than one that was supposed to be encrypted and is not there at all. */
-#define SERVE_MIN_HEAP 32768
 
 static char    s_cert[CERT_PEM_MAX];
 static char    s_key[KEY_PEM_MAX];
@@ -461,15 +448,6 @@ bool observore_httpscert_fp(uint8_t *out)
     }
     memcpy(out, s_fp, sizeof(s_fp));
     return true;
-}
-
-bool observore_httpscert_can_serve(uint32_t *free_heap)
-{
-    uint32_t free_now = heap_caps_get_free_size(OBSERVORE_HEAP_CAPS);
-    if (free_heap) {
-        *free_heap = free_now;
-    }
-    return s_have && free_now >= SERVE_MIN_HEAP;
 }
 
 #endif /* CONFIG_OBSERVORE_CONSOLE_HTTPS */
