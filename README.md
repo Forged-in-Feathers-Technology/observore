@@ -3604,11 +3604,71 @@ Read these before trusting it.
 
 ## Legal note
 
-Observore is a receiver. It observes broadcasts that are, by design, transmitted
-publicly and unencrypted. It does not deauthenticate, inject, jam, associate,
-crack, or interfere with anything. Passive reception of broadcast frames is
-lawful in most jurisdictions, but "most" is not "all", and what you do with a
-log is a separate question from how you gathered it. Check your local law.
+Observore is a receiver. It observes broadcasts that are, by design,
+transmitted publicly and unencrypted. It does not deauthenticate, inject, jam,
+associate, crack, or interfere with anything.
+
+**It never receives the content of a communication.** The Wi-Fi sniffer is
+filtered to management frames alone:
+
+```c
+wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
+```
+
+with a callback that drops anything which is not `WIFI_PKT_MGMT`. Data frames
+never reach the application — only beacons, probe requests and the vendor
+elements Remote ID travels in. Where interception law turns on content against
+metadata, which is most places, that distinction is the substance of the
+matter, and it is a property of the code rather than a promise.
+
+The one exception to "receiver" is
+`CONFIG_OBSERVORE_MESH_TX`, off in every shipped build, which makes the device
+warn other nodes over BLE. A build with it on is a radio transmitter, and
+distributing such hardware brings EU RED and FCC Part 15 into scope.
+
+### What it writes down, and for how long
+
+MAC addresses are personal data under the GDPR and the UK GDPR: they are
+identifiers that single out a device, and a device usually singles out a
+person. A home installation plausibly sits inside the household exemption. A
+board carried into public, logging the addresses of strangers to flash, is
+where that gets thin — and that is a real way to use this, not a hypothetical.
+
+So it is worth being precise about what survives a power cut:
+
+| | what it holds | how long |
+|---|---|---|
+| detection history | 48 entries: address, class, label, signal, first and last seen | until a 49th replaces the oldest |
+| mute rules | up to 128: whatever you chose to ignore — an address, a vendor prefix, a name, an advert shape | until you remove them |
+| household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
+| device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
+| peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
+
+Two things in that table are worth drawing out. The **census keeps no
+addresses** — only hashes, because the question it asks is *how many* a device
+has worn, never *which*, so there was nothing to gain by storing them. And the
+identifiable record is the **history**, which is 48 entries deep and
+overwrites itself; it is not a growing log.
+
+The console can show and clear all of it. `POST /api/history` empties the
+history, `/api/unmute?all=1` the rules.
+
+### And a note on publishing what it sees
+
+The photograph in this README was redacted after the fact, because it showed
+two fixed public addresses — a body camera's and a drone's, with its Remote ID
+serial — belonging to other people. Rotating addresses identify nobody and
+were left alone.
+
+A tool built to notice what is broadcast should not be the thing that
+publishes it. The same rule this project already had about never pasting real
+device output into documentation applies to other people's identifiers as
+much as to your own secrets.
+
+Passive reception of broadcast frames is lawful in most jurisdictions, but
+"most" is not "all", and what you do with a log is a separate question from
+how you gathered it. Check your local law. This is a description of what the
+firmware does, not legal advice.
 
 ## Credit
 
