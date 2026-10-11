@@ -1,4 +1,5 @@
 #include "observore_heapwatch.h"
+#include "observore_httpscert.h"
 #include "observore_display.h"
 
 #include <stdio.h>
@@ -420,6 +421,40 @@ static void draw_glyph(int col, int row, uint8_t c, uint16_t fg, uint16_t bg)
  * Skipped when the row already shows exactly this. */
 static void line(int row, const char *text, uint16_t fg, uint16_t bg)
 {
+    /* The row is checked, because this function writes into two arrays sized
+     * [ROWS] and had no bound at all.
+     *
+     * ROWS is the panel height in character cells: 20 on the 3.5" and on the
+     * round AMOLED, but 15 on the 2.8", which takes the Kconfig defaults of
+     * 320x240. The system page emits a running row per fact it has to report
+     * and has grown steadily -- clock source, mesh, census, brightness,
+     * battery, motion, update.
+     *
+     * Measured on the 2.8" rather than guessed, because the guess was wrong:
+     * it uses exactly 15 rows of 15. It fits, with nothing to spare, and the
+     * run-history loop below is already bounded. So there is no overflow today
+     * -- and there is no room either. One more fact on this page writes row 15
+     * into arrays that end at 14, which is what the certificate fingerprint
+     * line above would do on a 2.8" with OBSERVORE_CONSOLE_HTTPS turned on.
+     *
+     * Verified by adding a sixteenth row on that board: "a page asked for row
+     * 15 of 15 -- it does not fit this panel and was dropped", once, with no
+     * crash.
+     *
+     * A dropped row is a cosmetic fault; a write past an array is not, and it
+     * is the kind that surfaces somewhere else entirely. Reported once with
+     * the row that did it, so a page that has outgrown a panel says so instead
+     * of corrupting memory quietly. */
+    if (row < 0 || row >= ROWS) {
+        static bool said;
+        if (!said) {
+            said = true;
+            ESP_LOGW(TAG, "a page asked for row %d of %d -- it does not fit "
+                     "this panel and was dropped", row, ROWS);
+        }
+        return;
+    }
+
     char buf[COLS + 1];
     snprintf(buf, sizeof(buf), "%-*s", COLS, text ? text : "");
     if (strcmp(buf, s_shown[row]) == 0 && s_shown_bg[row] == bg) {
@@ -1523,6 +1558,31 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         snprintf(text, sizeof(text), " clock    not set -- set from console");
     }
     line(r++, text, C_WHITE, C_BLACK);
+
+#if CONFIG_OBSERVORE_CONSOLE_HTTPS
+    /* The console certificate's fingerprint, on the glass.
+     *
+     * This is the line the whole trust model rests on, and it was missing.
+     * The design says: compare what the browser shows against something an
+     * attacker on the network cannot reach. The fingerprint was printed on the
+     * serial log and nowhere else -- and a display board is precisely the case
+     * with no cable attached, which is the reason the screen was the argument
+     * for doing it this way at all. Shipped in #195 with the documentation
+     * claiming this existed. It did not.
+     *
+     * Ten bytes as five groups of four: twenty-four characters, which fits the
+     * forty-column panel beside a label. See observore_httpscert.h for why ten
+     * bytes is enough and why the full thirty-two go to serial instead. */
+    {
+        uint8_t fp[OBSERVORE_FP_BYTES];
+        char    shrt[OBSERVORE_FP_SHORT_LEN];
+        if (observore_httpscert_fp(fp) &&
+            observore_fp_short(fp, shrt, sizeof(shrt))) {
+            snprintf(text, sizeof(text), " cert     %s", shrt);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+    }
+#endif
 
     /* Whether this node transmits, said in full where there is room for it.
      * The band has the state and the count; this says what it means. */

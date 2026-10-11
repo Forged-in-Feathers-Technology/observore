@@ -898,9 +898,9 @@ config OBSERVORE_CONSOLE_HTTPS
         active one already on your network.
 
         That is also the attacker plain encryption does not stop, which is why
-        the certificate's fingerprint is printed on the serial log and shown on
-        the screen where the board has one. Compare it with what the browser
-        shows, once. A browser warning that is clicked through every visit
+        the certificate's fingerprint is printed on the serial log in full, and
+        shown as its first ten bytes on the system page of a board that has a
+        screen. Compare it with what the browser shows, once. A browser warning that is clicked through every visit
         protects nothing; the same warning answered against a fingerprint the
         device is displaying is trust on first use, the way an SSH host key
         works.
