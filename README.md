@@ -2665,15 +2665,16 @@ are carried forward rather than discarded. The mesh is off unless built in.
 ## Partition layout
 
 ```
-nvs        data nvs    0x9000     24K
-phy_init   data phy    0xf000      4K
-otadata    data ota    0x10000     8K
-ota_0      app  ota_0  0x20000  1984K
-ota_1      app  ota_1  0x210000 1984K
+nvs        data nvs       0x9000     24K
+phy_init   data phy       0xf000      4K
+otadata    data ota       0x10000     8K
+ota_0      app  ota_0     0x20000  1920K
+ota_1      app  ota_1     0x200000 1920K
+coredump   data coredump  0x3E0000   64K
 ```
 
-**The table is OTA-shaped even though OTA is not implemented**, and that is
-deliberate. The layout is the expensive part to change later: the browser
+**The table is OTA-shaped and OTA uses it**, and that was deliberate from the
+start. The layout is the expensive part to change later: the browser
 flasher writes the partition table, so a device moving to a different layout
 would silently lose whatever moved. Settling the offsets while there are few
 devices costs nothing and means it never has to happen again.
@@ -2700,8 +2701,8 @@ reference C5 and C6 DevKitC-1 kits carry 8 MB and Waveshare's C5 kit 16 MB;
 those leave the remainder unused, because an image built for more flash than
 the chip has does not boot at all, while the reverse is harmless.
 
-Slot occupancy today is **C5 74%, C6 69%, S3 56%**. The C5 is the tightest and
-the fastest growing, so CI builds every target and would fail there rather than
+Slot occupancy today is **C5 83%, C6 76%, S3 66%, ESP32 69%**. The C5 is the
+tightest and the fastest growing, so CI builds every target and would fail there rather than
 in the field, exactly as it did when the old 1500K partition overflowed by
 27 KB.
 
@@ -2726,6 +2727,72 @@ on your LAN has the console password" into "somebody owns this device
 permanently", a real escalation on a device meant to detect surveillance. That
 waits on HTTPS and a decision about signing. Reserving the layout keeps the
 option open at its cheapest moment without opening the hole.
+
+### The coredump partition, and what it cost
+
+The 3.5" CYD has ended five runs in a panic, 3.5 to 9.5 hours apart, with a
+healthy heap. The panic handler prints a backtrace to a serial port that
+nobody is watching at three in the morning. Two attempts to be watching
+failed — one of them by capturing the thing and then losing the log — and the
+run record could say *that* a panic happened but never *why*.
+
+So the table gained a 64 KB `coredump` partition. The 4 MB layout was exactly
+full, so the space came from the application slots: 1984K each down to 1920K.
+The largest image this project builds is 1594 KB, which leaves a third of a
+slot spare, and CI builds every target so an overflow fails there rather than
+in the field.
+
+**Both slots shrink by the same amount**, which is not tidiness. An OTA writes
+into whichever slot is *not* running, so a mismatched pair is a trap: an image
+that fits the slot you tested would fail on the other, half the time.
+
+**64 KB is left spare above the coredump** rather than given back to the
+slots. [#185](https://github.com/Forged-in-Feathers-Technology/observore/issues/185)
+needs an `nvs_keys` partition if NVS encryption is ever enabled, and a
+partition table change cannot reach an existing device over the air — the
+browser flasher writes the table and OTA does not. The cable upgrade should be
+spent once.
+
+**Devices still on the old table are safe.** `esp_core_dump` finds its
+partition by name at runtime, so a board without one simply never writes a
+dump. It does not fall back to a fixed offset, which on an old table would be
+the tail of that device's own `ota_1` slot.
+
+### The device reports its own crash
+
+A dump nobody reads is the same as no dump, so the next boot says what killed
+the last one:
+
+```
+I esp_core_dump_flash: Found core dump 29376 bytes in flash @ 0x3e0000
+E observore.crash: the previous run panicked in task "main" at pc 0x4009092d
+E observore.crash: backtrace: 0x4009092d 0x400908f5 0x40096812 0x400dd79f 0x401aa49b
+W observore.crash: the dump is kept in flash; read it with espcoredump.py or clear it from the console
+```
+
+Those addresses go straight into `addr2line` against the matching `.elf`:
+
+```
+0x400dd79f: app_main at main.c:676
+```
+
+ELF format rather than binary, because that is what gives
+`esp_core_dump_get_summary()` a decoded backtrace on Xtensa — the architecture
+the panicking board uses. RISC-V stores a raw stack dump instead, so the C5
+and C6 report the trap cause (`mcause`, `mtval`, `ra`, `sp`) and the stack
+needs `espcoredump.py` offline.
+
+The dump is **kept, not erased on read**: the summary is a lead, the dump is
+the evidence, and a report that vanished when somebody glanced at the console
+would be the worst of both. `POST /api/crash?clear=1` is the only thing that
+removes it, and `/api/status` carries the one-line summary as `crash`.
+
+**Verified before being trusted**, which matters for something whose whole job
+is to catch a fault that happens twice a day. A throwaway build with a
+deliberate `abort()` was flashed to a 2.8" board: it panicked, saved 29,376
+bytes, rebooted, printed the summary above, and the backtrace decoded to the
+exact line the abort was on. Waiting days for a real panic only to find
+nothing had been written would have been the expensive way to learn that.
 
 ## A note on internal RAM
 

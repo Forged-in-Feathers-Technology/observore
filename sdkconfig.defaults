@@ -102,6 +102,22 @@ CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 # allocations there, in their own defaults files.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 
+# Write a core dump to flash when the device panics.
+#
+# The 3.5" CYD has ended five runs in a panic with a healthy heap, 3.5 to 9.5
+# hours apart. The panic handler prints a backtrace to a serial port that
+# nobody is watching at three in the morning, and two attempts to be watching
+# failed -- one of them by losing the log it had captured. A dump in flash
+# survives the reboot and is still there in the morning.
+#
+# ELF rather than the binary format, because that is what gives
+# esp_core_dump_get_summary() a decoded backtrace on Xtensa -- which is the
+# architecture the panicking board uses. The device prints that summary itself
+# on the next boot, so the common case needs no host tooling at all.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_SHA256=y
+
 # A new image gets one chance to prove itself.  Without this an update that
 # boots but cannot join the network is unrecoverable without a cable, which
 # would defeat the point of updating over the air in the first place.
