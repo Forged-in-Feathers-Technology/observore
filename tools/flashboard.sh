@@ -81,6 +81,23 @@ PROFILE="boards/$BOARD.defaults"
 DEFAULTS="sdkconfig.defaults"
 [ -f "$PROFILE" ] && DEFAULTS="sdkconfig.defaults;$PROFILE"
 
+# An optional extra fragment, last so it wins, for trying an option on real
+# hardware before it is anybody's default -- OBSERVORE_CONSOLE_HTTPS was the
+# first. It is appended rather than substituted, so the board profile is still
+# read and the CONFIG_OBSERVORE_BOARD check below still has something to
+# verify: a fragment cannot be used to flash the wrong board quietly.
+#
+#   OBSERVORE_EXTRA_DEFAULTS=/tmp/https.defaults \
+#     tools/flashboard.sh waveshare-s3-amoled-143 /dev/ttyACM2
+if [[ -n "${OBSERVORE_EXTRA_DEFAULTS:-}" ]]; then
+    if [[ ! -f "$OBSERVORE_EXTRA_DEFAULTS" ]]; then
+        echo "no such defaults fragment: $OBSERVORE_EXTRA_DEFAULTS" >&2
+        exit 2
+    fi
+    DEFAULTS="$DEFAULTS;$OBSERVORE_EXTRA_DEFAULTS"
+    echo "  plus $OBSERVORE_EXTRA_DEFAULTS"
+fi
+
 # set-target first, because it writes an sdkconfig; then remove it, so the
 # profile below is actually read.  Order matters and is the whole point.
 idf.py set-target "$TARGET" >/dev/null 2>&1
@@ -90,6 +107,16 @@ idf.py -DSDKCONFIG_DEFAULTS="$DEFAULTS" build >/dev/null 2>&1
 if ! grep -qxF "CONFIG_OBSERVORE_BOARD=\"$BOARD\"" sdkconfig; then
     echo "REFUSING to flash: sdkconfig says $(grep '^CONFIG_OBSERVORE_BOARD=' sdkconfig), not $BOARD" >&2
     exit 1
+fi
+
+# Stopping after the checks, for the case where the flash itself has to be
+# driven by something else -- capturing the very first boot needs the port held
+# across the reset, which `idf.py flash` cannot do because it resets and exits.
+# The guards above have all run by this point; only the write is skipped.
+if [[ -n "${OBSERVORE_BUILD_ONLY:-}" ]]; then
+    echo "  verified $BOARD on $TARGET, NOT flashing (OBSERVORE_BUILD_ONLY)"
+    echo "  flash args: build/flash_args"
+    exit 0
 fi
 
 echo "  verified $BOARD on $TARGET, flashing $PORT"
