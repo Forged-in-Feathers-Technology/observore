@@ -14,7 +14,9 @@ make -C test test
 CI runs these on every push, alongside the credential scan, an ESP-IDF build
 for every supported target, a check that the documents and the flasher page
 still describe the release the build actually produces, a check that the links
-between the documents resolve, and a validation of the generated OUI table —
+between the documents resolve, a check that every persisted setting is in the
+registry the namespace migration is generated from, and a validation of the
+generated OUI table —
 that both tables are sorted for binary search, carry no duplicates, stay
 disjoint from each other, and index only names that exist.
 
