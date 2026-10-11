@@ -27,7 +27,15 @@ static const char *TAG = "observore.update";
 /* The published manifest is under a kilobyte. Twice that leaves room for the
  * file to grow a board or two without this quietly starting to fail, and still
  * costs less than the TLS session it arrives over. */
-#define DOC_MAX 2048
+/* A manifest longer than this is not a manifest.
+ *
+ * There is no buffer to overflow any more -- the body is scanned through a
+ * window -- so this is not about memory. It is about a far end that has
+ * stopped serving what we asked for: a captive portal, an error page, a
+ * redirect loop rendered as a body. Reading a megabyte of it through a radio
+ * to discover there is no version in it is the thing worth refusing. The real
+ * document is 2,772 bytes and grows by about 200 per board. */
+#define MANIFEST_SANE_MAX 65536
 
 /* Retry sooner than the normal interval when a check fails, but not so soon
  * that an unreachable host is retried every window -- the same reasoning as the
@@ -41,7 +49,6 @@ static int64_t  s_next_check_us;
 static bool     s_available;
 static bool     s_check_pending;
 static bool     s_check_retried;
-static char     s_doc[DOC_MAX];
 
 /* That a TLS session has run since the heap was last looked at.
  *
@@ -61,8 +68,6 @@ static char     s_doc[DOC_MAX];
  * Distinct from s_check_pending, which means somebody asked for a check and
  * stays true across a window boundary. */
 static bool     s_tls_mark;
-/* The last fetched manifest did not fit the buffer. See fetch(). */
-static bool     s_doc_truncated;
 
 bool observore_update_take_tls_mark(void)
 {
@@ -115,7 +120,26 @@ bool observore_update_check_pending(void) { return s_check_pending; }
  * esp_http_client_read_response() is used rather than the event callback
  * because the document is small and known, and a callback would have to
  * reassemble it across chunks anyway. */
-static esp_err_t fetch(char *out, size_t out_len)
+/* Read the manifest as it arrives, keeping only a window of it.
+ *
+ * The device wants exactly one string out of this document -- the version --
+ * and used to hold the whole thing to get it, in a 2,048-byte static. The
+ * published manifest is 2,772 bytes and lists every board, so it grows
+ * whenever a board is added, and the read silently kept a prefix. It worked
+ * only because the field it wants happens to be the first one in the file.
+ *
+ * There was a size guard, and it never fired: Cloudflare serves this over
+ * HTTP/1.1 with `Transfer-Encoding: chunked` and no Content-Length, so
+ * esp_http_client_fetch_headers() returns no length and the guard was skipped
+ * every time. Worse, it was a landmine -- had the server ever sent a
+ * Content-Length, the guard would have refused a 2,772-byte document outright
+ * and every device would have stopped seeing updates on a server config
+ * change nobody connected to the firmware.
+ *
+ * Streaming removes all of it. The document can be any size, the field can be
+ * anywhere in it, and the memory is 768 bytes on the stack instead of 2 KB of
+ * static -- so the boards with the least RAM get some back. */
+static esp_err_t fetch_version(char *out, size_t out_len)
 {
     esp_http_client_config_t cfg = {
         .url               = CONFIG_OBSERVORE_UPDATE_URL,
@@ -136,55 +160,64 @@ static esp_err_t fetch(char *out, size_t out_len)
         return err;
     }
 
-    int64_t len = esp_http_client_fetch_headers(c);
-    int status  = esp_http_client_get_status_code(c);
+    esp_http_client_fetch_headers(c);
+    int status = esp_http_client_get_status_code(c);
     if (status != 200) {
         snprintf(s_error, sizeof(s_error), "HTTP %d", status);
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
         return ESP_FAIL;
     }
-    if (len > 0 && (size_t)len >= out_len) {
-        /* Refuse rather than read a prefix: half a document parses into a
-         * plausible-looking version as readily as a whole one. */
-        snprintf(s_error, sizeof(s_error), "manifest too large (%lld bytes)",
-                 (long long)len);
-        esp_http_client_close(c);
-        esp_http_client_cleanup(c);
-        return ESP_ERR_INVALID_SIZE;
-    }
 
-    int got = esp_http_client_read_response(c, out, (int)out_len - 1);
+    observore_json_scan_t scan;
+    observore_json_scan_init(&scan);
+
+    char piece[256];
+    size_t total = 0;
+    int got;
+    /* Drained to the end even once the field is found, rather than closing on
+     * a half-read body: the scanner ignores further bytes, and a connection
+     * dropped mid-response is a thing the far end has to clean up. The
+     * documents here are kilobytes. */
+    while ((got = esp_http_client_read(c, piece, sizeof(piece))) > 0) {
+        total += (size_t)got;
+        observore_json_scan(&scan, "version", piece, (size_t)got);
+        if (total > MANIFEST_SANE_MAX) {
+            /* Something is wrong at the far end: a captive portal, an error
+             * page, a redirect loop served as a body. Stopping is better than
+             * reading a megabyte through a radio to find no version in it. */
+            snprintf(s_error, sizeof(s_error),
+                     "manifest is longer than %d bytes", MANIFEST_SANE_MAX);
+            esp_http_client_close(c);
+            esp_http_client_cleanup(c);
+            return ESP_ERR_INVALID_SIZE;
+        }
+    }
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
-    if (got <= 0) {
+
+    if (total == 0) {
         snprintf(s_error, sizeof(s_error), "empty response");
         return ESP_FAIL;
     }
-    out[got] = '\0';
-
-    /* The document may not have fitted, and for a while it has not.
-     *
-     * The published manifest is 2,772 bytes and this buffer is 2,048, so 725
-     * bytes have been dropped on every check. It kept working for one reason:
-     * "version" is the first field in the JSON and the only field this device
-     * reads. That is luck, not design -- reorder the document, or let the
-     * board list grow above the field, and every device stops seeing updates
-     * with no error anywhere.
-     *
-     * The buffer is not simply enlarged, because it is static and the board
-     * that most needs the check working is the board with the least internal
-     * RAM to give. Saying so is what turns luck into a known condition: if
-     * the field is still found the check proceeds, and if it is not, the
-     * message says the document did not fit rather than "no version in the
-     * manifest", which would send somebody to look at the server. */
-    if (got >= (int)out_len - 1) {
-        ESP_LOGW(TAG, "the manifest filled the %zu-byte buffer and was cut; "
-                      "only the fields near the top can be read", out_len);
-        s_doc_truncated = true;
-    } else {
-        s_doc_truncated = false;
+    if (!scan.found) {
+        snprintf(s_error, sizeof(s_error), "no version in the manifest");
+        return ESP_FAIL;
     }
+    /* Refused rather than truncated. A version is compared against the
+     * running one to decide whether to install an image; half a version
+     * string compares as a different release, which is the one outcome worse
+     * than not checking. The compiler spotted this -- the scanner's field is
+     * wider than the caller's -- and the answer is not a bigger buffer. */
+    if (strlen(scan.value) >= out_len) {
+        snprintf(s_error, sizeof(s_error), "version string is too long (%u)",
+                 (unsigned)strlen(scan.value));
+        return ESP_FAIL;
+    }
+    /* memcpy rather than snprintf: the length is checked immediately above,
+     * so the copy is provably bounded -- which snprintf's own truncation
+     * behaviour would hide rather than prevent. */
+    memcpy(out, scan.value, strlen(scan.value) + 1);
     return ESP_OK;
 }
 
@@ -246,8 +279,9 @@ void observore_update_check(void)
         return;
     }
 
+    char found[sizeof(s_latest)];
     s_tls_mark = true;
-    esp_err_t fetched = fetch(s_doc, sizeof(s_doc));
+    esp_err_t fetched = fetch_version(found, sizeof(found));
     if (fetched != ESP_OK) {
         /* With the free heap, because the first thing that goes when a board
          * without PSRAM runs short is the TLS handshake behind this request,
@@ -270,19 +304,6 @@ void observore_update_check(void)
         return;
     }
     s_check_pending = false;
-
-    char found[sizeof(s_latest)];
-    if (!observore_json_string_field(s_doc, "version", found, sizeof(found))) {
-        /* Which of the two it is matters: a server problem and a buffer too
-         * small for a document that has grown want different people to look
-         * at them. */
-        snprintf(s_error, sizeof(s_error), "%s",
-                 s_doc_truncated ? "the manifest did not fit the buffer"
-                                 : "no version in the manifest");
-        ESP_LOGW(TAG, "update check failed: %s", s_error);
-        s_next_check_us = now + RETRY_AFTER_US;
-        return;
-    }
 
     s_error[0]   = '\0';
     s_last_ok_us = now;

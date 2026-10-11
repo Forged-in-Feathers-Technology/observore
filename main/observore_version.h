@@ -42,5 +42,40 @@ bool observore_version_is_newer(const char *candidate, const char *running);
  * Deliberately not a JSON parser. It reads one known key out of a small
  * document this project publishes itself, and returns false rather than
  * guessing when the shape is not what it expects. */
+/* Finding a string field in a document that arrives in pieces.
+ *
+ * The update manifest outgrew the buffer it was read into: it is 2,772 bytes
+ * and the buffer was 2,048, so a prefix was parsed and it only worked because
+ * the one field this device reads happens to be the first one. The document
+ * lists every board, so it grows whenever a board is added.
+ *
+ * Holding the whole thing was never the point -- the device wants one string.
+ * This scans the body as it arrives through a fixed window, so the document
+ * can be any size and the field can be anywhere in it.
+ *
+ * The window carries the tail of the previous piece forward, because the
+ * interesting token will sooner or later land across a boundary between two
+ * reads. That is the case this exists for and the one a test has to cover: a
+ * scanner that only ever saw whole chunks would work for months and then miss
+ * a release because the document grew by eleven bytes.
+ */
+#define OBSERVORE_JSON_SCAN_KEEP 256   /* tail carried between pieces */
+#define OBSERVORE_JSON_SCAN_BUF  768   /* that tail, plus room for a piece */
+
+typedef struct {
+    char   buf[OBSERVORE_JSON_SCAN_BUF + 1];   /* +1: always NUL-terminated */
+    size_t len;
+    char   value[32];
+    bool   found;
+} observore_json_scan_t;
+
+void observore_json_scan_init(observore_json_scan_t *s);
+
+/* Feed the next piece of the document. Returns true once `key` has been
+ * found; the value is in `s->value`. Further pieces are ignored once found,
+ * so a caller may keep feeding or stop. */
+bool observore_json_scan(observore_json_scan_t *s, const char *key,
+                         const char *data, size_t n);
+
 bool observore_json_string_field(const char *json, const char *key,
                                  char *out, size_t out_len);

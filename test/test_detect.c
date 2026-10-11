@@ -1669,6 +1669,141 @@ static void test_the_font_icons_are_not_boxes(void)
     }
 }
 
+/* Finding a field in a document that arrives in pieces.
+ *
+ * The manifest outgrew its buffer: 2,772 bytes read into 2,048, working only
+ * because the one field this device reads is the first one in the file. The
+ * document lists every board, so it grows whenever a board is added, and the
+ * server sends it chunked with no Content-Length -- so the size guard that
+ * was supposed to catch this never fires.
+ *
+ * The case worth testing is not "does it find the field". It is the boundary:
+ * a token split across two reads. A scanner that only ever saw whole chunks
+ * would work for months and then miss a release because the document grew by
+ * eleven bytes. */
+static void test_a_field_found_across_the_pieces(void)
+{
+    banner("a version found in a document arriving in pieces");
+
+    observore_json_scan_t sc;
+    const char *doc =
+        "{\n  \"version\": \"v0.14.0\",\n  \"boards\": [{\"board\": \"x\"}]\n}";
+
+    /* Whole, in one piece. */
+    observore_json_scan_init(&sc);
+    CHECK(observore_json_scan(&sc, "version", doc, strlen(doc)),
+          "found in a single piece");
+    CHECK(strcmp(sc.value, "v0.14.0") == 0, "with the right value: %s", sc.value);
+
+    /* One byte at a time, which splits the token everywhere it can be split.
+     * If any boundary loses it, this fails. */
+    observore_json_scan_init(&sc);
+    bool got = false;
+    for (size_t i = 0; i < strlen(doc) && !got; i++) {
+        got = observore_json_scan(&sc, "version", doc + i, 1);
+    }
+    CHECK(got, "found when fed one byte at a time");
+    CHECK(strcmp(sc.value, "v0.14.0") == 0, "still the right value: %s", sc.value);
+
+    /* Split at every possible point, deliberately: the boundary is the whole
+     * reason this function exists, so every one of them is checked rather
+     * than a representative few. */
+    size_t len = strlen(doc);
+    int bad = 0;
+    for (size_t cut = 0; cut <= len; cut++) {
+        observore_json_scan_t s2;
+        observore_json_scan_init(&s2);
+        observore_json_scan(&s2, "version", doc, cut);
+        observore_json_scan(&s2, "version", doc + cut, len - cut);
+        if (!s2.found || strcmp(s2.value, "v0.14.0") != 0) {
+            bad++;
+        }
+    }
+    CHECK(bad == 0, "every one of the %zu split points finds it, %d failed",
+          len + 1, bad);
+
+    /* A document far larger than the window, with the field at the very end.
+     * This is the case a prefix read cannot do at all, and the reason the
+     * current manifest works only by luck. */
+    static char big[8192];
+    size_t at = 0;
+    at += (size_t)snprintf(big + at, sizeof(big) - at, "{\"boards\":[");
+    for (int i = 0; i < 120 && at < sizeof(big) - 200; i++) {
+        at += (size_t)snprintf(big + at, sizeof(big) - at,
+                               "%s{\"board\":\"a-rather-long-board-name-%03d\"}",
+                               i ? "," : "", i);
+    }
+    at += (size_t)snprintf(big + at, sizeof(big) - at,
+                           "],\"version\":\"v9.9.9\"}");
+    CHECK(at > 4096, "the test document is bigger than any buffer here: %zu", at);
+
+    observore_json_scan_init(&sc);
+    got = false;
+    for (size_t i = 0; i < at && !got; i += 64) {
+        size_t n = (at - i < 64) ? at - i : 64;
+        got = observore_json_scan(&sc, "version", big + i, n);
+    }
+    CHECK(got, "found at the end of a %zu-byte document", at);
+    CHECK(strcmp(sc.value, "v9.9.9") == 0, "with the right value: %s", sc.value);
+
+    /* Absent means absent, however many pieces it arrives in. */
+    observore_json_scan_init(&sc);
+    const char *novers = "{\"boards\":[{\"board\":\"x\"}],\"note\":\"none here\"}";
+    got = false;
+    for (size_t i = 0; i < strlen(novers); i += 7) {
+        size_t n = (strlen(novers) - i < 7) ? strlen(novers) - i : 7;
+        got |= observore_json_scan(&sc, "version", novers + i, n);
+    }
+    CHECK(!got && sc.value[0] == '\0', "a document with no version finds none");
+
+    /* The boundary that actually matters: the token straddling the point
+     * where the window fills and is recycled.
+     *
+     * The first version of this test split documents between *feeds* and
+     * passed with the tail-carry deliberately removed -- because the
+     * documents were far shorter than the window, so the window never filled
+     * and the recycling code never ran. A test that cannot fail is not a
+     * test. The field is placed at every offset across the recycle point
+     * instead.
+     *
+     * This is also the real manifest's shape: 2,772 bytes against a 768-byte
+     * window, so the window recycles three times before the end. */
+    for (size_t pos = OBSERVORE_JSON_SCAN_BUF - 40;
+         pos < OBSERVORE_JSON_SCAN_BUF + 40; pos++) {
+        static char doc2[4096];
+        memset(doc2, ' ', sizeof(doc2));
+        doc2[0] = '{';
+        /* Filler that cannot be mistaken for the field. */
+        memcpy(doc2 + 1, "\"pad\":\"", 7);
+        const char *tok = "\"version\":\"v1.2.3\",";
+        memcpy(doc2 + pos, tok, strlen(tok));
+        doc2[pos - 1] = ',';
+        doc2[pos - 2] = '"';
+        size_t total = pos + strlen(tok) + 1;
+        doc2[total - 1] = '}';
+
+        observore_json_scan_t s3;
+        observore_json_scan_init(&s3);
+        observore_json_scan(&s3, "version", doc2, total);
+        if (!s3.found || strcmp(s3.value, "v1.2.3") != 0) {
+            CHECK(false, "field at offset %zu across the recycle point was lost "
+                         "(found=%d value=%s)", pos, (int)s3.found, s3.value);
+            bad++;
+        }
+    }
+    CHECK(bad == 0, "the field survives at every offset across the window's "
+                    "recycle point");
+
+    /* Once found it stays found, so a caller that keeps feeding -- because it
+     * is draining a socket -- cannot lose the answer to later bytes. */
+    observore_json_scan_init(&sc);
+    observore_json_scan(&sc, "version", doc, strlen(doc));
+    CHECK(observore_json_scan(&sc, "version", "{\"version\":\"v0.0.1\"}", 21),
+          "still reports found");
+    CHECK(strcmp(sc.value, "v0.14.0") == 0,
+          "and keeps the first value rather than the last: %s", sc.value);
+}
+
 /* A synthetic resistive panel: what the controller would read for a press at
  * a given screen pixel, if the sheet were perfectly linear between `lo` and
  * `hi` on each channel.
@@ -5184,6 +5319,7 @@ int main(void)
     test_a_full_census_still_learns();
     test_a_warning_survives_the_round_trip();
     test_the_font_icons_are_not_boxes();
+    test_a_field_found_across_the_pieces();
     test_the_census_counts_addresses_not_just_days();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
