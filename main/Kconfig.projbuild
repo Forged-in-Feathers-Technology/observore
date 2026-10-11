@@ -878,4 +878,53 @@ config OBSERVORE_AP_PASSWORD
         resulting firmware will share the password you choose.  It must be at
         least 8 characters or the console SoftAP falls back to open.
 
+config OBSERVORE_CONSOLE_HTTPS
+    bool "Serve the console over HTTPS in uplink mode (needs PSRAM)"
+    default n
+    help
+        Generate a self-signed certificate on first boot and serve the console
+        over TLS while the device is on your own network (#11). Off by default.
+
+        The console is otherwise plain HTTP. Authentication landed in #10, so
+        casual access is already closed; what remains open is a listener, and
+        the session cookie crosses the LAN in the clear.
+
+        Be clear about the threat this closes. On WPA2-PSK another station
+        cannot passively decrypt your unicast traffic just by knowing the
+        passphrase -- it needs your four-way handshake, which means forcing a
+        deauthentication this device detects and scores at six, or ARP-spoofing
+        its way into the path. So the attacker worth worrying about is an
+        active one already on your network.
+
+        That is also the attacker plain encryption does not stop, which is why
+        the certificate's fingerprint is printed on the serial log and shown on
+        the screen where the board has one. Compare it with what the browser
+        shows, once. A browser warning that is clicked through every visit
+        protects nothing; the same warning answered against a fingerprint the
+        device is displaying is trust on first use, the way an SSH host key
+        works.
+
+        It is not a CA and does not pretend to be. An attacker in the path on
+        the very first visit is not covered, and nothing here will tell you so.
+
+        Two practical costs:
+
+        Internal RAM. Serving a handshake costs more than making one. Boards
+        with PSRAM reach a low-water mark of roughly 10 KB under an outbound
+        handshake; the classic-ESP32 displays reach 820 to 932 bytes. This
+        option is therefore for the PSRAM boards, and the firmware refuses to
+        serve TLS at runtime when free internal heap is short -- it serves
+        plain HTTP and says why, because a console that answers is worth more
+        than one that was meant to be encrypted and is not there.
+
+        The uplink window. The device is only associated for about thirty
+        seconds in every two and a half minutes, so a browser renegotiates
+        almost every window and a full handshake has been measured at around
+        three seconds. Session tickets are enabled to take that cost off the
+        repeat visits.
+
+        The SoftAP stays HTTP deliberately. During first-time setup there is no
+        name to put in a certificate and no fingerprint anybody has seen yet,
+        and WPA2 already protects that link with a password only you have.
+
 endmenu

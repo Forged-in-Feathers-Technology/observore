@@ -43,7 +43,9 @@
     X(TOUCHCAL,    "touchcal",    OBSERVORE_NVS_BLOB) \
     X(CENSUS,      "census",      OBSERVORE_NVS_BLOB) \
     X(MONITORS,    "monitors",    OBSERVORE_NVS_BLOB) \
-    X(MESHKEY,     "meshkey",     OBSERVORE_NVS_STR)
+    X(MESHKEY,     "meshkey",     OBSERVORE_NVS_STR)  \
+    X(TLSCERT,     "tlscert",     OBSERVORE_NVS_STR)  \
+    X(TLSKEY,      "tlskey",      OBSERVORE_NVS_STR)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 
