@@ -159,6 +159,12 @@ jobs:
       - name: Check filenames and target coverage
         run: python3 tools/check_docs_match_build.py
 
+      # The long write-ups live in docs/ now, so a heading renamed in one file
+      # can break a sentence in another with nothing about either file looking
+      # wrong. That could not happen while it was all one README.
+      - name: Links between the documents resolve
+        run: python3 tools/check_doc_links.py
+
       # The flasher page must not load its installer from someone else's
       # server. It did once, from a version that did not exist, and the page
       # responded by telling every visitor their browser was unsupported --

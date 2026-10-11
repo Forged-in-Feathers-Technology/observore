@@ -42,7 +42,13 @@ import os
 import re
 import sys
 
-DOCS = ["README.md", "web/index.html"]
+# Every document a reader could follow a flash command out of. This is a glob
+# rather than a list because the long write-ups moved into docs/ when the README
+# grew past three thousand lines, and a checker that names its own scope by hand
+# silently stops covering prose the moment that prose is moved. Naming the
+# directory means a future doc is checked by existing, rather than by someone
+# remembering to add it here.
+DOCS = ["README.md", "web/index.html"] + sorted(glob.glob("docs/*.md"))
 # Every part a release carries. ota_data_initial joined the list when the
 # partition table became OTA-shaped; leaving it out would have meant the one
 # genuinely new offset in that change was the one nothing checked.

@@ -31,7 +31,23 @@ Displays, the C5 display board that sees both bands, and the round AMOLED
 wearing its watch face — with a headless node open on its cell beside them,
 running the same build with nothing to show it on.*
 
-### Which board
+## Contents
+
+- [Which board](#which-board)
+- [What it does](#what-it-does)
+- [Why there are modes](#why-there-are-modes)
+- [Limitations](#limitations)
+- [Legal note](#legal-note)
+- [Getting started](#getting-started)
+- [Joining your network](#joining-your-network)
+- [Building](#building)
+- [The screen](#the-screen)
+- [Notifications](#notifications)
+- [How it works, in detail](#how-it-works-in-detail)
+- [Credit](#credit)
+- [Licence](#licence)
+
+## Which board
 
 The choice is not about speed or memory. It is whether the device reports to
 you over the network or to your hand.
@@ -75,7 +91,7 @@ A resistive sheet varies between assemblies of the same product, so shipping
 a profile meant shipping somebody else's measurements and hoping. The
 **calibrate** action settles it on the device instead: two presses and the
 panel in the owner's hand teaches it its own bounds. See [calibrating a
-panel](#calibrating-a-panel).
+panel](docs/display.md#calibrating-a-panel).
 
 The round one is different enough to describe separately. Waveshare's
 **ESP32-S3-Touch-AMOLED-1.43** is a round 1.43" AMOLED on an S3 with 16 MB of
@@ -121,256 +137,6 @@ actually lands. Text does not reflow around a curve legibly at eight
 pixels a character, and a page of readings clipped at the corners is worse
 than one that is smaller and whole.
 
-## Getting started
-
-You need one of the nine supported boards and a USB cable. The whole first run
-takes about ten minutes, most of it waiting.
-
-The browser flasher detects the chip and offers the builds that fit it. There is
-usually one, and sometimes a choice: three of the boards are ESP32-C5s whose
-images are not interchangeable, and the 2.8" and 3.5" displays are both plain
-ESP32s with different panels. The flasher says which is which, and the wrong
-choice is recoverable — a mismatched display build shows a blank or garbled
-screen and is fixed by flashing the other one.
-
-The console page is served gzipped, so a command-line client needs
-`curl --compressed` (a browser needs nothing).
-
-**The quickest route is the [browser
-flasher](https://observore.forgedinfeatherstechnology.com/)** — any
-Chromium-based desktop browser (Chrome, Edge, Opera, or Brave 1.69 and later),
-no toolchain. Firefox and Safari do not implement Web Serial, and no mobile
-browser does. It writes the firmware without touching the
-stored configuration, so it upgrades an existing device without losing its mute
-rules, credentials or console password. Skip to step 2 below once it finishes.
-
-To build it yourself instead you also need
-[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) **v5.5.5**, which is
-what CI is pinned to.
-
-Not "v5.5 or later", and the difference is not cosmetic. Images built on the
-v5.5 line run perfectly when flashed over USB and hang during early startup
-when booted from the second OTA slot, somewhere between the PSRAM memory test
-and the first line of application code. Every over-the-air update rolled back
-and none ever took. The same source built on v5.5.5 boots from that slot and
-confirms itself. What actually differs inside ESP-IDF was never identified,
-only that it does, which is why the pin is exact rather than a floor.
-
-**1. Build and flash.**
-
-```bash
-. ~/esp/esp-idf/export.sh
-idf.py set-target esp32s3
-idf.py build
-idf.py -p /dev/ttyACM0 flash monitor
-```
-
-The XIAO uses the S3's native USB-Serial/JTAG, so it appears as
-`/dev/ttyACM0`, not `/dev/ttyUSB0`.
-
-**2. Write down the console password.** It is generated once, on this device,
-and printed at every boot:
-
-```
-console SoftAP: "console-XXXXXX"  password: xxxxxxxxxxxx
-```
-
-You will need it in a moment, and serial is the only place it appears. See
-[The console password](#the-console-password).
-
-**3. Open the console.** Hold the BOOT button for 1.5 s. The LED goes solid and
-the log says the SoftAP is up. Join `console-XXXXXX` with the password from
-step 2 and open <http://192.168.4.1/>.
-
-If nothing happens, keep holding: the firmware prints how long it saw the
-button held, so a press slightly too short looks different from a dead button.
-
-**4. Give it your Wi-Fi.** In the **Network** panel enter your SSID and
-password, and Save. Then hold the button for 1.5 s again — it joins, and the
-log prints the address the console now lives at:
-
-```
-uplink up at 192.168.1.42
-```
-
-From here the console is on your LAN and the SoftAP is no longer needed. Note
-that it is only on your network during its uplink window, so the address
-answers for about thirty seconds out of every two and a half minutes. That is
-[deliberate](#patrol-and-uplink-alternate).
-
-**5. Optionally, set up notifications.** In the **Notifications** panel, put in
-a [Gotify](https://gotify.net/) server URL and application token, Save, then
-**Send test** while the uplink is up.
-
-**6. Leave it where it will live, and take a baseline.** Let it patrol for ten
-minutes or so, then open the console and press **Set baseline**. That marks
-everything currently in range as known and resets the score, so from then on it
-reports what is *new* rather than the whole neighbourhood.
-
-**Then expect quiet.** After a good baseline Observore should say almost
-nothing. A silent device is the normal state, not a broken one. The heartbeat
-on the serial log tells you it is still watching.
-
-### Warning the neighbours
-
-Several nodes see more than one does, and a second vantage point is the
-discriminator this project keeps failing to find on its own — three revisions
-of the `tailing` class each reached for a property of the *suspect* when the
-useful question was always about the surroundings
-([#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)).
-The listening half shipped first: a node hears its neighbours' warnings and
-costs nothing to do it, because the radio is already scanning.
-
-`CONFIG_OBSERVORE_MESH_TX` is the other half, and it is **off by default**.
-
-**What it spends is the property this device is built on.** Everything else
-here is receive-only. A node that warns can be found by direction-finding, and
-"there is an observer here" is the one thing a counter-surveillance device
-should not announce. There is an irony to pay for as well: this project
-classifies SquachWatch as a `peer-detector` precisely *because* it announces
-itself in mesh mode, so a warning Observore becomes a peer-detector in
-somebody else's device — including another Observore.
-
-**Off means the capability is absent, not disabled.** The option selects
-NimBLE's broadcaster role, so without it the code that advertises is not
-compiled and there is no runtime path to an emission. That is worth more than
-a boolean somebody could flip, and it is the same construction that keeps
-automatic suppression out of the monitors: by not having the caller.
-
-**A node with nothing to warn about stays silent.** It transmits when it has a
-finding worth passing on and not otherwise, so an idle node is exactly as
-quiet as a build without this.
-
-What it will not warn about, and why each one matters:
-
-- **anything with its monitor off** — the owner said stop reporting this, and
-  a warning is a report that leaves the box
-- **anything the census quieted** — household furniture is household *here*,
-  and broadcasting it asks the neighbours to carry a judgement about a room
-  they cannot see
-- **anything worth no points** — a peer detector or a fixture is a fact about
-  the room rather than a threat in it, and the cheapest attack on a mesh is to
-  fill it with true but useless statements
-
-One finding per burst, the heaviest currently in front of the radio. The
-findings list is already filtered by the monitors and the census, so the thing
-warned about is exactly the thing this node would report to its owner: it
-never tells a neighbour something it would not tell the person holding it.
-
-**The address is random and regenerated every burst.** The payload's node id
-is sixteen bits and deliberately coarse; leaving the device's own BLE address
-on the air would undo that, because an address that does not change says "this
-same box was here yesterday" to anyone keeping a list. A fresh non-resolvable
-address says only "an Observore is near", which is the claim being made on
-purpose.
-
-**The interval is randomised**, 90 to 150 seconds. A fixed cadence is itself a
-fingerprint: something listening for a beacon every ninety seconds exactly has
-an easier job than something listening for one in a window.
-
-**It says so while it is doing it**, in the three places that cannot be
-missed: the coloured band on the glass carries a hexagon *and the peer count*,
-the system page says `mesh  warning, N peers in range` or `listen only, never
-transmits`, and `/api/status` reports `peers: {nodes, warnings, tx}`. The
-count matters more than the state — `⬡0` means the exposure is being paid for
-and nothing is coming back, and an on/off mark hides exactly that case.
-
-The hexagon is real work rather than a character. `tools/gen_font.py` renders
-DejaVuSansMono into an 8×16 cell and covered printable ASCII only, so there
-was no hexagon to print and the band said `TX` instead. Icons now follow
-ASCII in the table, rendered from the *proportional* face — because the
-monospace one has no hexagon and draws U+2B21 as its `.notdef` rectangle.
-
-That nearly shipped as a rectangle labelled "mesh". Pillow reports a mask size
-of (8, 12) for the missing glyph, which looks like a glyph until you print the
-pixels. Three things came out of it:
-
-- **The generator refuses to emit a notdef box.** It renders U+FFFF — a
-  noncharacter no font has — and any icon whose bitmap matches it stops the
-  build.
-- **The header shows the shape.** Each icon is emitted with an ASCII-art
-  drawing above it, so the glyph can be reviewed without a screen, which is
-  the only way the rectangle was caught in the first place.
-- **A host test refuses the shape of that failure** without pinning the exact
-  bitmap: a rectangle's top and bottom rows are the same long run, and a real
-  icon tapers. Re-rendering at another size should not fail a test; drawing a
-  box should.
-
-Raising the table's last code to 0x7F also made the compiler find a latent
-bug: `char` is signed on both toolchains, so `ch > OBSERVORE_FONT_LAST` became
-always-false and `-Werror=type-limits` refused it. Both glyph routines — the
-panel's and the round watch face's — took a signed `char`, so the *second*
-icon added would have arrived as a negative number and drawn a question mark.
-Both take a `uint8_t` now. #132 said the mesh mark would not be the last icon
-this project wants; adding one is a line in `ICONS` and sixteen bytes.
-
-### Warnings your own nodes signed
-
-`trusted` was permanently false until now: the field existed so the parser
-would know a tag might follow and not mistake it for payload, and nothing
-could ever set it. One household secret fills it in.
-
-**One shared key, not a keypair each.** Per-node keys would need a pairing
-step for every pair of boards, and a key id inside a four-byte field that is
-already the thing holding a signed, positioned warning inside a 31-byte
-legacy advert. A household secret needs no pairing, and revocation is "change
-the key on the nodes you still trust", which for a handful of boards is a real
-answer rather than a shrug. The cost is stated rather than hidden: one
-compromised node compromises the tier, because every node holds the same
-secret.
-
-`POST /api/mesh?key=<64 hex characters>`, and an empty key clears it. Stored in
-NVS and **never read back**, like the notifier tokens — `/api/status` reports
-`peers: {..., trusted, key}`, where `key` is only whether one is set. Nothing
-serves it, because a key served over the LAN is a key on the LAN, and until
-[#11](https://github.com/Forged-in-Feathers-Technology/observore/issues/11)
-that LAN is plain HTTP. For the same reason the device does not *generate* one:
-showing a secret would mean a second ritual like the console password's serial
-print, and taking a key the owner already has avoids inventing it.
-
-**Why thirty-two bits of tag is enough.** Truncated HMAC-SHA256. A blind
-forgery succeeds about once in four billion, and the receiver already refuses
-a sequence that does not advance, so an attacker cannot grind against a live
-node. More to the point, the asymmetry bounds the prize: a stranger may warn
-and nothing may silence, so forging a tag buys *more weight* on a warning,
-never blindness. What it does not survive is a weak key — a four-byte tag
-confirms an offline guess — so the key wants to be long and random rather than
-a passphrase somebody chose.
-
-**Verification uses the bytes that arrived**, not a re-encoding of the parsed
-fields. Re-encoding would mean any difference between sender and receiver — a
-clamped age, a quantised coordinate — failing verification and reading as a
-forgery. `observore_peer_tag_span()` hands back exactly what was signed, and
-refuses a payload that claims a tag which did not arrive, because verifying
-against bytes past the end of a buffer is the obvious attack on a truncated
-advert.
-
-**If signing fails, the warning goes out untagged.** A tag of zeroes is still a
-tag to a receiver, and one that fails to verify is indistinguishable from an
-attack. Better to be a stranger than to look like an attacker.
-
-Verified across two boards, in three states seven minutes apart:
-
-| the two nodes | nodes | warnings | trusted |
-|---|---|---|---|
-| same key | 1 | 1 | **1** |
-| different keys | 1 | 1 | **0** |
-| same key again | 1 | 1 | **1** |
-
-The middle row is the one that matters. `trusted` falls to zero while `nodes`
-and `warnings` stay at one: the warning is still heard, still counted, still
-reported — just not trusted. And it recovers, so the tier does not latch.
-
-**A trusted warning does not yet change the score.** Warnings still contribute
-zero, exactly as before. Making the tier real and visible before letting it
-act is the same order the census took, and "how much more should a friend's
-warning count" is a separate decision with its own way of going wrong.
-
-No position is sent. The format carries one and the decoder reads one, but
-this device has no fix to put there; a GPS node is where that field starts
-being filled, and the encoder refuses zeroes rather than claiming the Gulf of
-Guinea.
-
 ## What it does
 
 **While patrolling, it listens and does not answer.** Nothing it observes can
@@ -384,7 +150,7 @@ observe it back, because nothing leaves the radio:
 | BLE warning bursts | **off unless built in** — see below |
 
 That last row is the one exception, and it is off in every default build. See
-[Warning the neighbours](#warning-the-neighbours) for what it costs and how a
+[Warning the neighbours](docs/mesh.md#warning-the-neighbours) for what it costs and how a
 build without it cannot do it at all.
 
 The Wi-Fi scan being passive matters as much as the BLE one. An active scan
@@ -532,126 +298,6 @@ Sustained presence is not lost; it has moved to where it belongs. A device does
 not *become* a follower until it has been there five minutes. Duration decides
 what something is, and the score says what is here.
 
-### The one claim persistence cannot make
-
-**`tailing`** is a follower that was beside you **while you were somewhere
-else** — not one that was present before a journey and present after it,
-which was the first attempt and which describes an entire household. A round
-trip comes home, and everything indoors is in range at both ends: one walk to
-a garden promoted twelve devices that had been sitting in the house for nine
-hours.
-
-So the evidence is presence **at the far end**, and the timing is the whole
-of it. The window opens when the access points confirm the board is somewhere
-else and closes half a minute later; only sightings inside it count.
-
-Opening it when the board was picked up was not good enough, which took a
-third walk to learn: that window starts at the front door, surrounded by
-everything that lives in the house, and the strongest reading in it is taken
-on the way out. A kitchen device measured at full strength while its owner
-was still in the kitchen looked as though it had never faded. Two of three
-promotions on a garden walk were household devices for exactly that reason. Something carried along holds its signal.
-Something left behind either goes silent or arrives twenty decibels down and
-gets loud again only when you walk back through the door — which is the same
-fade test the access points use, pointed at the suspects instead of the
-surroundings.
-
-Not fading is necessary and is not sufficient, which took a second walk to
-learn: **a device that is faint everywhere has nothing to fade.** A
-neighbour's phone heard at −72 dBm from the house and −72 dBm from the garden
-passes a fade test perfectly and looks exactly like something in a pocket. So
-two more conditions, each answering a distinct way of being wrong:
-
-| | catches |
-|---|---|
-| within 12 dB of its old strength | the house, audible but distant |
-| heard at −70 dBm or better while away | things faint everywhere, which never fade |
-| heard at least five times while away | a stranger passed once in a lane |
-
-Together they say what the class claims: close by, the whole way. That is the distinction the whole scoring argument kept
-circling: a follower *in a room* is the room, because the neighbour's phone
-through a wall outlasts anything you can measure. A follower in two places,
-with a walk in between, is not the room — it came too.
-
-It scores six, so it alerts on its own, and it is the only class in the table
-no signature can produce: the classifier cannot see it, and the tracker
-promotes into it. Promotion is one-way, because something that has followed
-you once has not stopped having done so by going briefly quiet.
-
-A *journey* is sustained movement **that reached somewhere else**, and the
-second half of that sentence was missing at first. Fifteen seconds of
-carrying is the minimum, so a knocked desk does not count; but the
-accelerometer can only say the board moved, never that it went anywhere, and
-those are different questions. Carried around one house, it promoted every
-follower in the building — ten of them in one evening — because nothing had
-left: every device in range before was in range after.
-
-So the **access points decide**. They are stationary by definition, there are
-usually a dozen in earshot indoors, and the board already scans them every
-fifteen seconds. The set in range is remembered when the board is picked up
-and compared forty seconds after it settles, in two ways, because one of them
-is not enough.
-
-**Which ones are still there.** A third or fewer surviving means somewhere
-else. In a town this is decisive: walk two streets and almost nothing
-overlaps.
-
-**How much fainter they have become.** Membership fails in the countryside,
-where the only access points for half a mile are the ones in your own house
-and they still reach the outbuildings. A barn at the end of a driveway kept
-**80%** of them, so the journey did not count — correct by the rule and wrong
-about the world. The same access points, all of them much fainter, is
-distance: twelve decibels of median fade counts as having gone somewhere,
-which is roughly four times as far away and far more than a person shifts by
-turning round. A median rather than a mean, so one access point going quiet
-behind a tractor cannot carry the answer.
-
-The question is asked every twenty seconds while walking as well as on
-settling, because standing still was never the point. Requiring the board to
-be set down and left for the best part of a minute at the far end cost a
-whole trip: a walk to a garden and back, with a pause too short to qualify,
-was judged only on arriving home — where the access points were
-twenty-five decibels *louder* than the mark taken in the garden, so nothing
-counted at all. The board is somewhere else the moment the access points say
-so.
-
-Where there are no access points at all, nothing is counted and the log says
-so — "you went nowhere" and "you arrived" would both be inventions, and the
-quiet one is safer.
-
-Nothing else uses the accelerometer: orientation tells you nothing about who
-is nearby, and a screen that rotates is a screen that draws when nobody
-asked.
-
-The cost is stated plainly, because it will happen on the first walk: **your
-own phone travels with you**, and a board that has not been told what is yours
-will report it as tailing. Take a baseline before setting off. That is also
-why the class is protected — a fingerprint rule may never silence it, and a
-baseline quiets it one address at a time.
-
-The eight boards with no accelerometer report zero journeys for ever, promote
-nothing, and behave exactly as they did.
-
-The screen lists the **heaviest finding first**, recency only breaking ties.
-That was recency alone until a crowd of promotions filled all twelve rows of
-a 466-pixel screen and a body camera would have gone off the bottom with
-everything else.
-
-- **0–2 clear** — nothing identified. LED winks once every 5 s (green)
-- **3–5 caution** — equipment that could watch. LED pulses once a second (amber)
-- **6+ alert** — equipment that is watching. LED flutters (red)
-
-The rhythm is what the XIAO's single monochrome LED can say, and it is the same
-on every board. Boards with an addressable WS2812, the C5 kits, add the
-colour on top of it. They keep the rhythm rather than sitting lit, because a
-device meant to sit unattended in a room should not also be a lit beacon
-announcing itself; colour adds a second channel of information without making
-the thing easier to spot. Brightness is deliberately low and is tunable under
-`menuconfig`.
-
-Adverts weaker than −90 dBm are discarded; they are far enough away to be
-someone else's problem and they dominate the false-positive rate.
-
 ### Channels
 
 The sniffer sweeps a list of channels, not a range, because 5 GHz channel
@@ -673,23 +319,6 @@ DFS channels are included. The radar obligations that come with them apply to
 transmitting, and this radio only ever listens. Channels the configured
 regulatory domain refuses are skipped at runtime rather than being compiled
 out, because the country setting is not known at build time.
-
-### The radio is shared, and it shows
-
-BLE and Wi-Fi share one radio. The coexistence arbiter divides it by the BLE
-duty cycle, and the relationship is sharply non-linear. Measured on a XIAO
-ESP32S3 over 40 s in a flat with 15 APs in range:
-
-| BLE window/interval | duty | BLE sightings | Wi-Fi frames sniffed |
-|---|---|---|---|
-| 100/100 ms | 100% | 1490 | **2** |
-| 60/160 ms | 37.5% | 925 | 199 |
-| 45/160 ms | 28% | 747 | 223 |
-| 30/160 ms | 18.75% | 608 | 278 |
-
-A continuously-open BLE receiver does not slow the sniffer down, it starves it
-outright. The default (60/160) gives up about a third of BLE throughput to get
-a sniffer that works. Both values are tunable under `menuconfig` → **Observore**.
 
 ## Why there are modes
 
@@ -750,6 +379,226 @@ window, or hold the button for 1.5 s to go there now.
 
 The button means "switch now" and alternation continues from there, so a single
 press can never strand the device in a mode it will not leave.
+
+## Limitations
+
+Read these before trusting it.
+
+- **MAC randomisation is followed, not defeated -- but only for BLE, and only
+  by a kind, not an individual:** phones rotate their Bluetooth address every
+  ~15 minutes. A new random address whose advert fingerprint matches a device
+  that went quiet in the last 20 minutes, at a similar signal strength, is taken
+  to be the same device, so a handset that stays two hours shows as one device
+  that stayed two hours and rotated seven times, rather than eight strangers.
+  The fingerprint identifies a *kind* of device, so two identical handsets can
+  be merged if one falls silent as the other appears; the quiet requirement
+  makes that rare, and the cost is a merged pair rather than a missed one.
+  Wi-Fi addresses rotate too and are not yet followed.
+- **Absence of evidence is not evidence of absence:** wired cameras, cellular
+  ALPR units with the radio off, and — on anything but a C5. 5 GHz devices
+  are invisible to it.
+  A clear reading means nothing was detected, not that nothing is there.
+- **Vendor prefixes identify manufacturers, not purpose:** a Ring OUI is a
+  Ring device; it is a doorbell far more often than it is surveillance aimed
+  at you. Camera-class hits are scored at 1 point for this reason.
+- **Some signatures are inferred, not documented:** the Meta company IDs and
+  several name keywords are derived from public reporting rather than vendor
+  specification, and are unverified against hardware. Treat a
+  `smart-glasses` hit as a lead.
+- **Fast Pair is noisy:** ordinary headphones advertise `0xFE2C`. It is
+  reported because Google's Find Hub trackers use it too.
+- **2.4 GHz only, unless you have a C5:** on every chip but the ESP32-C5 the
+  sniffer sweeps channels 1–13 and nothing above them. A C5 sweeps 5 GHz as
+  well, but a slice per cycle rather than all of it at once, so a 5 GHz device
+  takes longer to appear than a 2.4 GHz one.
+- **WPS is frequently not broadcast at all:** the manufacturer and model
+  reading is only as good as the access points near you, and many modern ones
+  never send the element. A survey of 150 beacons in one flat found none. The
+  parser is unit tested against malformed and hostile input, but its attribute
+  decoding has not yet met a real WPS element on air, only synthetic ones.
+- **Vendor lookup covers MA-L only:** the IEEE also issues smaller MA-M and
+  MA-S blocks, which the generator does not read, so some genuinely assigned
+  prefixes resolve to nothing. A miss is reported as unknown rather than
+  guessed at.
+- **Muting is a blunt instrument:** a `class` or `oui` rule will hide a real
+  threat that happens to share a category or vendor with something you
+  dismissed. Prefer `mac`, `name` or `fingerprint` rules where you can.
+- **The console is authenticated but not encrypted:** it asks for the console
+  password and then carries a session cookie, which stops casual and
+  accidental access, but over plain HTTP that cookie can be read by anything
+  sniffing the LAN, which on Wi-Fi is any device in range holding the
+  passphrase. Authentication is not a substitute for encryption.
+- **A device that is updating is not a device that is watching:** installing
+  firmware stops the Bluetooth stack and holds the uplink for the few minutes
+  the download takes, and the sniffer is already suspended there. That is
+  several minutes of not detecting anything, which is why an update is never
+  installed on the device's own initiative. It checks, it says so, and it waits
+  to be asked.
+- **A first update cannot arrive over the air:** an updater has to be running
+  before it can fetch anything, so a device on a release older than v0.6.0 has
+  to be flashed once over USB. After that it can update itself.
+- **Notification delivery is verified for three providers of five:** Gotify
+  and the webhook have been sent end to end from the device; ntfy accepted the
+  exact request the firmware builds; Pushover and Telegram have had their
+  request shapes checked but not delivery, since each needs an account.
+
+## Legal note
+
+Observore is a receiver. It observes broadcasts that are, by design,
+transmitted publicly and unencrypted. It does not deauthenticate, inject, jam,
+associate, crack, or interfere with anything.
+
+**It never receives the content of a communication.** The Wi-Fi sniffer is
+filtered to management frames alone:
+
+```c
+wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
+```
+
+with a callback that drops anything which is not `WIFI_PKT_MGMT`. Data frames
+never reach the application — only beacons, probe requests and the vendor
+elements Remote ID travels in. Where interception law turns on content against
+metadata, which is most places, that distinction is the substance of the
+matter, and it is a property of the code rather than a promise.
+
+The one exception to "receiver" is
+`CONFIG_OBSERVORE_MESH_TX`, off in every shipped build, which makes the device
+warn other nodes over BLE. A build with it on is a radio transmitter, and
+distributing such hardware brings EU RED and FCC Part 15 into scope.
+
+### What it writes down, and for how long
+
+MAC addresses are personal data under the GDPR and the UK GDPR: they are
+identifiers that single out a device, and a device usually singles out a
+person. A home installation plausibly sits inside the household exemption. A
+board carried into public, logging the addresses of strangers to flash, is
+where that gets thin — and that is a real way to use this, not a hypothetical.
+
+So it is worth being precise about what survives a power cut:
+
+| | what it holds | how long |
+|---|---|---|
+| detection history | 48 entries: address, class, label, signal, first and last seen | until a 49th replaces the oldest |
+| mute rules | up to 128: whatever you chose to ignore — an address, a vendor prefix, a name, an advert shape | until you remove them |
+| household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
+| device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
+| peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
+
+Two things in that table are worth drawing out. The **census keeps no
+addresses** — only hashes, because the question it asks is *how many* a device
+has worn, never *which*, so there was nothing to gain by storing them. And the
+identifiable record is the **history**, which is 48 entries deep and
+overwrites itself; it is not a growing log.
+
+The console can show and clear all of it. `POST /api/history` empties the
+history, `/api/unmute?all=1` the rules.
+
+### And a note on publishing what it sees
+
+The photograph in this README was redacted after the fact, because it showed
+two fixed public addresses — a body camera's and a drone's, with its Remote ID
+serial — belonging to other people. Rotating addresses identify nobody and
+were left alone.
+
+A tool built to notice what is broadcast should not be the thing that
+publishes it. The same rule this project already had about never pasting real
+device output into documentation applies to other people's identifiers as
+much as to your own secrets.
+
+Passive reception of broadcast frames is lawful in most jurisdictions, but
+"most" is not "all", and what you do with a log is a separate question from
+how you gathered it. Check your local law. This is a description of what the
+firmware does, not legal advice.
+
+## Getting started
+
+You need one of the nine supported boards and a USB cable. The whole first run
+takes about ten minutes, most of it waiting.
+
+The browser flasher detects the chip and offers the builds that fit it. There is
+usually one, and sometimes a choice: three of the boards are ESP32-C5s whose
+images are not interchangeable, and the 2.8" and 3.5" displays are both plain
+ESP32s with different panels. The flasher says which is which, and the wrong
+choice is recoverable — a mismatched display build shows a blank or garbled
+screen and is fixed by flashing the other one.
+
+The console page is served gzipped, so a command-line client needs
+`curl --compressed` (a browser needs nothing).
+
+**The quickest route is the [browser
+flasher](https://observore.forgedinfeatherstechnology.com/)** — any
+Chromium-based desktop browser (Chrome, Edge, Opera, or Brave 1.69 and later),
+no toolchain. Firefox and Safari do not implement Web Serial, and no mobile
+browser does. It writes the firmware without touching the
+stored configuration, so it upgrades an existing device without losing its mute
+rules, credentials or console password. Skip to step 2 below once it finishes.
+
+To build it yourself instead you also need
+[ESP-IDF](https://docs.espressif.com/projects/esp-idf/) **v5.5.5**, which is
+what CI is pinned to.
+
+Not "v5.5 or later", and the difference is not cosmetic. Images built on the
+v5.5 line run perfectly when flashed over USB and hang during early startup
+when booted from the second OTA slot, somewhere between the PSRAM memory test
+and the first line of application code. Every over-the-air update rolled back
+and none ever took. The same source built on v5.5.5 boots from that slot and
+confirms itself. What actually differs inside ESP-IDF was never identified,
+only that it does, which is why the pin is exact rather than a floor.
+
+**1. Build and flash.**
+
+```bash
+. ~/esp/esp-idf/export.sh
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+The XIAO uses the S3's native USB-Serial/JTAG, so it appears as
+`/dev/ttyACM0`, not `/dev/ttyUSB0`.
+
+**2. Write down the console password.** It is generated once, on this device,
+and printed at every boot:
+
+```
+console SoftAP: "console-XXXXXX"  password: xxxxxxxxxxxx
+```
+
+You will need it in a moment, and serial is the only place it appears. See
+[The console password](#the-console-password).
+
+**3. Open the console.** Hold the BOOT button for 1.5 s. The LED goes solid and
+the log says the SoftAP is up. Join `console-XXXXXX` with the password from
+step 2 and open <http://192.168.4.1/>.
+
+If nothing happens, keep holding: the firmware prints how long it saw the
+button held, so a press slightly too short looks different from a dead button.
+
+**4. Give it your Wi-Fi.** In the **Network** panel enter your SSID and
+password, and Save. Then hold the button for 1.5 s again — it joins, and the
+log prints the address the console now lives at:
+
+```
+uplink up at 192.168.1.42
+```
+
+From here the console is on your LAN and the SoftAP is no longer needed. Note
+that it is only on your network during its uplink window, so the address
+answers for about thirty seconds out of every two and a half minutes. That is
+[deliberate](#patrol-and-uplink-alternate).
+
+**5. Optionally, set up notifications.** In the **Notifications** panel, put in
+a [Gotify](https://gotify.net/) server URL and application token, Save, then
+**Send test** while the uplink is up.
+
+**6. Leave it where it will live, and take a baseline.** Let it patrol for ten
+minutes or so, then open the console and press **Set baseline**. That marks
+everything currently in range as known and resets the score, so from then on it
+reports what is *new* rather than the whole neighbourhood.
+
+**Then expect quiet.** After a good baseline Observore should say almost
+nothing. A silent device is the normal state, not a broken one. The heartbeat
+on the serial log tells you it is still watching.
 
 ## Joining your network
 
@@ -890,62 +739,6 @@ station MAC is printed at boot.
 
 Set `OBSERVORE_WIFI_AUTOJOIN=n` to keep full patrol coverage and reach the uplink
 only on demand via the button.
-
-### Keeping credentials out of the repo
-
-`CONFIG_OBSERVORE_WIFI_SSID` and `CONFIG_OBSERVORE_WIFI_PASSWORD` are empty in the
-tracked `sdkconfig.defaults` and must stay that way. The easy mistake is to set
-one with menuconfig, then paste it into `sdkconfig.defaults` to make it stick —
-which is how a home network password ends up in a public repository.
-
-```bash
-tools/check_no_secrets.sh            # scan tracked files
-tools/check_no_secrets.sh --staged   # scan what is about to be committed
-```
-
-Wire it up as a pre-commit hook if you intend to push this anywhere:
-
-```bash
-printf '#!/bin/sh\nexec tools/check_no_secrets.sh --staged\n' \
-  > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
-```
-
-The password is write-only from outside the device: no API returns it, and the
-console never receives it, so the field stays blank even when a network is
-configured.
-
-### Nothing left behind
-
-The other local check guards a subtler thing than a leaked password: a commit
-that left part of itself behind.
-
-```bash
-tools/check_nothing_left_behind.sh            # list what is uncommitted
-tools/check_nothing_left_behind.sh --strict   # and fail
-```
-
-```bash
-printf '#!/bin/sh\nexec tools/check_nothing_left_behind.sh --strict\n' \
-  > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
-```
-
-It exists because of one commit here. A feature was staged as `git add main
-boards README.md`, its test file was not on that list, and the feature reached
-`main` with none of its coverage. CI passed: it ran the old tests, they were
-green, and the checks that would have proved the new code works were never
-there to run. **A green tick reported the absence of a test as the success of
-one**, which is the most expensive kind of wrong a build can be.
-
-No amount of care fixes that, because the habit causing it — naming paths to
-`git add` — is fast precisely by being unexamined. So the check is mechanical:
-after a commit, is anything still uncommitted that looks like part of it? It
-deliberately ignores build output and scratch files, and deliberately notices
-an untracked file under `main/`, `test/`, `tools/` or `boards/` — a new module
-written, committed nowhere, and building fine locally because the file is on
-disk.
-
-It cannot run in CI, which is the point: CI only ever sees what was pushed,
-and this is a check about what was not.
 
 ## Building
 
@@ -1158,10 +951,11 @@ Slightly more than double, and the 2.4 GHz counts agree between the two chips,
 which is what makes the extra APs credible rather than an artefact. Everything
 in the 5 GHz column was previously invisible to this project.
 
-The BLE/Wi-Fi coexistence table below is still an S3 measurement. At the
-default 60/160 duty the C5 sniffed a comparable number of management frames per
-sweep, so the shape carries over, but the table has not been re-measured
-point-by-point on that chip.
+The BLE/Wi-Fi coexistence table in [The radio is shared, and it
+shows](docs/detecting.md#the-radio-is-shared-and-it-shows) is still an S3
+measurement. At the default 60/160 duty the C5 sniffed a comparable number of
+management frames per sweep, so the shape carries over, but the table has not
+been re-measured point-by-point on that chip.
 
 The XIAO uses the S3's native USB-Serial/JTAG, so it enumerates as
 `/dev/ttyACM0`, not `/dev/ttyUSB0`.
@@ -1246,807 +1040,6 @@ Once a network is configured the console lives on your LAN, and the SoftAP is
 only needed when you are away from it — hold the button for **4 s** to raise it,
 join `console-XXXXXX`, and open <http://192.168.4.1/>. The page lists every classified device with its class,
 MAC, signal, evidence and how long ago it was last heard.
-
-### Tests
-
-The classification, parsing and scoring logic builds and runs on the host with
-no hardware and no ESP-IDF:
-
-```bash
-make -C test test
-```
-
-CI runs these on every push, alongside the credential scan, an ESP-IDF build
-for every supported target, a check that this README and the flasher page still
-describe the release the build actually produces, and a validation of the
-generated OUI table — that both tables
-are sorted for binary search, carry no duplicates, stay disjoint from each
-other, and index only names that exist.
-
-That check deliberately does not re-download the IEEE registry to diff against.
-The registry is unreachable from GitHub's runners, and it publishes new
-assignments constantly, so such a job would fail for reasons unrelated to
-whether this repository is correct. Refreshing the table stays a deliberate
-manual step.
-
-### Regenerating the OUI table
-
-`main/observore_oui_table.h` is generated, not hand-maintained. Vendors get new
-prefixes; refresh it with:
-
-```bash
-python3 tools/gen_oui_table.py
-```
-
-Both tables live in that one generated header. The threat categories are in
-`CATEGORIES` and the benign vendor list is in `VENDORS` — add vendors there,
-not to the generated header. A prefix claimed as a threat is never also listed
-as benign.
-
-Each benign prefix costs 4 bytes of flash (the name is an index into a shared
-table, not a pointer per row). The 43 vendors shipped cost about 40 KB of
-flash. Adding more is cheap; trimming `VENDORS` is the way to claw it back.
-`idf.py build` reports how much of the app partition remains.
-
-## Ignoring what you already know about
-
-The console's **Nearby, unidentified** panel lists everything that matched no
-threat signature, busiest first, with a vendor name where one is known and an
-**ignore** button on each row. That is the intended workflow: name your own
-gear once, ignore it, and let what remains stand out.
-
-How well vendor naming works depends entirely on the radio:
-
-| Source | Vendor resolution | Why |
-|---|---|---|
-| Wi-Fi AP BSSIDs | good | access points use their real assigned MAC |
-| Wi-Fi virtual BSSIDs | none | guest/IoT SSIDs use locally-administered addresses |
-| Wi-Fi clients | usually none | modern devices randomise when probing |
-| BLE | mostly none | phones and trackers rotate their address |
-
-A blank vendor is reported honestly as either **random MAC** (the device is
-deliberately anonymous, and ignoring it only holds until it rotates) or
-**unknown** (a genuine gap in the table). Conflating those two would make the
-UI lie about what it knows.
-
-
-A detector that cries wolf at your own doorbell every day is one you stop
-reading. Anything already judged harmless can be muted, on either radio, at
-four levels of breadth:
-
-| Rule | Ignores | Survives MAC rotation | Use it for |
-|---|---|---|---|
-| `name` | a name or SSID substring | **yes** | anything that broadcasts a name |
-| `fingerprint` | the stable shape of a BLE advert | **yes** | nameless BLE devices |
-| `mac` | one exact address | no | a device with a fixed address |
-| `oui` | a whole vendor prefix | n/a | a neighbour's camera brand |
-| `class` | an entire class | n/a | every `camera` on a busy street |
-
-**Why rotation matters.** Most BLE devices change their address every few
-minutes to an hour, so a `mac` rule silences a device only until it rotates.
-Measured here, all fourteen nearby BLE devices used rotating addresses. A
-MAC-based baseline would have been worthless within the hour.
-
-### Things bolted to the building
-
-A solar gateway that broadcasts `Envoy / 1219…` from a fixed address, eighty-
-eight decibels down, was being reported as a **follower** — a class defined as
-"unidentified but persistently nearby", when it is neither unidentified nor
-going anywhere. Enphase gear is now named as a **`fixture`**, worth no points,
-and that is better than muting it: an ignore rule hides a thing, a class
-explains it, and the explanation survives **Clear ignores**.
-
-The general half matters more than the vendor. Anything publishing both a fixed
-public address and a stable broadcast name has opted out of being hard to
-identify, so persistence alone says much less about it — that is what a printer
-looks like, not what something trying not to be noticed looks like.
-
-Such a device is held to **an hour** before persistence promotes it, rather
-than the five minutes a nameless or rotating one gets. Not an exemption, and
-the distinction is the point: a cheap tracker with a fixed name from a public
-address would still be following you, and an hour beside you is worth a word
-whatever the thing calls itself. Five minutes catches the fixture in the next
-room; an hour does not.
-
-### Equipment that transmits at other radios
-
-Everything else here is equipment that watches. This is the other kind, and it
-is worth separating.
-
-**A deauthentication flood** is the most actionable thing on Wi-Fi this device
-can see. One deauth is ordinary — access points dismiss clients all day — but a
-burst of them is how a handshake is forced into the air to be captured, and how
-a camera is taken offline shortly before something happens in front of it. No
-vendor prefix can hide it, because the tell is behaviour rather than hardware:
-eight or more such frames naming one address inside ten seconds, reported once
-a minute at most.
-
-It names a victim, not a culprit. An attacker spoofs the access point's
-address, so what is reported is the address the flood was sent as. Claiming
-otherwise would be inventing an attribution the air does not carry. And the
-sniffer sits on one channel for a few seconds at a time, so a flood elsewhere
-in the band is simply missed — this finds what passes under the aerial and
-says nothing about what does not.
-
-**Hunter gear** — a Flipper Zero, a pwnagotchi, a WiFi Pineapple — scores
-three rather than six: the presence of a tool is capability, where a flood is
-an act. So hunter gear is caution on its own and alert beside something else.
-
-Two of those signatures are worth their footnotes. Flipper's Bluetooth company
-ID is `0x0E29`; the widely copied `0x0FBA` belongs to Cosonic, who make
-headsets, so every project carrying that constant reports their customers as
-hacking tools. And a pwnagotchi volunteers everything — it puts a plain-ASCII
-JSON blob in a vendor element of its own beacons so other pwnagotchis can find
-it — so the signature is one byte scan for `pwnd_tot`, with no JSON parser
-anywhere near the promiscuous callback.
-
-### Earbuds are not trackers
-
-Anything advertising Google's Fast Pair service used to arrive as a `tracker`
-worth three points — which is every pair of budget earbuds in pairing mode, and
-how a crowded cafe reads as four trackers. A person who sees that a few times
-stops believing the score.
-
-A Fast Pair advert carrying exactly three bytes of service data is the
-discoverable frame: a 24-bit model ID, which is what a device announcing itself
-to pair sends. That is now an **`accessory`** at one point. Everything else
-under the same UUID keeps full tracker weight.
-
-The asymmetry is deliberate, because no byte in this advert reliably tells a
-tag from a headphone. Mistaking a tracker for an accessory costs two points on
-a device that is **still reported and still listed**; mistaking it for nothing
-would cost the detection. Nothing is dropped here — only weighted — and a
-tracker in pairing mode is one its owner is setting up, not one following
-somebody.
-
-### Other detectors
-
-[SquachWatch](https://squachwatch.com) is another open-source detector on the
-same board family, and in its mesh mode it announces itself so that two of them
-can recognise each other. Observore reports one as **`peer-detector`**, named
-`SquachWatch`, with whatever name its owner typed.
-
-It is worth **zero points** on purpose. Another detector in the room is a fact
-about the room rather than a threat in it, and a class that moved the score
-would make a meetup read as an incident. It is still announced, because
-somebody else watching the same street is exactly the sort of thing a person
-wants to know.
-
-The signature was read out of their source rather than inferred from the air,
-and the distinction matters. The payload rides in manufacturer data under
-company ID `0xFFFF` — the Bluetooth SIG's reserved non-production ID, which is
-shared with every other hobby project that declined to squat a registered one,
-so the company alone means nothing. The four magic bytes `SQM1` are what make
-it specific, and their own header says the magic is not optional for that
-reason. A typed name is twelve bytes at a fixed offset, and it is repeated only
-while every byte of it is printable: half of somebody's chosen name is not
-their name, and an escape sequence in a field this device draws would be a
-stranger deciding what our screen does.
-
-A **fingerprint** hashes only the parts of an advert that survive rotation:
-which AD fields are present and how long they are, the manufacturer's company
-ID, the service UUIDs, and the local name. The variable payload is excluded, so
-a Find My advert fingerprints identically before and after it rotates its key.
-It is not perfectly stable — a device that varies its advert *structure* gets a
-new fingerprint, but it holds for the large majority.
-
-**Ignoring something removes it now.** Muting suppresses what arrives next and
-says nothing about what is already in the device table, which used to sit there
-until it aged out half an hour later — on a screen that reads as the ignore
-having failed, because the thing you just dismissed is still in front of you.
-Adding a rule now sweeps the table so the two agree at the moment of the
-decision. The sweep asks the matcher a non-counting question, because charging
-those rows to whichever rule covered them would inflate what each rule appears
-to have suppressed, and could retire a good rule for a population it never
-actually silenced.
-
-**A fingerprint identifies a kind of device, not an individual one.** Two
-identical trackers fingerprint the same. So a fingerprint rule is never allowed
-to silence a `tracker`, `bodycam`, `alpr`, `drone`, `smart-glasses` or
-`follower` — muting your own AirTag that way would silence a stranger's too,
-which is the exact thing this device exists to notice. The rule is enforced
-inside `observore_mute_matches()` rather than left to callers, and there is a test
-pinning it.
-
-Muted sightings are suppressed before they reach the device table: they are not
-logged, not scored, and cannot be promoted by the follower heuristic. A `class`
-rule deliberately never matches unclassified traffic, so muting `camera` does
-not quietly switch off follower detection.
-
-Rules are stored in NVS and survive a reboot. Manage them from the **Ignored**
-panel in the console, or over the API:
-
-```
-GET  /api/mutes
-POST /api/mute?mac=AA:BB:CC:DD:EE:FF
-POST /api/mute?oui=AA:BB:CC
-POST /api/mute?class=camera
-POST /api/mute?ssid=lobby
-POST /api/unmute?index=0
-POST /api/unmute?all=1
-```
-
-Each row in the device table also has an **ignore** button, which is the usual
-way to add one. The row disappears on click rather than on the next poll, and
-comes back with an error if the device rejects it.
-
-### Set baseline
-
-**Set baseline** marks everything currently in range as known and resets the
-score, so the device starts watching for what changes from *here* rather than
-reporting the whole neighbourhood. Run it where it will live, and what it flags afterwards is genuinely new.
-"In range" means everything in the device table, which holds a device for
-thirty minutes after it was last heard — so a baseline taken within half an
-hour of an alert includes the device that raised it, whether or not it is still
-advertising at that moment.
-
-It mutes detected threats too, which is the point: your own doorbell camera is
-exactly the thing you want silenced. It asks for confirmation once, and
-**Clear ignores** undoes all of it.
-
-Baseline picks the most durable rule each device supports: its name if it
-broadcasts one, else its advert fingerprint, else — only as a last resort — its
-MAC. It reports the breakdown, and counts how many rules are merely temporary
-because they had to fall back to a rotating address.
-
-**A baseline must never make the device deaf**, and until v0.9.1 it could.
-Pressed in a house, it wrote fingerprint rules for shapes that half the
-Bluetooth devices in the building broadcast, and the detector went from three
-thousand sightings an hour to twenty-five while still reporting "clear" —
-which is indistinguishable from a quiet room. It took two boards side by side
-to notice: one admitted eight thousand sightings, the other, two metres away,
-admitted six.
-
-Four things now stand between a baseline and that outcome.
-
-A fingerprint rule is written **only for a shape carried by exactly one device
-in range at that moment**. Two devices sharing a shape means the shape is a
-model, not a device, and both are muted by address instead. The baseline makes
-two passes over the table for this, because a single pass cannot know whether
-what it is looking at is shared.
-
-A name rule needs a name of at least four characters. Name rules match as
-substrings, which is right when a person types one and wrong when a baseline
-takes whatever it hears: the SSID `42` silenced a hundred different addresses
-here, each one something whose name merely contained those two characters.
-
-**A protected class is silenced by address and nothing else**, and this one
-was learned late. Protection used to be checked only on the fingerprint
-branch, and the name branch ran first — so anything broadcasting a name of
-four characters or more walked straight past it, and the comment next to the
-code promised the opposite. A Flipper Zero went unreported on two boards for a
-week because a baseline had turned `Flipper Arala75h` into a name rule, and it
-took a third board with an empty rule table, hearing the same Flipper from the
-same desk, to see it. The cost of that bug scales badly: a body camera
-broadcasting `AXON BODY 3` would have left a substring rule quieting every
-Axon Body 3 the owner ever walked past. Trackers, body cameras, plate readers,
-drones, smart glasses, hunter gear and deauthentication floods now get a rule
-naming one address, which silences the device in front of you and nothing
-else. **And the baseline says when it has done it** — `baseline: 14 ignored,
-incl 1 hunter` on the glass, a `protected` count on `/api/baseline`, and a
-sentence in the console. Silencing the thing the device exists to find should
-never be something you discover a week later.
-
-And **every rule reports what it has actually done** — how many sightings it
-has discarded and how many distinct addresses it has covered, on `/api/mutes`
-and in the console beside the rule. A fingerprint rule that turns out to cover
-more than eight addresses is describing a population rather than a device, so
-the device stops honouring it and says so. That last one is the safety net for
-the case the first two cannot see: a shape shared with devices that were not
-in the room when the baseline was taken.
-
-One exception to both rules above is made here, and only here. A `follower`
-may be silenced by name, and one on a rotating address gets a fingerprint rule
-from a baseline where a console mute would refuse one. "Follower" is a verdict about how long
-something has been near you, not about what it is; in your own home the device
-that has been near you for five minutes is your phone, and a MAC rule for it
-dies at its next rotation — which is how the same handset ends up announced
-every day. A baseline is you standing at the device saying that what is here
-now is yours, and your phones are the whole point of that. The cost is stated
-plainly: a stranger carrying the same model, advertising the same way, is quiet
-too. Trackers, drones, body-worn cameras and the rest keep their protection,
-because they are classified by what they are, and a baseline does not change
-what they are. A `follower` that keeps a fixed address gets the MAC rule, which
-is both more specific and just as durable.
-
-Dismissing a finding by tapping it on the glass follows the same rule, for the
-same reason: the tap silences the body camera in front of you, not every one
-of that model you will ever walk past.
-
-Measured on real air: fourteen devices in range, all of them rotating their
-addresses, produced three name rules and ten fingerprint rules and **zero**
-MAC rules. A minute later, after rotation, the score was still zero.
-
-Up to 128 rules are stored, in NVS, surviving reboots.
-
-### What a drone broadcasts about itself
-
-A drone complying with ASTM F3411 / Remote ID transmits, in clear and
-unauthenticated, its own position and altitude, its speed and heading, its
-serial number, and — the part that surprises people — **the location of its
-operator**. Regulation requires it, which is why it is there to be read.
-
-Observore recognised these broadcasts and labelled them `drone`, then threw the
-payload away. It now decodes it, and the finding carries where the pilot is
-standing:
-
-```
-drone   Remote ID drone   pilot 51.5080,-0.1290   -55 dBm
-```
-
-The operator's position leads where both are known, because it is the one thing
-you could not have worked out by looking up.
-
-**Silence is not evidence of no drone.** Consumer aircraft broadcast Remote ID
-because they are obliged to; anything that does not want to be found does not
-transmit it, and these radios see only 2.4 GHz Wi-Fi and BLE in any case. A
-quiet screen means *nothing announced itself*, never *the sky is clear*. If this
-is ever relied on for physical safety, that distinction is the whole thing.
-
-Three details of the decoding are worth recording, because each is a way it
-could have been quietly wrong:
-
-- **The offsets came from the reference header, not from memory.** A first draft
-  placed latitude at bytes 4–7. It is at 5–8, because `SpeedVertical` takes
-  byte 4. That one-byte error yields coordinates that look entirely plausible
-  and are wrong by continents, and the host tests now fail on it.
-- **Zero latitude and zero longitude is refused.** It is what a drone transmits
-  before it has a fix, and it is also a real place in the Gulf of Guinea.
-  Reporting it would be a confident lie about where something is, which is
-  worse than saying nothing.
-- **A pack that lies about its own geometry is refused rather than walked.** A
-  message pack declares its stride and how many messages follow; a broadcast is
-  not a trustworthy narrator, so both are checked against the format and
-  against how many bytes actually arrived.
-
-Positions are kept as the wire carries them — degrees times ten million — and
-formatted at the edge to four decimal places, about eleven metres. No floating
-point is involved, which keeps it exact and costs nothing on a chip with no
-FPU to spare. Four places is deliberate: enough for "a drone is over there",
-not enough to imply a survey.
-
-**Both transports decode, with one parser.** That is a property of the format
-rather than a convenience: over BLE the payload is the service data under UUID
-0xFFFA, and over Wi-Fi it is a vendor-specific element whose body is the ASTM
-OUI followed by a vendor type of `0x0D` — the same byte, in the same position
-relative to everything after it. The sniffer hands the element over from the
-vendor type onward, which is where the BLE service data begins, and the rest is
-identical.
-
-A position beats a name: a drone's beacon SSID is usually its model, which the
-label already says, so the SSID is the fallback when no position was broadcast
-or the element was malformed — never a replacement for one.
-
-### Hearing other nodes, without becoming findable
-
-Another Observore in range can warn this one about what it has seen. **This
-half only listens.** The device already scans BLE continuously, so hearing a
-neighbour costs nothing and adds no exposure — which is the whole reason
-receiving comes first.
-
-Transmitting is a separate, opt-in change, and not built. A node that
-broadcasts becomes findable by direction-finding, and *there is an observer
-here* is the one thing a counter-surveillance device should not announce. So a
-**receive-only node is a first-class configuration**, not a degraded one: it
-benefits from every warning in range and emits nothing.
-
-**Strangers may warn; only friends may silence.** A warning from a node this
-device cannot authenticate can draw attention and can never quiet anything.
-That asymmetry is what makes an open mesh survivable — an adversary standing up
-ten invented nodes produces *noise*, never blindness, and noise is recoverable
-in a way that silent suppression is not. In this slice it holds by
-construction: there is no suppression path at all, and a warning contributes
-**zero** to the score. The device says what it heard and whose it was, and a
-person decides.
-
-A warning rides in manufacturer-specific data under company `0xFFFF`, the SIG's
-reserved non-production ID, with four magic bytes that make it specific —
-`OBW1`. That is the same arrangement SquachWatch uses, because the company ID
-alone means nothing: every hobby project made the same honest choice. There is
-a test that adding ours did not shadow theirs.
-
-It arrives as a `peer-detector`, which [#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)
-predicted against this project before any of it was built — *a meshing
-Observore becomes a peer-detector in somebody else's device, including ours*.
-What is new is that the finding says what the neighbour was warning about:
-
-```
-peer-detector   Observore node   warns drone 51.5074,-0.1278   -48 dBm
-```
-
-Four details of the format earn their place:
-
-- **A sequence that must advance**, compared modulo the space rather than
-  arithmetically. Repeating somebody's warning back at them forever is the
-  cheapest attack on a table like this, and a plain greater-than would silence
-  a node permanently the first time its counter wrapped or it rebooted.
-- **One entry per node.** A node repeating itself must not be able to fill the
-  table and push other nodes out.
-- **Warnings expire**, after five minutes. A warning is about *now*; one kept
-  for ever would let a single sighting look like a standing alarm.
-- **A version we do not know is refused.** Unlike another project's format this
-  one is ours, and reading fields by a layout we have since changed is how a
-  position ends up in the wrong place.
-
-A tag field is parsed for its length and then ignored, because there is no key
-management yet. A tag that cannot be checked must never be mistaken for one
-that has been, so `trusted` is always false — which is also why nothing in this
-slice can be trusted enough to suppress.
-
-**Every field is as small as it is for one reason.** A legacy advert gives 24
-usable bytes once a flags element is present. The first version of the format
-spent 23 of them on a positioned warning — it fit, with one byte to spare, and
-left no room at all for a signature. Signed *and* positioned came to 27, which
-would have needed BLE 5 extended advertising.
-
-That is not a tolerable place to end up, and the reason is specific: the
-classic ESP32 in both Cheap Yellow Displays is **BLE 4.2 and cannot *receive*
-extended advertising**. Moving the format there would not merely stop those
-boards transmitting — it would make them deaf to the mesh.
-
-The alternative was to buy a Bluetooth SIG company identifier, which retires
-the four magic bytes. That is **$1,250** for four bytes. So the fields were
-made honest instead:
-
-| field | was | now | why |
-|---|---|---|---|
-| node id | 4 | **2** | eight nodes in BLE range makes 16 bits ample |
-| age | 2 | **1** | warnings expire at 300 s, so >255 described one already dropped |
-| position | 4+4 | **3+3** | coarse was the stated preference anyway |
-
-Twelve bytes bare, eighteen with a position, **twenty-two signed and
-positioned** — two spare in a legacy advert, so every board here can hear a
-signed warning that says where.
-
-Positions go on the wire as degrees × 10⁷ divided by 256, in three signed
-bytes: about 2.8 metres, against the eleven metres the four decimal places
-shown to a person already imply. The divisor is a power of two, so the
-arithmetic is exact both ways and there is no rounding decision to get wrong.
-
-The version bumped to 2 when this changed. An unknown version is refused, so an
-old node and a new one simply do not hear each other — the right failure, and
-free right now because nothing transmits yet.
-
-`/api/status` reports `peers: {nodes, warnings}`, which is how a headless
-receive-only node says whether it is hearing anything at all.
-
-### Choosing which monitors run
-
-Not everybody wants every class. Somebody watching a car park for trackers has
-no use for fleet telematics; somebody auditing a building's cameras does not
-want a follower class at all. The console's **Monitors** panel switches each
-one off, and the setting survives a reboot.
-
-**Off means "keep seeing, stop reporting".** A disabled class is still
-classified, still tracked, and still counted — it contributes nothing to the
-score, stays out of the findings, and is not notified. That costs almost
-nothing, because the device table is shared either way, and it means switching
-a monitor back on shows what has been around *all along* rather than starting a
-blank history. It is the same shape as the census: gather first, act later.
-
-**A device with monitors off never reports `clear` as though it had looked.**
-This matters more here than anywhere else in the device. An ignore rule leaves
-a trail — the rule is listed, it carries what it suppressed, and a fingerprint
-rule that covers a population retires itself. A switched-off monitor leaves
-*nothing* to find afterwards. So the count travels with the verdict everywhere
-the verdict goes:
-
-- on the glass, in the coloured band itself, beside the level
-- in the console, appended to the level: `clear — 2 monitors off`
-- in `/api/status`, as `monitors: {off, off_mask}`
-- at the top of every notification body, `(2 monitors off)` — sharing one
-  note with the census when it has quieted something too
-- in the log at every boot, naming each one
-
-The notification note **leads** the body rather than trailing it, which is what
-makes it impossible to lose. Reserving room for a trailing note was the first
-attempt, and it was not good enough — whether the note survived depended on
-where the last finding happened to land, and the test written to prove the
-reservation worked passed just as happily with the reservation removed. Written
-first there is no arithmetic to get wrong: a findings line is dropped instead,
-and `+N more` already accounts for that.
-
-**A protected class can be switched off, but only by a person.** Body camera,
-ALPR and tracker are the classes this device exists to find, and an explicit
-visible choice by the owner is different in kind from a baseline sweeping
-something up by accident — so the console allows it, behind a confirmation that
-says what it means. What stays impossible is anything *automatic* doing it: not
-a baseline, not the census, not a future mesh peer. That is enforced by
-construction — nothing but the console calls the setter — rather than by a
-flag, so the rule is kept by not adding callers. The census, which does now
-act by itself, obeys the same line from the other side: it can quiet an
-unidentified household device and can never quiet a protected class.
-
-**`unknown` is not a monitor** and cannot be switched off. It is what the
-device says when nothing matched, so hiding it would mean hiding everything the
-device could not name, which is the opposite of the point. The unclassified
-list is untouched by this feature for the same reason.
-
-**The stored value is which monitors are *off*, not which are on.** Classes get
-appended to the list as the project learns to spot new things — fifteen so far.
-Storing the on-set would mean a setting saved today has a zero where tomorrow's
-class will be, and that class would arrive switched off on every device that had
-ever saved a preference. Storing the off-set makes the default fall the safe
-way: an unknown bit is zero, zero means on, and a missing or unreadable setting
-means everything is on rather than nothing.
-
-### Learning the furniture, then acting on it carefully
-
-A baseline is a decision you make once, by hand, about a room you happen to be
-standing in. The thing it is trying to approximate is *what is always around* —
-and a stationary device is in a position to learn that by itself, over days,
-without being asked ([#132](https://github.com/Forged-in-Feathers-Technology/observore/issues/132)).
-The device keeps a census of what it keeps seeing, and now takes weight off the
-score for it — but it shipped as **learn and report, suppress nothing** and
-stayed that way for four days first.
-
-That split was deliberate rather than unfinished, and it paid for itself. Twice
-this project has silenced the thing it exists to notice — a baseline that
-blinded the device outright, and a baseline that quieted a Flipper Zero by name
-for a week — and both were judgements that had never been watched before they
-were trusted. So membership was earned, persisted and reported first, against a
-table that had time to be wrong in public. What came back off that table
-changed the rule that was going to be written: see below.
-
-**Membership is counted in days, not sightings.** Each known device carries a
-bitmap of the days it has been seen on, one bit per day, and counts as
-household at **three distinct days** inside a **sixteen-day** window. A
-doorbell seen four hundred times this evening has one day to its name. A
-visitor's phone seen three days running is household the day they leave, still
-household a week later, and forgotten a fortnight after that — decay needs no
-code, because the day falls out of the window and the bit goes with it.
-
-Conflating "furniture" and "here right now" is the mistake behind every
-revision of the follower class, which is why the rule is shaped this way: a
-device at your elbow for three hours is interesting *precisely because* it is
-not furniture.
-
-Three things about the implementation are worth knowing, because each is a
-place it could have been quietly wrong:
-
-- **An unset clock produces no day at all.** The device detects from the moment
-  it powers on and only learns the time when it next reaches a network, so
-  early sightings genuinely have no date. They are dropped. Counting them
-  against day zero would hand membership to whatever happened to be in the
-  room during the first minute after every boot, which is the opposite of
-  earning it over days.
-- **The clock jumping is normal, not an edge case.** When SNTP answers, the day
-  number goes from nothing to about nine thousand. Shifting a sixteen-bit mask
-  by nine thousand is undefined behaviour in C rather than a convenient zero,
-  so the distance is bounded before it is used, and a gap wider than the
-  window clears the mask. A clock corrected *backwards* leaves the window
-  alone rather than rewriting history it cannot reconstruct.
-- **A date the record cannot hold is refused, not truncated.** The day number
-  is sixteen bits, which runs out in 2179. A truncated day is not a near miss:
-  it silently claims a different date, and the window would then be measured
-  from it. This was found by a test asking about day 100000 and getting a
-  confident wrong answer.
-
-**Identity is the part most worth arguing with.** A device is keyed on its
-advert fingerprint where it has one, because that hashes the *shape* of the
-advert rather than the address, and the household's own phones rotate their
-addresses every fifteen minutes — keyed on the address they would never reach a
-second day, which is the case the census most wants to handle. Failing that,
-a fixed address. A random address with no stable advert shape is skipped
-entirely: it has no identity to remember, and noting it would fill the table
-with single-day entries that can never become furniture, evicting the furniture
-to do it.
-
-The weakness in that is known and is the reason the learning shipped first. A
-fingerprint identifies a *kind* of device, so two identical handsets share one,
-and the mute store already has to retire fingerprint rules that turn out to
-cover more than eight addresses. The census is measured against the same eight,
-and what that measurement found is why it dampens rather than silences at the
-ceiling.
-
-It did not take long to happen. The first bench sweep on real air listed
-twelve tracked slots carrying five distinct identities: one fingerprint
-appeared three times in a single pass and another twice, which is a device
-rotating its address across several slots — exactly what the fingerprint is
-*for* — but it is indistinguishable, from here, from two identical devices in
-one room. That is the measurement the suppression slice needs and the reason
-it is not in this one.
-
-Sixty-four devices are tracked, in NVS, and a sighting is only written when it
-is a device's first of the day — a doorbell seen constantly would otherwise
-wear the flash out recording a fact that stopped changing at breakfast. The
-sweep runs **once a minute** over what is currently tracked rather than on
-every sighting, which means a device has to still be there when the sweep comes
-round. That is a second rule arriving by accident, so it is stated rather than
-left implicit: a minute of presence, not a single frame, earns a device its day.
-
-**It is on the device's own system page**, two lines, no browser and no
-password:
-
-```
- census   28 known, 6 household
- addrs    19x1  3x2-7  6x8+
- at cap   2 of 6 household
-```
-
-The second line is the measurement this whole slice exists to produce, and the
-third is the one that decides what may be done with it. An identity at the
-ceiling is *ambiguous*; an identity that is household is one the census would
-be entitled to quiet. Where those overlap, quieting it could silence a whole
-class of device — possibly the class this exists to notice — and neither the
-spread nor the household count shows that overlap on its own.
-Identities under a single address mean a fingerprint names a device; identities
-at the eight-address ceiling mean it names a population, and quieting one would
-quiet the lot. Without a clock the line says so rather than showing zeroes that
-look like a quiet room.
-
-**The first real reading changed the plan.** Four days on one board gave
-`19x1 3x2-7 6x8+` — better than a fifth of identities at the ceiling, which is
-not a rounding error and lands exactly on the limit the mute store already
-uses to retire a fingerprint rule for describing a kind of device rather than
-one. The identities at the ceiling are almost certainly the rotating ones, the
-household's own phones: simultaneously what the census was built to quiet and
-what cannot safely be quieted by fingerprint. Suppression keyed on an advert
-shape is therefore safe only for the cases that never needed it.
-
-That is the measurement earning its keep. The slice shipped as learn-but-do-not-act
-specifically so this could be found out from data rather than discovered after
-something had been silenced.
-
-**And the overlap turned out to be total.** The figure that decides it is how
-many of the ceiling identities have become household, which needs a clock and
-so is reported on the first sweep that has one:
-
-```
-census: 21 known -- addresses 12x1 3x2-7 6x8+
-census: 21 known, 10 household
-census: 6 of 6 identities at the 8-address ceiling are household
-```
-
-Six of ten household identities are ambiguous, and **every ambiguous identity
-is household**. There is no safe subset: the identities the census most wants
-to quiet are exactly the ones whose advert shape may name a kind of device
-rather than one.
-
-So suppression keyed on a fingerprint was not built. What shipped instead is
-two rules, and one that outranks both:
-
-- **household and below the ceiling** — one device, identifiable, safe to
-  quiet. Four of ten here: the doorbell, the printer, the things that do not
-  rotate. It contributes no points and does not appear in the findings.
-- **household and at the ceiling** — down-weighted, never silenced. It keeps
-  **half** its points, rounded up so a single point never rounds to silence,
-  and stays in the findings. If the shape really is one rotating phone the
-  noise goes away; if it covers a population, a stranger's device still
-  registers. The failure mode becomes under-alarmed rather than blind, which
-  matters on a device that has been blinded twice before.
-- **a protected class, whatever else is true** — reported, always. A body
-  camera, a tracker, a drone, a Flipper, something that came with you: no
-  amount of being around every day earns the right to stop saying so. This is
-  checked *before* membership rather than after, so no later change to the
-  rule can reach a protected class by another path.
-
-A halved device is halved **before** the follower ceiling is applied, not
-after, so a dampened follower spends half as much of that class's budget as
-well. Halving the total afterwards would instead let twice as many of them
-fill it, which is the opposite of down-weighting.
-
-**None of it happens without a clock.** The day the census judges against is
-handed to the scoring by the sweep, and until the first sweep that has a date
-the day is unset and nothing is quieted at all. A board that cannot tell one
-day from another cannot know what is furniture, and it withdraws the same way:
-if the day goes away, the suppression goes with it.
-
-**And it announces itself.** The verdict band carries the count of quieted
-devices beside the level, for the same reason it carries the count of
-switched-off monitors and a stronger one — a quieted device contributes nothing
-*and* is absent from the findings, so without that number there is nothing
-anywhere on the screen to say it was ever seen:
-
-```
-  OBSERVORE  CLEAR     score 0
-  5 devices   3 quiet
-```
-
-Dampened devices are not in that count, because they are visible by being
-listed. The exact pair is on the system page, in the present tense — not how
-many identities are household, which is a fact about the stored table, but how
-many devices in front of the radio right now are having weight taken off:
-
-```
- quieted  3 silent, 2 at half
-```
-
-A notification carries it too, leading the body where it cannot be lost, and
-alongside the monitors note rather than as a second parenthetical:
-
-```
-(2 monitors off, 1 quieted as household)
-```
-
-It was reachable only through the web console at first, which needs the network
-*and* the console password — and that password is printed when the SoftAP comes
-up and nowhere else. So a board with a screen and no browser to hand held this
-and had no way to say it: the same shape of fault as a brightness setting you
-cannot reach from a screen too dim to read.
-
-`/api/status` reports it as `census: {known, household, days, quieted,
-dampened}`. The first pair is what the table has learned — `known` climbing
-while `household` stays at zero would mean the rule is never being satisfied,
-and there is no other way to see that from outside. The last pair is what is
-being done about it right now, which is the only thing that explains the
-score.
-
-### Counting the addresses, which is the number that decides the next step
-
-The console grows a **Household census** panel listing what the device has
-learned: each identity, how many of the required days it has, whether it counts
-as household, and **how many distinct addresses it has been seen under**. The
-same thing is on `/api/census`, which like the rest of the detection data needs
-the console password.
-
-The address count is the column that matters, and it is there because of a
-limitation rather than a feature. An identity seen under many addresses is
-*ambiguous*: either one device rotating its address — which is precisely what
-keying on the advert's shape is for — or several identical devices sharing that
-shape. **Nothing here can tell those apart**, and no amount of further
-cleverness on one device will. What the count can say is how often the
-ambiguous case arises at all, and that is the fact which decides whether
-suppression keyed on a fingerprint is viable. The mute store already retires a
-fingerprint rule that covers more than eight addresses for exactly this reason;
-the census is measured against the same eight so the two compare directly.
-
-It is a true count of distinct addresses, not a count of changes — up to eight,
-after which it saturates and says so with a `+`. At the limit, "eight" and
-"eight and still arriving" mean different things about a device, and the
-difference is lost by a bare count. The addresses are stored as sixteen-bit
-hashes, because the question is how many rather than which, and they do **not**
-decay with the day window: a device that rotated through eight addresses a
-fortnight ago really has been seen under eight. Membership is a claim about
-now; this is a claim about what the identity is.
-
-**What a full table gives up, and why it was wrong.** The table holds 64
-identities. When it filled, the entry with the oldest day went — on the
-reasoning that anything genuinely around every day is among the most recently
-seen. The reasoning is sound; the implementation of it had a hole.
-
-On a stationary board everything in range is seen again every day, so every
-entry carries today's date, no entry is older than any other, and a scan for
-the smallest date returns the *first slot every time* — whatever is in it. One
-slot becomes a revolving door while the other sixty-three never move, and what
-is in that slot may be two days into becoming furniture while fifty-four
-single-day strangers sit untouched beside it. The cost is bounded — one entry,
-not the table — but it is paid by the same entry every run, so that identity
-can never establish itself.
-
-The date was never the thing worth ranking on. How much an entry has shown is:
-
-1. **Not household before household.** The table exists to remember furniture;
-   evicting furniture to make room for a stranger is the one move that defeats
-   the whole structure.
-2. **Fewer distinct days before more.** A single-day entry has shown nothing
-   yet; a two-day entry is one evening away.
-3. **Older before newer** — the original rule, kept as the tie-break it should
-   always have been.
-
-Household-ness is measured against the day being asked about rather than the
-stored mask, so an identity whose three days have fallen out of the window is
-not furniture any more and its place is exactly the one that should go.
-
-The test for this was written twice. The first version passed under both
-rules, because the scenario it built had entries with mixed dates — which is
-the case the old rule handles correctly. The one that bites needs every entry
-to carry the same date and *different* numbers of days behind it, which is an
-ordinary morning on a board that does not move.
-
-**A full table says so.** The bench board sat at `64 known, 2 household` for
-days and nothing distinguished a census that had stopped learning from one
-that had finished. The count now reads `64 known (full)` on the screen and in
-the boot log, and `/api/census` reports `max` and `full`.
-
-**A census saved by v0.13.0 is discarded on upgrade**, because the stored entry
-grew to hold the address set. The blob now carries a header saying which code
-wrote it, and the reason is worth stating: the old entry was eight bytes and
-this one is larger, so an old table with the right number of entries divides
-evenly into the new entry size and would have restored as a smaller number of
-plausible-looking nonsense. That is the same trap the touch calibration fell
-into, and the answer is the same — record the provenance rather than try to
-recognise the shape. The device says so and rebuilds over the following days.
 
 ## The screen
 
@@ -2197,247 +1190,6 @@ statement about a whole room; one tap on one row is not.
 Both confirmations lapse after five seconds and are cancelled by leaving the
 page, so a press nobody meant — a resistive panel under a sleeve, a board
 face-down on a desk — does nothing.
-
-### The pocket watch face
-
-On the round board the first page is a watch. Hour and minute hands, the date
-where a pocket watch keeps it, and a silver ring — and that is all it is until
-you touch it. The seconds hand and the button bar appear for fifteen seconds
-after a tap and then go away again, because a bar reading *page / baseline /
-light* across a watch face gives the game away as surely as a warning banner
-would.
-
-The verdict is there, but only as a **mark**: the twelve hour markers are grey
-while things are clear, amber at caution and red at alert. Nothing else on the
-page changes, there is no text, and a glance from across a room reads as
-somebody checking the time. A device whose screen announces that it has found
-a body camera is a device that announces it to the person wearing one.
-
-Minute ticks are deliberately absent — at this radius they turn into a grey
-band — and the hour hand moves with the minutes, as a real one does, which is
-720 positions round the dial rather than twelve. If the clock has never been
-set the face says `not set` rather than drawing midnight, which is what an
-unset clock would otherwise claim with total confidence.
-
-**The dial walks, slowly, so the panel does not keep it.** An AMOLED ages
-where it is lit, and this page is the one thing on the device that holds still
-indefinitely: a bright ring and twelve markers in the same pixels for as long
-as the device is on. So the whole face steps around a circle three pixels
-across, eight positions, one step a minute, which means no pixel holds a
-bright element for more than a few minutes at a time. The dial gives up three
-pixels of radius to pay for the room, out of 229.
-
-Three details make it invisible rather than merely present. The positions sit
-on a circle rather than a raster, so consecutive steps are adjacent and the
-dial never jumps across the face. The step comes from the clock rather than
-from a counter, so it is continuous across a reboot — a device restarted every
-morning would otherwise begin every day on the same eight pixels. And it is
-held still while the face is awake: the walk is about two pixels and nobody
-would call it wrong, but a dial that twitches while you are looking at it is a
-thing you would notice, and burn-in accrues over the hours when nobody is.
-
-The arithmetic for it lives in `observore_watch.c` beside the hands rather
-than in the display, so the host tests can hold it to the rule that matters:
-that the ring keeps its four-pixel margin at *every* step of the walk, not
-just at the one it happened to be drawn at on the bench. Checking only that
-the ring stays on the glass would have passed a dial that never paid for the
-walk at all — it would still have fitted, by one pixel, sitting on the bezel.
-
-### Brightness that follows the room
-
-The Cheap Yellow Displays carry a photoresistor, and on the 3.5" board it is
-GPIO34 — found by probing the pins the display and touch leave free and
-watching which one moved when a hand covered the screen. With
-`CONFIG_OBSERVORE_DISPLAY_LDR_GPIO` set, the backlight gains a fifth setting,
-**Auto**, which is the default on a board that has the sensor: a bright panel
-in a dark room announces the device, and asking a person to remember to dim it
-defeats the point.
-
-**The sensor learns its own range rather than being told one.** The first
-version had fixed thresholds taken from a bare board where covering it reached
-1,700 counts. On a board in a case they were useless: the room produced 1,157
-to 1,298, the whole span below the second edge, so two of the four steps could
-never be reached and the screen simply stayed bright. A case over the
-photoresistor is enough to do that, and nobody should have to know it
-happened. So the extremes seen are remembered and the steps divide whatever
-range the board actually experiences — measured afterwards on that same board:
-657 to 997, using all four steps, and in the opposite direction from the bare
-board, which the adaptive version does not care about either.
-
-It holds still until it has seen at least 120 counts of variation, because in a
-room of unchanging light every flicker would otherwise swing the backlight.
-The level follows twice a second, with hysteresis at eight per cent of the
-learned span, since a reading sitting on a boundary makes the panel pulse every
-time somebody passes a lamp.
-
-It cannot do better than that. **The board has no way to tell whether it is on
-USB or the cell**, so "dim on battery, bright when plugged in" is not
-available on this hardware — the same finding as the missing battery
-percentage. Ambient light is a fair proxy, since the dark room where the screen
-should be dim is usually also where the battery matters.
-
-### Brightness without touch
-
-The backlight level is also on the console, under **Screen**, for a board that
-has a panel but no touch — otherwise there would be no way to dim it. The
-panel is hidden entirely where there is no screen rather than shown as a
-control that refuses.
-
-**Wi-Fi buffers belong in PSRAM where there is any.** The round board's
-internal heap floor sat at about **three kilobytes**, reached during patrol
-and landing on nearly the same number across runs hours apart — the signature
-of a large allocation that only just fits, rather than of a leak. Patrol is
-when the sniffer is switched on and off every cycle and the driver takes its
-thirty-two dynamic receive buffers, out of internal memory, on a board with
-eight megabytes of PSRAM holding nothing but a watch face.
-
-Moving them raised the floor to **eighteen kilobytes**, six times the
-headroom, with no measurable cost to sniffing: 99.7% of frames still
-captured. It also made the largest free internal block *smaller*, which
-broke a different thing — the fifteen-kilobyte DMA buffer the panel clear
-allocated per call no longer fit. That buffer is allocated once at startup
-and shared now, which is better anyway: a block taken and released
-repeatedly is a block that fragments the heap it lives in.
-
-**On the 3.5" board's battery connector.** It charges a cell and reports
-nothing about it — with one failure that looks exactly like the connector not
-working at all.
-
-A lithium pack with a protection board that has been taken below roughly 2.5 V
-**latches off**. Its terminals then read zero, the board's charger sees nothing
-to charge and never starts, and the symptom is a device that goes dark the
-moment USB is unplugged. That is indistinguishable, at the connector, from a
-board with no charge circuit fitted — which is a real possibility on other
-boards in this family and sent one afternoon looking in the wrong place.
-
-The recovery is an external charger that will push a latched pack, or simply a
-known-good source; the board cannot do it. Worth checking polarity with a
-meter first regardless, because this family is reported to wire its JST
-connector against the usual convention, and reverse-feeding a lithium cell is
-a fire risk rather than an inconvenience. On the bench board here the polarity
-was correct.
-
-**Charging while it runs needs more current than a computer's USB port gives.**
-With a charged cell on the connector and the board plugged into a laptop port,
-it boot-loops continuously. On a proper USB supply with the same cell attached
-it runs fine, and either source on its own has always been fine. So the rule is
-about the *supply*, not about the combination: charge it from a wall adapter, or
-charge the cell off the board.
-
-The mechanism, because the symptom is misleading enough to be worth writing
-down. Each cycle reaches exactly the same point and stops:
-
-```
-I (685) observore: Observore ... starting -- board cyd-3248s035r-st7796
-```
-
-Always 685 ms, across eighty-nine consecutive cycles. That is not noise; it is
-a deterministic trigger, and the step immediately after that line is
-`observore_wifi_init()` — the radio powering up, which is the largest current
-step in startup. Add the charger drawing from the same VBUS and the port cannot
-hold the rail.
-
-The confirming detail is that the **USB-serial bridge resets too**: the device
-node re-enumerated eighty-nine times, which an ESP32-only fault cannot do. It
-is VBUS collapsing, not the 3.3 V regulator, and not firmware. The intermittency
-fits as well — charge current is highest into a cell that has been sitting and
-tapers as it fills, so the margin moves while you watch.
-
-One practical trade: a wall adapter fixes it and takes the serial console with
-it. For bench work, one supply at a time remains the simpler habit. The three ADC-capable pins the display and touch leave free
-were probed on a board running from a battery: 35 and 39 read zero, and 34
-swung from 1,101 to 1,734 counts when a hand covered the screen — that is the
-ambient light sensor, not a supply. A percentage would need a divider soldered
-from the cell to a free pin. The run history answers the question that matters
-without any of that: the figure above, 25.1 hours, was measured rather than
-estimated.
-
-That board does not send notifications. It cannot: the notifier is a build
-option (`CONFIG_OBSERVORE_NOTIFIER`) and the CYD profile leaves it out, which
-is what makes the port fit. Every memory problem this project has had was on
-the uplink and most of it was the TLS handshake behind a notification, so the
-board with the least RAM and no PSRAM is better off without the code than with
-it switched off. Off means absent: the console hides the panel, and asking to
-configure a provider says "this build has no notifier". Any board can be built
-that way; the CYD is the one that is.
-
-The profiles are named for the panel controller, `cyd-2432s028r-st7789` and
-`cyd-2432s028r-ili9341`, not just the product, because the same product ships
-with either, a build for one shows garbage on the other, and the chip is
-identical so the flasher cannot tell them apart. If you do not know which you
-have, flash one: the wrong one is a negative or has red and blue swapped, and
-the right one is the other build. The ST7789 profile was settled on the bench;
-the ILI9341 one carries the settings every other project uses for that
-controller and is waiting for someone with the board to confirm them (an
-issue with a photo is all it takes). Three things about the ST7789 panel
-were settled on the bench against what is written about it: it does not want
-colour inversion, the SPI path does not byte-swap for you, and the panel driver
-returns before DMA has read the buffer you handed it. Each is a build setting
-or a comment where the next revision will look.
-
-### Calibrating a panel
-
-A resistive sheet does not read the same from one assembly to the next, so the
-bounds compiled into a profile are one unit's measurements — ours. If presses
-land a row or two off where you aimed, the panel in your hand simply reads
-differently, and the fix is on the device rather than in a rebuild.
-
-**`calibrate`** is the fourth action on the system page, on the boards that
-have a resistive panel. It shows a target near one corner and then near the
-other, and stores what it measured in NVS, where it survives an update like
-the Wi-Fi details do. The button reads `recalibrate` afterwards. It reads the
-**raw** channels rather than the mapped ones, because the mapping is the thing
-being corrected.
-
-Press the middle of each cross rather than the corner itself. The bezel
-overlaps the glass on these boards and a press right at the edge often does
-not register at all — which is how the 3.5" panel's first calibration came
-out short and squashed its bottom three rows together. That is also why the
-targets sit two characters in from the edge, and why the arithmetic scales the
-measured span back out to the full sheet instead of assuming the press landed
-where the cross was drawn. A stored calibration with no extent is ignored
-rather than divided by.
-
-A capacitive panel has nothing to calibrate: the FT3168 reports panel pixels
-directly, so the round board has no such action and never needed one.
-
-**A calibration saved before v0.13.0 is discarded, and has to be done again.**
-Until then the arithmetic paired each touch channel with the wrong screen axis,
-so every calibration written by an older build is wrong -- and keeping one
-across an upgrade would look exactly like the bug never being fixed, because
-the symptom is identical. The device says so on the serial log and falls back
-to the compiled bounds, which are merely somebody else's measurements rather
-than impossible ones.
-
-That check is on *provenance*, not on the numbers, and the difference is worth
-recording because the first attempt got it wrong. Recognising a bad calibration
-by its values looks easy -- a span wider than the converter can read, an
-endpoint below zero -- and does not work. Extrapolating from inset targets
-assumes the sheet is linear, and near the bezel it is not quite, so a correct
-calibration can overshoot both ends by a few counts and exceed the range too.
-One board's bad bounds were 136 counts over, well inside any tolerance wide
-enough to admit a real one. And on a panel whose usable range is narrower, the
-same bug produces bounds entirely inside the valid range and is undetectable by
-value at all. So the stored calibration now records which arithmetic made it,
-and anything that does not say is not trusted.
-
-**Porting a new board** is the case calibration does not cover, because two
-of the three variables are structural rather than per-unit: whether the touch
-axes are crossed relative to the landscape display, and which way each one
-runs. Build with `CONFIG_OBSERVORE_TOUCH_LOG_RAW=y`, press the screen, and
-read the values off the log.
-
-Check the crossing first, and check it with a press to the left and then a
-press to the right **at the same height**. On the panels here that single move
-swings raw Y across its whole range while raw X barely stirs, which is what
-`CONFIG_OBSERVORE_TOUCH_SWAP_XY` exists for. Corner presses will not tell you
-this: a corner moves both axes at once, and two corners that share an edge
-look exactly like a dead axis — which is what they were read as here, through
-a board swap and a hunt for a fault that did not exist, before one deliberate
-left-right press settled it in ten seconds.
-
-Get those two right and the bounds no longer have to be: hand the board to
-whoever owns it and let them press two crosses.
 
 ## Notifications
 
@@ -2604,1071 +1356,29 @@ trailing slashes, header names, body encoding, and the priority mapping. The
 Pushover body is form-encoded, so an advertised device name containing `&`
 cannot inject a field. There is a test for exactly that.
 
-### Reading a manifest that outgrew its buffer
-
-The device wants exactly one string from the update manifest — the version —
-and used to hold the whole document to get it, in a 2,048-byte static. The
-published manifest is **2,772 bytes** and lists every board, so it grows
-whenever a board is added. The read kept a prefix, and it worked only because
-the field it wants happens to be the first one in the file.
-
-There *was* a size guard, and it never fired. Cloudflare serves this over
-HTTP/1.1 with `Transfer-Encoding: chunked` and no `Content-Length`, so
-`esp_http_client_fetch_headers()` reports no length and the guard was skipped
-on every check. It was also a landmine: had the server ever sent a
-`Content-Length`, the guard would have refused a 2,772-byte document outright
-and **every device would have stopped seeing updates** — on a server
-configuration change nobody would connect to the firmware.
-
-The body is now scanned as it arrives, through a 768-byte window that carries
-its tail forward between reads. The document can be any size, the field can be
-anywhere in it, and the 2 KB static is gone — so the boards with the least RAM
-get some back.
-
-**The window's recycle point is the thing that needed testing**, and the first
-test of it was worthless. It split documents between *feeds* and passed with
-the tail-carry deliberately removed, because the documents were shorter than
-the window, so the window never filled and the recycling code never ran. The
-test now places the field at every offset across the recycle point; removing
-the carry fails eighteen of them.
-
-A manifest longer than 64 KB is refused. Not for memory — there is no buffer
-to overflow — but because a far end serving a captive portal or an error page
-is not worth reading through a radio to the end.
-
-## Cutting a release
-
-```bash
-git tag v0.14.0 && git push origin v0.14.0
-```
-
-That is the whole manual part. The tag push builds every shipped target,
-collects each one's parts at the offsets its own build chose, assembles the ESP
-Web Tools manifest, and attaches the lot to a **draft** release. Creating that
-draft itself if it does not already exist.
-
-Then read the notes, edit them if you like, and publish. Publishing is what
-deploys the flasher page.
-
-The order matters and is easy to get backwards:
-
-- **`gh release create --draft` does not push the tag:** the build never
-  triggers, and the only clue is an `untagged-<hash>` URL on the release page.
-  Push the tag; the workflow makes the draft.
-- **Publishing before the build finishes deploys a broken page:** `pages.yml`
-  triggers on `release: published`, while the release workflow is what uploads
-  the binaries. Publish first and the site goes live pointing at assets that
-  do not exist. Draft, then build, then publish.
-- **The `github-pages` environment must allow the tag:** deployments are
-  restricted by ref, and a release-triggered run has a tag ref rather than a
-  branch one. A `tag: v*` policy is what lets it deploy at all; without it the
-  deploy job fails before running a single step.
-
-### Upgrading to v0.14.0
-
-Nothing stored is lost and nothing needs doing by hand, but three things
-change what a device already running v0.13.0 will do, and two of them make it
-report *less*.
-
-**The census now acts.** v0.13.0 learned what was always around and suppressed
-nothing. This one quiets a household device that is identifiable, and halves
-the weight of one whose advert shape may describe a population rather than a
-device. A protected class is never either. So a board that has been running
-for a fortnight will report fewer things than it did — and it says so: the
-verdict band carries the count of what it quieted, because "clear" and "clear,
-two quieted as household" are different claims.
-
-**Four board profiles track half as many devices at once.** Both 2.8" Cheap
-Yellow Displays, the 3.5", and the NM-CYD-C5 hold 96 rather than 192. The
-nearby list is correspondingly shorter in a crowded place. That is what bought
-the 3.5" board the memory to complete an over-the-air update at all, which it
-could not do before — twelve failed checks in six hours, each driving its heap
-to 56 bytes.
-
-**The clock has to say where it came from.** A device reports no time until
-something actually sets it, where v0.13.0 trusted any plausible-looking
-number. In practice this changes nothing except on a board with no RTC chip
-and no reachable NTP server, which now says `clock not set` rather than
-guessing — and can be given the time from a browser at the console.
-
-The run record's format went to 2 for the cell voltages, and version 1 records
-are carried forward rather than discarded. The mesh is off unless built in.
-
-## Partition layout
-
-```
-nvs        data nvs       0x9000     24K
-phy_init   data phy       0xf000      4K
-otadata    data ota       0x10000     8K
-ota_0      app  ota_0     0x20000  1920K
-ota_1      app  ota_1     0x200000 1920K
-coredump   data coredump  0x3E0000   64K
-```
-
-**The table is OTA-shaped and OTA uses it**, and that was deliberate from the
-start. The layout is the expensive part to change later: the browser
-flasher writes the partition table, so a device moving to a different layout
-would silently lose whatever moved. Settling the offsets while there are few
-devices costs nothing and means it never has to happen again.
-
-Two offsets are the actual commitment, and only two:
-
-- **`nvs` at `0x9000`** — every stored setting: mute rules, Wi-Fi credentials,
-  the notifier token, the generated console password and the detection
-  history. It is where ESP-IDF's `partitions_singleapp_large.csv` put it, which
-  is what the earliest firmware used, and it has never moved.
-- **`ota_0` at `0x20000`:** the running application.
-
-Everything else stays free. `ota_1` holds no state, so its size and position
-can change later; even growing `ota_0` is non-destructive, because the running
-app stays put and only the scratch slot shifts.
-
-With no `factory` partition and a blank `otadata`, the bootloader reports
-`No factory image, trying OTA 0` and boots `ota_0`. Upgrading an existing
-device to this table keeps everything: verified on a C5 that came back with its
-35 mute rules, its network and the same console password.
-
-Sized for a 4 MB board, the smallest supported (the C6-DevKitM-1). The
-reference C5 and C6 DevKitC-1 kits carry 8 MB and Waveshare's C5 kit 16 MB;
-those leave the remainder unused, because an image built for more flash than
-the chip has does not boot at all, while the reverse is harmless.
-
-Slot occupancy today is **C5 83%, C6 76%, S3 66%, ESP32 69%**. The C5 is the
-tightest and the fastest growing, so CI builds every target and would fail there rather than
-in the field, exactly as it did when the old 1500K partition overflowed by
-27 KB.
-
-Those numbers were 83 / 78 / 64 before three deliberate reductions, which are
-worth knowing about because they are the levers if it ever gets tight again:
-
-| | saved | why it is safe |
-|---|---|---|
-| `-Os` instead of `-Og` | 125 KB | optimising for size rather than for debugging |
-| Common CA roots, not the full set | 51 KB | 44 authorities including Let's Encrypt, which self-hosted notifier endpoints overwhelmingly use |
-| Console served gzipped | 17 KB | 25 KB of HTML becomes 8 KB, and the page also arrives faster |
-
-Two further levers exist and were deliberately not pulled. Silencing assertion
-messages saves another 63 KB but throws away the text that says what failed,
-which is the wrong trade on a device where an unexplained restart used to be
-indistinguishable from a quiet night. Raising the flash floor to 8 MB would
-double every slot, at the cost of no longer booting on a 4 MB board.
-
-**OTA itself is deliberately not implemented.** With no image signing and an
-unencrypted console, an update path reachable over the network turns "somebody
-on your LAN has the console password" into "somebody owns this device
-permanently", a real escalation on a device meant to detect surveillance. That
-waits on HTTPS and a decision about signing. Reserving the layout keeps the
-option open at its cheapest moment without opening the hole.
-
-### The coredump partition, and what it cost
-
-The 3.5" CYD has ended five runs in a panic, 3.5 to 9.5 hours apart, with a
-healthy heap. The panic handler prints a backtrace to a serial port that
-nobody is watching at three in the morning. Two attempts to be watching
-failed — one of them by capturing the thing and then losing the log — and the
-run record could say *that* a panic happened but never *why*.
-
-So the table gained a 64 KB `coredump` partition. The 4 MB layout was exactly
-full, so the space came from the application slots: 1984K each down to 1920K.
-The largest image this project builds is 1594 KB, which leaves a third of a
-slot spare, and CI builds every target so an overflow fails there rather than
-in the field.
-
-**Both slots shrink by the same amount**, which is not tidiness. An OTA writes
-into whichever slot is *not* running, so a mismatched pair is a trap: an image
-that fits the slot you tested would fail on the other, half the time.
-
-**64 KB is left spare above the coredump** rather than given back to the
-slots. [#185](https://github.com/Forged-in-Feathers-Technology/observore/issues/185)
-needs an `nvs_keys` partition if NVS encryption is ever enabled, and a
-partition table change cannot reach an existing device over the air — the
-browser flasher writes the table and OTA does not. The cable upgrade should be
-spent once.
-
-**Devices still on the old table are safe.** `esp_core_dump` finds its
-partition by name at runtime, so a board without one simply never writes a
-dump. It does not fall back to a fixed offset, which on an old table would be
-the tail of that device's own `ota_1` slot.
-
-### The device reports its own crash
-
-A dump nobody reads is the same as no dump, so the next boot says what killed
-the last one:
-
-```
-I esp_core_dump_flash: Found core dump 29376 bytes in flash @ 0x3e0000
-E observore.crash: the previous run panicked in task "main" at pc 0x4009092d
-E observore.crash: backtrace: 0x4009092d 0x400908f5 0x40096812 0x400dd79f 0x401aa49b
-W observore.crash: the dump is kept in flash; read it with espcoredump.py or clear it from the console
-```
-
-Those addresses go straight into `addr2line` against the matching `.elf`:
-
-```
-0x400dd79f: app_main at main.c:676
-```
-
-ELF format rather than binary, because that is what gives
-`esp_core_dump_get_summary()` a decoded backtrace on Xtensa — the architecture
-the panicking board uses. RISC-V stores a raw stack dump instead, so the C5
-and C6 report the trap cause (`mcause`, `mtval`, `ra`, `sp`) and the stack
-needs `espcoredump.py` offline.
-
-The dump is **kept, not erased on read**: the summary is a lead, the dump is
-the evidence, and a report that vanished when somebody glanced at the console
-would be the worst of both. `POST /api/crash?clear=1` is the only thing that
-removes it, and `/api/status` carries the one-line summary as `crash`.
-
-**Verified before being trusted**, which matters for something whose whole job
-is to catch a fault that happens twice a day. A throwaway build with a
-deliberate `abort()` was flashed to a 2.8" board: it panicked, saved 29,376
-bytes, rebooted, printed the summary above, and the backtrace decoded to the
-exact line the abort was on. Waiting days for a real panic only to find
-nothing had been written would have been the expensive way to learn that.
-
-## A note on internal RAM
-
-The ESP32-S3 has about 180 KB of DRAM regardless of how much PSRAM is fitted,
-and Wi-Fi and lwip allocate from it. Observore therefore builds its JSON responses
-in **PSRAM** where there is any, not in static internal buffers.
-
-Boards without PSRAM take a smaller budget from internal memory instead and
-report fewer devices per request. The console says which it got, and the
-heartbeat shows the consequence.
-
-Whether a board has PSRAM is not a property of the chip. The C6 has none; the
-C5 has it on `R`-suffixed modules and not otherwise, which is why the shipped
-C5 image is built to boot either way. The XIAO ESP32S3 has 8 MB.
-
-### When it ran low, not just how low
-
-The console header shows free internal RAM and the lowest it has been since
-boot, with when that happened and what the device was doing at the time. The
-same is on `/api/status` under `heap`, and `/api/heap` lists the last eight
-drops in order.
-
-That is there because the low-water mark on its own is a puzzle. Two overnight
-runs each came back with a number and nothing else: 1,072 bytes one night,
-2,932 the next, with the moment it happened logged to a serial port that nobody
-was reading. A minimum says the device nearly ran out; the moment, the mode and
-the notification queue depth say why. A drop only counts once it is 2 KB past
-the last one recorded, so a slow slide leaves a handful of milestones rather
-than filling the list with noise.
-
-**The mode distinguishes an update from the window it happened in.** A TLS
-session for a version check or a download only ever runs inside an uplink
-window, so every one of its dips used to record as `uplink` —
-indistinguishable from the ordinary pressure of being associated. On the 2.8"
-CYD those are not close: the board holds around 22 KB through a window and the
-handshake takes it to between one and three kilobytes. It now records as
-`update`:
-
-```
-I (311764) observore.update: up to date on v0.13.0-26-g901b14b
-W (312774) internal heap low-water fell to 1156 bytes (update, 0 queued, largest block 11776)
-```
-
-It had to be a latch rather than a flag, and the bench is what said so. The
-first attempt exported "is a TLS session open right now", which read **false
-every time**: the handshake blocks the main loop, so by the time execution
-returns to the heap sampler the session is closed and the dip it was meant to
-explain has already happened. The check finished at 312023 ms and the record
-was written at 313033, still labelled `uplink`. So the update marks that a
-session ran and the first sample afterwards consumes the mark — which is
-accurate rather than convenient, because `heap_caps_get_minimum_free_size()`
-is a running minimum that captured the dip while the loop was blocked.
-
-Three runs of the same check gave 1,468, 2,568 and 1,156 bytes. That the
-handshake's floor moves by more than a kilobyte between runs is itself only
-visible once the dips can be told apart.
-
-### How long the last run lasted
-
-The header also says how long the previous run lasted and how it ended, and
-hovering it lists the eight before that. The device writes its uptime to flash
-every five minutes; at boot, the last value written is the length of the run
-that just ended, filed with the reason this boot happened. A run shorter than
-five minutes leaves nothing behind, which is right: that was a false start,
-not a run.
-
-This is the battery question answered from measurement, with one precondition
-that matters more than it looks. A device found up for seven hours after a
-night on battery used to say only that; the run before it was gone. Now the
-runs before it say whether its life is getting worse.
-
-**A run is a power session, not a battery session.** The record measures from
-boot to reset, and nothing in it distinguishes time on USB from time on a
-cell. So a run that ended in `power-on` or `brownout` is the battery's life
-only when the *whole* run was on battery — the device was unplugged before it
-booted, or at least immediately after.
-
-That is easy to get wrong, and this project got it wrong in writing before
-getting it wrong in practice: the round board recorded a single run of
-**21 h 44 min**, of which about 4 h 25 min was on the cell and the rest was
-plugged in. Five times the real figure, reported with complete confidence. If
-a run began on USB, the only honest reading is to subtract by hand from when
-you know it was unplugged.
-
-**So each run now records what the cell did across it** ([#165](https://github.com/Forged-in-Feathers-Technology/observore/issues/165)).
-The first voltage reading of a run is kept as its start and never replaced;
-every later one replaces its end. That is enough on its own:
-
-| span | what it means |
-|---|---|
-| 4.20 V → 3.20 V | a battery run that went the distance |
-| 4.20 V → 4.20 V | plugged in throughout — its length says nothing about the battery |
-| 4.20 V → 3.90 V | a short battery run, or a long one on a tiring cell |
-
-It also shows **how deeply each run discharged**, which is what says whether a
-cell is getting worse rather than only how long it lasted this time.
-
-**No transition detection**, deliberately. Watching for a sustained decline to
-infer "now on battery" is flakier than it sounds: a full cell sitting on USB
-looks much like a full cell on battery, and a weak USB supply that cannot hold
-the cell up looks exactly like being unplugged — which this project has
-already met, on a laptop port that could not supply charge current and the
-Wi-Fi radio's turn-on surge together.
-
-**Only the round AMOLED board can do this**, because it is the only board that
-can measure its own supply. The CYDs and the devkit have their usable ADC pins
-taken by the display and touch, established by probing. Those boards record
-zero, which the console and the screen read as "not measured" and show
-nothing — not a flat cell.
-
-The record's format version went to 2 for the two new fields, and the old
-records are **carried forward** rather than discarded: their lengths and
-endings are still true and their voltages simply were not recorded. The census
-discarded its old format on a similar change and was right to, because there
-an old blob divided evenly into the new entry size and would have restored as
-garbage; the danger was misreading, not upgrading. Here the version byte is
-checked before either layout is read, and the runs being carried over are
-measurements somebody made by leaving a board on a battery overnight.
-
-The same list is on `/api/status` under `runs`, newest first, with `mv_start`
-and `mv_end`.
-
-**Measured: 25.1 hours.** An ESP32-C5 devkit on a 2,000 mAh cell, running
-v0.8.3 untouched from a full charge until the cell's protection cut off —
-`90311 s, ended by power-on`. That figure survives the correction above
-because the run really was battery from end to end. That is with the radio at full duty: no light
-sleep, a passive dual-band scan and a channel sweep every two minutes, and the
-Bluetooth scanner running the whole time. Roughly 80 mA average, so a pack's
-capacity in milliamp-hours divided by eighty is a fair first guess at hours for
-any other cell.
-
-**Measured: about 4 h 25 min** on the round AMOLED board's 400 mAh cell,
-timed by hand from when it was unplugged to when it died, because its run
-record spanned USB time as well. That is roughly **90 mA** — only about ten
-more than the headless devkit, for a board carrying a lit dial, an
-accelerometer, a hardware clock and eight megabytes of PSRAM.
-
-Ten milliamps for a watch face is the clearest vindication the dial's design
-has had. Black is genuinely off on an AMOLED, the face is mostly black, and
-the hour markers and hands are a few hundred lit pixels out of 217,000.
-
-**Measured: about 19.5 hours** on the 3.5" CYD's 3,000 mAh cell, which is
-roughly **154 mA**. That run needs no correction, unlike the two above: it
-began on battery, ran until the cell died, and so the record means what it
-says.
-
-Which gives three figures and one conclusion:
-
-| board | screen | draw |
-|---|---|---|
-| ESP32-C5 devkit | none | ~80 mA |
-| Waveshare 1.43" AMOLED | 466x466, mostly-black dial | ~90 mA |
-| ESP32-3248S035R | 480x320 backlit LCD | ~154 mA |
-
-**A screen costs either ten milliamps or seventy-four, depending on the
-panel.** An AMOLED lights the pixels it needs and a dark watch face needs
-almost none; a backlit LCD illuminates the whole panel whatever is on it. The
-same information, on the same sized glass, for seven times the power.
-
-Two caveats on the 154 mA, both of which make it a pessimistic figure. The
-cell's 3,000 mAh is its rating rather than a measurement. And that board was
-sitting at **full brightness** throughout, because its stored level had been
-forced there while chasing an unrelated fault and never put back — on a board
-where the backlight is three quarters of the draw, the brightness setting is
-not a detail. It has a photoresistor and an automatic mode for exactly this
-reason.
-
-So the brightness setting remains the one lever worth pulling before a long
-day out, and on a backlit board it is worth more than everything else
-combined.
-
-The number took three attempts to get honestly. The first two runs ended
-because the firmware was reflashed mid-run, and a third gave six hours because
-the build had a debug task sampling the heap a hundred times a second, which
-never let the chip idle — visible in the record as a six-hour run among
-twenty-five-hour ones, which is exactly what the record is for.
-
-The flash cost is stated because it was checked: about three NVS entries per
-write fills a page every few hours, which is a sector erase every day or so per
-page against a rating of a hundred thousand — a lifetime measured in centuries,
-so this is not the thing that wears out.
-
-### A tab in the background is quiet
-
-The console polls only while it can be seen. A tab left open in the background
-used to reconnect every uplink window, ask for everything, and stop reading,
-and six stalled responses sitting in the network stack's send buffers is how a
-browser tab once took the device down. A hidden tab now sends nothing, which
-also means the device is not held on the uplink by a page nobody is looking at,
-and gets back to detecting. Switching back to the tab refreshes it at once.
-
-This is not premature tuning. An earlier version used static internal scratch
-(two 20 KB device snapshots plus 32 KB and 12 KB response buffers) and drove
-free internal heap down to 1.4 KB with a largest free block of 768 bytes. At
-that point the SoftAP still beaconed and still accepted associations, but could
-no longer allocate a buffer to answer an ARP request — the console loaded once
-after boot and then went dead, looking exactly like a network fault. The
-heartbeat now reports free, minimum-ever and largest-block internal heap for
-this reason; if the console ever goes quiet again, read that line first.
-
-```
-clear | score 0 | 0 devices | 227 sightings | 0/0 frames | heap 103687 free, 42568 min, 31744 largest
-```
-
-## What survives a restart
-
-Mute rules, credentials and the console password always persisted. What the
-device had actually *seen* did not, so a power blip or a firmware update erased
-the whole picture, and an unexplained reboot was indistinguishable from a
-quiet night.
-
-Classified detections now survive, in the **History** panel and at
-`/api/history`. Rows carry the times they were seen and are marked *earlier*
-when they predate the current boot.
-
-What is deliberately **not** kept is the live device table. That is working
-state — 192 slots of mostly unidentified churn, rewritten constantly, and
-persisting it would cost far more flash than it is worth. Only things that
-matched a signature are recorded, which is also what keeps the write rate low
-enough to be safe.
-
-**Flash wear is the whole design constraint**, so the write policy is worth
-stating plainly:
-
-- A **new** classification is worth a write, and is rate limited to one every
-  five minutes rather than written immediately.
-- **Another sighting** of something already recorded moves a counter and a
-  timestamp, and never triggers a write on its own. It rides along with the
-  next one.
-- Opening the console forces a write, because somebody is about to read it.
-- Writes are **held back while the clock is unset**, for up to five minutes.
-  Dating is retroactive only while the monotonic timestamps live, and those die
-  with the boot: an entry written before the time is known, on a device that
-  then restarts, is undatable for ever. After the grace period an undated
-  record still beats no record, so it is written anyway.
-
-The effect is that the write rate tracks how many genuinely new things the
-device sees, which in a baselined deployment is close to zero.
-
-On-device history is a convenience, not the record. If detections matter, give
-the device an uplink and a notifier. Those leave the device as they happen.
-
-## Knowing which firmware it is running
-
-The console header shows the running version and the board it was built for,
-taken from the application descriptor that ESP-IDF stamps at build time and
-from the board identifier compiled into the image. A build cut from a tag reports
-that tag, `v0.5.0`; a build made after one reports what `git describe` says,
-`v0.5.0-3-gce8e56e`, which is a different thing and says so.
-
-**The boot banner says the same thing over the serial cable**, which is the
-one route that needs neither the network nor the console password:
-
-```
-I (2341) observore: Observore v0.12.0-2-gc139518-dirty starting -- board devkit-esp32c5, booted from ota_0
-```
-
-That is a real line from a bench build, which is why it reads
-`v0.12.0-2-gc139518-dirty` rather than a tag: two commits past `v0.12.0` with
-uncommitted changes in the tree. A board flashed from a release says `v0.12.0`
-and nothing else.
-
-It says only `Observore starting` in builds before this, and the gap was
-noticed the usual way: a board on the desk with a cable already attached to
-it, and the quickest answer to *what is on this thing* turning out to be
-reading the application descriptor back out of flash with `esptool`.
-
-The partition is there for the same reason the version is. Images built on
-ESP-IDF v5.5 hung between the PSRAM memory test and user code when booted
-from `ota_1`, so every over-the-air update rolled back and none ever took —
-and a device that has quietly fallen back to its previous slot looks exactly
-like one that was never updated. `booted from ota_0` after an update that
-reported success is the symptom, and nothing else on the device says it out
-loud.
-
-It also checks, once a day by default, whether a newer release has been
-published. The document it reads is `firmware/boards.json` — the same file the
-web flasher uses, so anything installable is by definition visible to the
-device, and there is no second piece of infrastructure to keep in step. The
-check runs inside an uplink window the device was going to open anyway, and it
-runs *after* the notification queue has been sent, so a findings digest never
-waits behind a version check for memory or for airtime.
-
-**Check now** in the console's Firmware panel asks for that check straight
-away, in the window the console is already holding open; the answer appears in
-the same panel a few seconds later, with when it was last checked. It exists
-because three releases in a row were noticed only after a reboot: the daily
-check had already run that morning, and the release came out in the afternoon.
-A check that fails to connect is tried once more five seconds later before it
-says so, since on the bench the first attempt a few seconds after the uplink
-came up did exactly that and the second did not. `POST /api/update/check` is the
-same thing without the button.
-
-A newer version is mentioned once, on the end of the next digest, and shown in
-the console until it is installed. Once per version, not once per window: a
-device that repeats itself is one people stop reading.
-
-The comparison refuses to guess. A version it cannot parse means no update,
-in either direction — the failure mode of a wrong yes is a device downgrading
-itself, so an unreadable answer is treated as no answer. A build made after a
-tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
-offered `v0.5.0` as an upgrade.
-
-The board matters as much as the version. Three of the nine boards here are
-ESP32-C5s and three are the same classic ESP32 behind different glass, and none
-of those images are interchangeable, which is why the installer offers a picker
-rather than deciding from the chip. A device updating itself has the same
-problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
-`devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789`,
-`cyd-2432s028r-ili9341`, `cyd-3248s035r-st7796`, `nm-cyd-c5` or
-`waveshare-s3-amoled-143`. CI asserts that each board's build resolves to its own
-name, checked against the `sdkconfig` the build actually produced rather than
-by re-deriving the layering.
-
-Nothing is downloaded by the check. Installing is a separate and deliberate
-act: the console grows an **Install update** button when there is something to
-install, and it asks for confirmation, because the device stops detecting for
-the few minutes the download takes and then restarts.
-
-### What installing actually does
-
-The image comes from the release asset host rather than from beside the
-manifest. That is not arbitrary. The flasher site sits behind a CDN that
-compresses this file and then answers range requests against the compressed
-copy while serving the decompressed one: a request for the first 4096 bytes
-comes back with 10,602, and the reported total is 906,227 against a real size
-of 1,447,536. An image assembled from those offsets is not the image.
-
-The Bluetooth stack is shut down for the duration, which frees about **24 KB**
-of internal memory. That is not a nicety. The hardware AES driver needs
-DMA-capable internal memory that `MBEDTLS_EXTERNAL_MEM_ALLOC` cannot move to
-PSRAM, and with the controller resident the TLS handshake fails with
-`esp-aes: Failed to allocate memory` before a single byte is downloaded.
-Nothing is lost by stopping it: the sniffer is already suspended on the uplink,
-so a device downloading firmware is not detecting anything either way.
-
-Stopping it is one way, for that boot. A finished update reboots, and a failed
-one reboots too, so there is no resume path to get wrong on the one code path
-that only runs when something has already gone wrong.
-
-The image is checked before it is trusted. Its descriptor is read from the
-first chunk, before anything reaches flash, and rejected unless it is the same
-project and a newer version. It is written to whichever OTA slot is not
-running, so the image that is working is never the one being overwritten.
-
-### Rollback
-
-A new image gets one chance. The bootloader arms a watchdog before handing
-over, and the image has to confirm itself or the next reset puts the old one
-back. Confirmation means completing a patrol cycle: booted, radio up, scanned,
-swept, returned. An image that panics or hangs never gets there.
-
-It deliberately does **not** wait for the network. Reaching the uplink is a
-fact about the network rather than about the image, and an access point that is
-down for five minutes would otherwise revert a perfectly good update. The
-timing also rules it out: the watchdog window is capped at 120 seconds and the
-first uplink is a patrol window away. Confirmation is measured at about 66
-seconds after boot, which leaves roughly 54 seconds of margin.
-
-This was all verified on hardware by stamping a build as an older version and
-letting a real device find, download and install the published release. It
-booted the new image from the second OTA slot, and because that release predates
-the confirmation code it never confirmed, so the watchdog reset it and the
-bootloader restored the previous image. Rollback is not theoretical here.
-
-## Knowing what time it is
-
-A detector that cannot say *when* has given you half an answer. The device
-learns the time by SNTP during an uplink window and reports UTC everywhere; the
-console renders it in the browser's own zone, because the device has no idea
-what zone it is in and guessing would be worse than not.
-
-**DHCP first, then a configured server.** This is the important part. Observore
-is meant to sit on the segment the cameras are on, and that segment is
-routinely firewalled from the internet. The same isolation that stops a push
-notification reaching its server stops `pool.ntp.org` answering. A router's own
-NTP is reachable from inside that fence. `OBSERVORE_NTP_SERVER` is the fallback
-for networks that hand out no NTP option.
-
-**Timestamps are retroactive.** The conversion works from the monotonic clock,
-which runs from boot, so a sighting recorded *before* the time was known is
-still dated correctly once it is. That matters because the device starts
-detecting the instant it powers on and only learns the time when it next
-reaches the network — often a few seconds later, sometimes never.
-
-**Unknown is reported, not faked.** Until the clock is set, `time_valid` is
-false, the absolute fields are empty, and the console and the system page both
-say `clock not set`. Only the relative "4m ago" is shown. Emitting 1970 dressed
-up as a timestamp would be worse than admitting the clock is unset, on a device
-whose output is meant to be evidence.
-
-### The clock says what set it
-
-`observore_clock_valid()` used to be one comparison: is the system clock past
-2025? That conflated two different claims — "the clock holds a plausible
-number" and "the device knows what time it is" — and anything that seeded the
-clock would have satisfied the first while the second stayed false.
-
-That became load-bearing when the census started suppressing things. The
-census counts *separate days*, so a clock that never advances records every
-sighting on one day and nothing ever becomes furniture; a clock set to the
-wrong day records furniture against a date it will not be judged against.
-Neither failure announces itself.
-
-So the clock carries a **source**, and `valid` needs both halves — something
-actually set it, *and* the result is a plausible date:
-
-| source | what it is |
-|---|---|
-| `none` | never set: the time is whatever boot left behind |
-| `person` | handed in from a browser at the console |
-| `chip` | read from the board's own RTC at startup |
-| `network` | SNTP, which is the one that is actually right |
-
-The order is a ranking, and a better source overwrites a worse one without
-being asked — which is how a person's rough answer gets quietly corrected the
-moment the network arrives. A worse source cannot undo a better one, because a
-browser tab left open on the console offers to set the clock on every reload
-and must not be able to replace an SNTP answer with its own opinion.
-
-**The source lives in RTC memory, with the clock it describes.** System time
-survives `esp_restart` — which here means an update installing itself, or a
-panic or watchdog — because ESP-IDF keeps the boot time in RTC slow memory. On
-the bench it survived an EN-pin reset as well: a watch reset over USB came back
-holding both the time and `network` as its source, and correctly declined its
-own RTC chip's answer in favour of the better one it already had. It does not
-survive a power cycle. A source kept in an ordinary static would be lost on a restart
-while the clock it describes survived, turning a known time into an unknown
-one across every OTA. A source kept in NVS would do the opposite and outlive
-the clock, claiming a synced time on a board that has just been plugged in.
-That memory has exactly the right lifetime, which is the whole reason for
-using it rather than either. It is read through a magic word, because it is
-not initialised at power-on and would otherwise report whichever source the
-previous occupant's bits happened to spell.
-
-**One door to the census.** `observore_clock_day()` is the only thing that
-turns the clock into a census day, and it returns "no day" whenever the source
-is `none`. `observore_census_day()` stays pure arithmetic that converts
-whatever timestamp it is handed — the host tests drive it directly — and
-deciding whether that timestamp is worth believing is a question for the clock.
-Asking it at four separate call sites is how three of them end up still asking
-the old way.
-
-### Setting the clock from the browser
-
-Most of these boards have no RTC chip, and the places this device is worth
-carrying are routinely places where no NTP server is reachable: a camera VLAN
-with no route out, a field with no uplink at all. Those boards cold boot into
-1970 and stay there — findings with no date, and a census that cannot count a
-single day.
-
-The browser on the other end of the console already knows the time to the
-millisecond. `POST /api/time?epoch=<seconds>` hands it over, and the console
-shows a **set the clock from this browser** button whenever the time did not
-come from the network. It is a worse clock than SNTP and a far better one than
-none, and it is recorded as what it is rather than passed off as a sync.
-
-It is a *source*, not an override:
-
-- **A time outside the window a running device can be in is refused, not
-  clamped.** The floor is 2025-01-01, which keeps an unsynced ESP's 1970 out.
-  There is a ceiling at 2100 too, because a time set by hand can be wrong in
-  the other direction — a browser with its year typed wrong is no more usable
-  than 1970, and a date past what the census day number can hold would be
-  stored as a different date entirely. A device that will not use a time is
-  honest; one that silently moves it to the nearest allowed instant has
-  invented a date and will timestamp evidence with it.
-- **It goes straight into the RTC chip where there is one**, so a time handed
-  in by a person survives the power cycle that loses it everywhere else.
-- **It is behind the console password**, like everything else there. Not
-  because the time is secret — because a clock now decides what the census
-  suppresses, and an unauthenticated endpoint that moves the date is an
-  unauthenticated endpoint that decides what the device stops reporting.
-- **The two refusals say different things.** A time outside the window is
-  yours to correct; a clock already set from somewhere better is not a problem
-  at all. The first version answered both with one message and could not say
-  which had happened, which the bench demonstrated within a minute.
-
-The decision itself is a pure function, `observore_clock_rule()`, and the host
-tests drive it. The rest of the clock needs a real `settimeofday()` and a chip
-on an I2C bus, which is exactly how a rule like this ends up never exercised.
-One of the cases it pins down is the half that is easy to leave out: a recorded
-source whose clock reads 1970 must not outrank a real answer, or a device would
-refuse every source forever and could never be dated again.
-
-**Notifications carry the time the thing was seen**, not the time the message
-was sent. Notices are queued while patrolling and flushed on the next uplink,
-so delivery can trail detection by twenty minutes, and the queue exists
-precisely for the case where that gap is longest.
-
-Both forms are reported: `last_seen_s` counts seconds ago, `last_seen` is
-ISO-8601 UTC. A client with no clock of its own still needs the first.
-`/api/status` also reports `clock`, which is the source name, and the system
-page on the screen shows the time with the source beside it — `not set` where
-there is none, and where to set it.
-
-### Where the internal RAM actually went
-
-With the figures honest, the next question was answerable: what is using it?
-`idf.py size-components` says `libmain.a` holds 62 KB of DRAM — more than the
-Wi-Fi stack, the Bluetooth controller and lwIP put together. That is this
-firmware's own static allocation, and it is worth being careful about, because
-the first reading of it was wrong twice over.
-
-`nm` reported `OBSERVORE_VENDOR_OUIS` at 41 KB with section type `d`, which
-looks like 41 KB of vendor name strings sitting in RAM. Its address is
-`0x3f420058`, which is flash-mapped DROM — exactly where a `const` table
-belongs. The section label says what kind of symbol it is; only the address
-says where it lives. And `size-components`' DRAM column for an archive
-includes flash rodata, so 62 KB was never 62 KB of RAM either.
-
-Filtering by address range instead gives the real picture: **98.6 KB** of
-static symbols in internal DRAM, and one of them is a quarter of it.
-
-| symbol | bytes | what |
-|---|---|---|
-| `s_devices` | **26,112** | the device table, 192 slots at 136 bytes |
-| `s_rules` | 6,144 | mute rules |
-| `s_hist` | 3,456 | detection history |
-| `rows` (console) | 3,456 | one page of history, for the console |
-| `records` (Wi-Fi) | 2,944 | the access-point scan |
-| `s_store` | 1,796 | the household census |
-
-Same class of mistake as the heap caps, caught the same way: check what the
-number is measuring before believing it.
-
-### The device table is per board now
-
-The tracker holds 192 devices, and the table is the largest single static
-allocation this firmware makes. That is affordable on most boards and was not
-affordable on one: the 3.5" Cheap Yellow Display drives a 480x320 panel with
-no PSRAM to hold a framebuffer, runs Wi-Fi and BLE together, and was sitting
-at a low-water mark of **820 bytes**. It took an unexplained `SW_CPU_RESET`
-during a bench sweep and could not serve its own status page.
-
-`OBSERVORE_MAX_DEVICES` is a Kconfig option, set to 96 on that profile alone:
-
-| | before | after |
-|---|---|---|
-| low-water | **820** | **5,008** |
-| largest free block | 4,864 | 12,288 |
-| console body buffer | stepped down to 2–3 KB | the full 4 KB |
-| `/api/status` | 503, then transport failures | answers |
-
-Thirteen kilobytes back, and the board can report on itself for the first
-time. The cost is stated rather than hidden: it tracks half as many devices at
-once, and the table evicts the device heard from longest ago, so in a crowded
-place it holds a shorter window of the room. Mute rules, the census and the
-detection history are separate and untouched.
-
-**Then the same setting on three more profiles**, once they had been measured
-properly. The 2.8" boards and the NM-CYD-C5 were left at 192 on the strength
-of one reading apiece — 11,452 bytes on the 2.8" — which was precisely the
-thin evidence this exercise was about avoiding. The low-water figure is a
-running *minimum*, so a high one means only that nothing had dipped yet
-during however long you happened to watch. Ten minutes of watching gave
-**1,588** and **2,544**.
-
-| board | before | after |
-|---|---|---|
-| NM-CYD-C5 | 2,544 | **14,140** |
-| 2.8" CYD, resting free heap | 11,064 | **23,764** |
-| 2.8" CYD, low-water | 1,588 | 1,468 |
-
-The last row is not a failure of the change and is worth reading carefully.
-The 2.8" board's low-water before its first update check was **20,444**; what
-takes it to 1,468 is the TLS handshake behind that check, which succeeds:
-
-```
-I (311022) esp-x509-crt-bundle: Certificate validated
-I (312422) observore.update: up to date on v0.13.0-23-gb059acb-dirty
-W (313432) internal heap low-water fell to 1468 bytes (largest block 11776)
-```
-
-So the table gave that board thirteen kilobytes back for the whole time it is
-not shaking hands with GitHub, and its remaining exposure is a two-second peak
-once per check rather than its baseline. That peak is a separate problem with
-a separate fix, and naming it is better than letting a single number stand for
-both.
-
-The NM-CYD-C5 is the one that makes the point about where the table lives: it
-has PSRAM and was still tight, because the table is a **static array**. PSRAM
-takes the console's scratch and the framebuffer, both allocated at runtime, and
-cannot take a symbol the linker has already placed in internal RAM.
-
-**What this does not claim.** A listener held the serial port for the panic
-text and the crash did not recur, so the `SW_CPU_RESET` remains unexplained.
-What is fixed is the margin, which was not survivable; whether it was the
-cause of that particular reset is not established. The device table being
-tunable is also what makes the next such measurement cheap.
-
-### The heap figure was measuring the wrong pool
-
-Every number this device reported about its own memory — the boot log, the
-uplink line, `/api/status`, the heap-watch ring — was taken with
-`MALLOC_CAP_INTERNAL`. On the classic ESP32 that includes regions which are
-**32-bit access only**: IRAM that no `malloc()` will hand out for ordinary
-data. So the "largest free block" being compared against allocations that
-failed was, in part, a block that could never have satisfied them.
-
-It was found from the other end. On the 3.5" CYD the console could log you in
-but `/api/status` answered `503 not enough memory right now` for an entire
-uplink window — minute after minute — while the device reported 16,164 bytes
-free with a 10,240-byte largest block and the buffer it could not get was
-4,096 bytes. Those two statements cannot both be true.
-
-Measured against `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT`, which is what every
-allocation in this firmware actually draws from:
-
-| | reported before | actually available |
-|---|---|---|
-| free | 16,164 | **5,324** |
-| low-water | 11,896 | **932** |
-| largest free block | 10,240 | **4,608** |
-
-The console's internal fallback asks for 2,880 bytes of device snapshot and a
-4,096-byte JSON buffer. The first fits in a 4,608-byte block and leaves about
-1,700 behind; the second cannot be had. That is the 503, exactly, and it was
-invisible for as long as the figures were three times too high.
-
-The caps are now named once, in `observore_heapwatch.h`, and mean "internal
-RAM that can hold data". A number that cannot be compared against the
-allocation it is being used to explain is worse than no number, because it
-sends the search somewhere else — which it has now done at least twice here.
-
-**Two things follow from the honest numbers, and neither is fixed yet:** the
-console's internal budget is sized for memory this board does not have, and a
-932-byte low-water mark on a board that is merely sitting in an uplink window
-is far too close to nothing. Both need tuning against figures that can be
-trusted, which is why they are not being tuned in the same change that started
-trusting them.
-
-## Notifications, TLS and memory
-
-A device left on a battery overnight came back having logged **10,019 failed
-notifications and zero successes** in seven hours. Two separate faults, found
-only because it ran for a night rather than a minute.
-
-**TLS could not allocate.** Every failure was
-`mbedtls_ssl_setup returned -0x7F00`, which is `MBEDTLS_ERR_SSL_ALLOC_FAILED`.
-No packet was ever sent, so nothing appeared in the network logs, and the
-obvious suspicion of a firewall was wrong. mbedTLS wanted one 16 KB contiguous
-allocation and the largest free block was reported as 15,360 bytes. Short by a
-kilobyte, every time.
-
-**That figure was measured against the wrong pool** — see below. It was
-`MALLOC_CAP_INTERNAL`, which on the classic ESP32 includes 32-bit-only IRAM
-that cannot hold data, so the block mbedTLS could actually have had was
-smaller than 15,360 and the shortfall was larger than a kilobyte. The
-diagnosis and the three fixes were right; the number quoted alongside them was
-flattering.
-
-Internal RAM is genuinely oversubscribed on these parts: Wi-Fi, BLE, lwip and
-the console share roughly 160 KB. Three changes together:
-
-| | |
-|---|---|
-| Inbound TLS record buffer 16 KB → 8 KB | still holds any realistic certificate chain |
-| Dynamic TLS buffers | allocated while in use, not for the life of the connection |
-| mbedTLS allocates from PSRAM | on boards that have it — 8 MB was sitting unused |
-
-Minimum free internal heap across four TLS pushes went from **336 bytes to
-10,372**. The C6 has no PSRAM and keeps the default allocator, so TLS there
-remains tight; the first two changes still apply.
-
-**The retries had no backoff.** The pump ran from the main loop and a failure
-simply returned, so the next pass tried again immediately — one attempt every
-2.6 seconds, for as long as the device was associated, forever. That is a TLS
-setup each time, radio time in the narrow associated window, and battery, all
-for an endpoint that was not going to answer.
-
-Failures now back off from 30 seconds to a 15-minute ceiling and reset on
-success. Notices stay queued throughout; this delays retries, it never
-discards. `/api/notify` reports `retry_in_s`, so a notifier that has gone quiet
-can say why.
-
-The heartbeat also logs the moment the internal-heap low-water mark drops, with
-the mode and queue depth. A watermark on its own says the device nearly died
-and nothing about when or during what.
-
-## What happens when the radio misbehaves
-
-A scan that fails is not always transient, and the failure mode is nasty. One
-`ESP_ERR_WIFI_TIMEOUT` once left the driver believing a scan was still running,
-after which every channel change was refused and every subsequent scan returned
-zero access points — **permanently**. Fifteen good scans, one timeout, then 560
-empty ones. The device had stopped seeing Wi-Fi entirely while still looking
-perfectly alive and reporting a quiet neighbourhood, which is the worst way for
-a detector to fail.
-
-Repeated scan failures now stop the stuck scan and, after three in a row,
-restart the radio through the ordinary mode-change path. Verified by injecting
-failures: three refusals, one restart, scanning back to 27 APs on the next
-cycle.
-
-
-A driver error on a mode change does not restart the device. It is logged, the
-current mode is left in place, and the next cycle tries again:
-
-```
-W observore.wifi: wifi start failed: ESP_ERR_INVALID_STATE -- staying put and retrying
-W observore: could not enter patrol (ESP_ERR_INVALID_STATE) -- retrying next cycle
-I observore.wifi: patrol mode: scanning and sniffing      <- recovered, next cycle
-```
-
-This matters more here than the phrase "error handling" suggests. Patrol and
-uplink alternate every couple of minutes for as long as the device is deployed,
-so a transient failure on that path is not rare, and the device table, the
-sighting counts and the follower heuristic all live in RAM. Aborting would
-therefore not degrade the device, it would restart it, and throw away exactly
-the accumulating evidence it exists to gather, silently.
-
-Initialisation is still fatal. If the radio will not come up at all there is
-nothing useful to continue doing, and a boot loop is at least honest about it.
-
-## Limitations
-
-Read these before trusting it.
-
-- **MAC randomisation is followed, not defeated -- but only for BLE, and only
-  by a kind, not an individual:** phones rotate their Bluetooth address every
-  ~15 minutes. A new random address whose advert fingerprint matches a device
-  that went quiet in the last 20 minutes, at a similar signal strength, is taken
-  to be the same device, so a handset that stays two hours shows as one device
-  that stayed two hours and rotated seven times, rather than eight strangers.
-  The fingerprint identifies a *kind* of device, so two identical handsets can
-  be merged if one falls silent as the other appears; the quiet requirement
-  makes that rare, and the cost is a merged pair rather than a missed one.
-  Wi-Fi addresses rotate too and are not yet followed.
-- **Absence of evidence is not evidence of absence:** wired cameras, cellular
-  ALPR units with the radio off, and — on anything but a C5. 5 GHz devices
-  are invisible to it.
-  A clear reading means nothing was detected, not that nothing is there.
-- **Vendor prefixes identify manufacturers, not purpose:** a Ring OUI is a
-  Ring device; it is a doorbell far more often than it is surveillance aimed
-  at you. Camera-class hits are scored at 1 point for this reason.
-- **Some signatures are inferred, not documented:** the Meta company IDs and
-  several name keywords are derived from public reporting rather than vendor
-  specification, and are unverified against hardware. Treat a
-  `smart-glasses` hit as a lead.
-- **Fast Pair is noisy:** ordinary headphones advertise `0xFE2C`. It is
-  reported because Google's Find Hub trackers use it too.
-- **2.4 GHz only, unless you have a C5:** on every chip but the ESP32-C5 the
-  sniffer sweeps channels 1–13 and nothing above them. A C5 sweeps 5 GHz as
-  well, but a slice per cycle rather than all of it at once, so a 5 GHz device
-  takes longer to appear than a 2.4 GHz one.
-- **WPS is frequently not broadcast at all:** the manufacturer and model
-  reading is only as good as the access points near you, and many modern ones
-  never send the element. A survey of 150 beacons in one flat found none. The
-  parser is unit tested against malformed and hostile input, but its attribute
-  decoding has not yet met a real WPS element on air, only synthetic ones.
-- **Vendor lookup covers MA-L only:** the IEEE also issues smaller MA-M and
-  MA-S blocks, which the generator does not read, so some genuinely assigned
-  prefixes resolve to nothing. A miss is reported as unknown rather than
-  guessed at.
-- **Muting is a blunt instrument:** a `class` or `oui` rule will hide a real
-  threat that happens to share a category or vendor with something you
-  dismissed. Prefer `mac`, `name` or `fingerprint` rules where you can.
-- **The console is authenticated but not encrypted:** it asks for the console
-  password and then carries a session cookie, which stops casual and
-  accidental access, but over plain HTTP that cookie can be read by anything
-  sniffing the LAN, which on Wi-Fi is any device in range holding the
-  passphrase. Authentication is not a substitute for encryption.
-- **A device that is updating is not a device that is watching:** installing
-  firmware stops the Bluetooth stack and holds the uplink for the few minutes
-  the download takes, and the sniffer is already suspended there. That is
-  several minutes of not detecting anything, which is why an update is never
-  installed on the device's own initiative. It checks, it says so, and it waits
-  to be asked.
-- **A first update cannot arrive over the air:** an updater has to be running
-  before it can fetch anything, so a device on a release older than v0.6.0 has
-  to be flashed once over USB. After that it can update itself.
-- **Notification delivery is verified for three providers of five:** Gotify
-  and the webhook have been sent end to end from the device; ntfy accepted the
-  exact request the firmware builds; Pushover and Telegram have had their
-  request shapes checked but not delivery, since each needs an account.
-
-## Legal note
-
-Observore is a receiver. It observes broadcasts that are, by design,
-transmitted publicly and unencrypted. It does not deauthenticate, inject, jam,
-associate, crack, or interfere with anything.
-
-**It never receives the content of a communication.** The Wi-Fi sniffer is
-filtered to management frames alone:
-
-```c
-wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
-```
-
-with a callback that drops anything which is not `WIFI_PKT_MGMT`. Data frames
-never reach the application — only beacons, probe requests and the vendor
-elements Remote ID travels in. Where interception law turns on content against
-metadata, which is most places, that distinction is the substance of the
-matter, and it is a property of the code rather than a promise.
-
-The one exception to "receiver" is
-`CONFIG_OBSERVORE_MESH_TX`, off in every shipped build, which makes the device
-warn other nodes over BLE. A build with it on is a radio transmitter, and
-distributing such hardware brings EU RED and FCC Part 15 into scope.
-
-### What it writes down, and for how long
-
-MAC addresses are personal data under the GDPR and the UK GDPR: they are
-identifiers that single out a device, and a device usually singles out a
-person. A home installation plausibly sits inside the household exemption. A
-board carried into public, logging the addresses of strangers to flash, is
-where that gets thin — and that is a real way to use this, not a hypothetical.
-
-So it is worth being precise about what survives a power cut:
-
-| | what it holds | how long |
-|---|---|---|
-| detection history | 48 entries: address, class, label, signal, first and last seen | until a 49th replaces the oldest |
-| mute rules | up to 128: whatever you chose to ignore — an address, a vendor prefix, a name, an advert shape | until you remove them |
-| household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
-| device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
-| peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
-
-Two things in that table are worth drawing out. The **census keeps no
-addresses** — only hashes, because the question it asks is *how many* a device
-has worn, never *which*, so there was nothing to gain by storing them. And the
-identifiable record is the **history**, which is 48 entries deep and
-overwrites itself; it is not a growing log.
-
-The console can show and clear all of it. `POST /api/history` empties the
-history, `/api/unmute?all=1` the rules.
-
-### And a note on publishing what it sees
-
-The photograph in this README was redacted after the fact, because it showed
-two fixed public addresses — a body camera's and a drone's, with its Remote ID
-serial — belonging to other people. Rotating addresses identify nobody and
-were left alone.
-
-A tool built to notice what is broadcast should not be the thing that
-publishes it. The same rule this project already had about never pasting real
-device output into documentation applies to other people's identifiers as
-much as to your own secrets.
-
-Passive reception of broadcast frames is lawful in most jurisdictions, but
-"most" is not "all", and what you do with a log is a separate question from
-how you gathered it. Check your local law. This is a description of what the
-firmware does, not legal advice.
+## How it works, in detail
+
+The sections above are what you need to run it. These are the longer write-ups:
+why each decision was made, and what went wrong on hardware before it worked.
+
+- [How it decides something is worth reporting](docs/detecting.md) — the classes,
+  the scoring, and the walks that reshaped them
+- [Ignoring what you already know about](docs/ignoring.md) — mutes, the baseline,
+  and the household census the device builds by itself
+- [Nodes that warn each other](docs/mesh.md) — several boards in one household,
+  off by default, three tiers deep
+- [The display boards in detail](docs/display.md) — touch calibration, the
+  pocket-watch face, brightness
+- [Firmware, updates and flash layout](docs/firmware.md) — what it knows about its
+  own build, installing, rollback, partitions
+- [Internal RAM, and the four times it ran out](docs/memory.md) — the constraint
+  this firmware actually lives under
+- [Knowing what time it is](docs/time.md) — where the clock comes from, and how it
+  says which source set it
+- [Working on Observore](docs/development.md) — the checks, the host tests, the
+  generated tables
+- [XIAO verification notes](docs/xiao-verification.md) — what is unverified on the
+  reference board
 
 ## Credit
 

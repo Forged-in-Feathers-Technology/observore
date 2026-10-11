@@ -103,10 +103,11 @@ static const char *TAG = "observore.touch";
  * task also logs, and formatting one line costs about a kilobyte of stack on
  * this chip. Cut to 1536 by eye during a heap fix, it survived the shipping
  * build and overflowed the moment CONFIG_OBSERVORE_TOUCH_LOG_RAW was turned
- * on, which is the procedure the README tells people to follow to calibrate a
- * panel: every touch panicked the device. Sized from the high-water mark the
- * task now reports rather than guessed again: 2560 left only 476 bytes spare
- * once a touch had been logged, which is a margin in name only. */
+ * on, which is the procedure docs/display.md tells people to follow to
+ * calibrate a panel: every touch panicked the device. Sized from the
+ * high-water mark the task now reports rather than guessed again: 2560 left
+ * only 476 bytes spare once a touch had been logged, which is a margin in
+ * name only. */
 #define TASK_STACK 3072
 
 #if CONFIG_OBSERVORE_TOUCH_XPT2046
