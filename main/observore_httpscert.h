@@ -151,9 +151,4 @@ bool observore_httpscert_get(const char **cert, size_t *cert_len,
 /* The SHA-256 of the DER certificate: OBSERVORE_FP_BYTES bytes. */
 bool observore_httpscert_fp(uint8_t *out);
 
-/* Whether there is enough free internal heap to serve TLS, and how much there
- * is either way so the caller can say why it did not. A refusal here is not a
- * fault: the caller serves plain HTTP and the console still answers. */
-bool observore_httpscert_can_serve(uint32_t *free_heap);
-
 #endif /* CONFIG_OBSERVORE_CONSOLE_HTTPS */

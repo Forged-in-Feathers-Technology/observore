@@ -28,12 +28,19 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_http_server.h"
+#if CONFIG_OBSERVORE_CONSOLE_HTTPS
+#include "esp_https_server.h"
+#include "observore_httpscert.h"
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "observore.web";
 
 static httpd_handle_t s_server;
+static bool           s_tls;
 static int64_t        s_last_request_us;
 
 int64_t observore_web_last_request_us(void)
@@ -1294,6 +1301,26 @@ typedef struct {
 
 static esp_err_t dispatch(httpd_req_t *req)
 {
+    /* The httpd task's own headroom, reported only when it drops.
+     *
+     * This runs on that task, so it is the one place that can say what the
+     * request handlers and -- on the TLS path -- the handshake behind them
+     * actually cost. It exists because the alternative is adding two guesses
+     * together: 8,192 for the JSON handlers and whatever a handshake wants.
+     * observore_httpscert.c already records what guessing a stack costs.
+     *
+     * Rate limited by the same trick observore_touch.c uses: only a new low is
+     * worth a line, so a busy console does not fill the log. */
+    {
+        static size_t reported = SIZE_MAX;
+        size_t spare = uxTaskGetStackHighWaterMark(NULL);
+        if (spare + 256 < reported) {
+            reported = spare;
+            ESP_LOGI(TAG, "httpd stack headroom: %u bytes (%s)",
+                     (unsigned)spare, s_tls ? "tls" : "plain");
+        }
+    }
+
     const observore_route_t *r = req->user_ctx;
     if (!r->open_route && !observore_auth_ok(req)) {
         return unauthorized(req);
@@ -1310,6 +1337,87 @@ static esp_err_t dispatch(httpd_req_t *req)
      * worth more than a version check that can wait for the next window. */
     return r->fn(req);
 }
+
+/* The socket settings this project has paid for, in one place, because the
+ * plain and the TLS server both need every one of them and a setting that
+ * applied to only one of them would be a bug nobody could see.
+ *
+ * stack_size is deliberately not here: the two paths need different amounts
+ * and each states its own. */
+static void tune(httpd_config_t *h, size_t n_routes)
+{
+    h->lru_purge_enable = true;
+    /* Close with a reset, not a FIN that waits for a reply.
+     *
+     * Three overnight runs ended with the internal heap at a few hundred bytes
+     * and the console unable to start, and the serial log of the third showed
+     * why: a browser tab left open on the console reconnects each uplink
+     * window, asks for the history, and stops reading. The send fails with
+     * EAGAIN, the handler gives up, the server is stopped when the device
+     * leaves the uplink -- and lwIP keeps the unsent 9 KB queued behind a FIN
+     * it retransmits for minutes to a client that is not there, then does it
+     * again next window. Three windows cost 26 KB for good.
+     *
+     * A zero linger turns close into a reset: the connection and everything
+     * queued on it are freed at once. Nothing is lost that was going to arrive
+     * anyway, since the client had stopped reading. */
+    h->enable_so_linger = true;
+    h->linger_timeout = 0;
+    /* And fewer of them, purged sooner. A browser opens about six connections
+     * and a backgrounded tab stops reading on all of them; with the default
+     * seven allowed and five seconds before a blocked send gives up, six
+     * stalled responses sit in lwIP's send buffers at once and the heap is
+     * gone before the reset above ever gets its chance. Three sockets is
+     * plenty for one person reading a page, LRU purge evicts the oldest the
+     * moment a fourth arrives, and a send that cannot make progress in two
+     * seconds is to a client that has stopped listening. */
+    h->max_open_sockets = 3;
+    h->send_wait_timeout = 2;
+    h->recv_wait_timeout = 2;
+    /* Sized from the table rather than left at the default of 8.  Overflowing
+     * it makes httpd_register_uri_handler fail and the route simply not exist,
+     * which surfaces as a 405 on a route that is plainly in the source. */
+    h->max_uri_handlers = n_routes;
+}
+
+/* The TLS task stack, and the heap the server refuses to start below.
+ *
+ * These two live together because the second is derived from the first. The
+ * previous attempt put a flat 32 KB in the certificate module, which refused
+ * to serve on the one board class the option exists for -- at 31,255 bytes
+ * free, 1,513 short -- because the number was chosen rather than derived.
+ *
+ * What actually costs internal RAM here is this one task stack. Espressif's
+ * note that "one socket uses ~40kB RAM with SSL" is about mbedTLS's session
+ * buffers, and this project sets CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC, so on a
+ * board with PSRAM those come out of PSRAM. httpd runs a single task for every
+ * socket, so the stack is paid once rather than per connection.
+ *
+ * The handshake and the JSON handlers share that stack sequentially, so it
+ * needs the larger of the two and not their sum -- which is the mistake
+ * waiting to be made here, and would have cost 6 KB of internal RAM on a board
+ * that runs with about 13 KB free while serving.
+ *
+ * It is the same 8,192 as the plain server, because the measurement said the
+ * TLS path does not want more. Run at 12,288 first and asked what it used, the
+ * httpd task reported 8,976 bytes still free -- 3,312 used -- with a TLS 1.2
+ * ECDHE-ECDSA handshake behind an authenticated /api/history returning 8,992
+ * bytes and /api/census returning 5,692. The handlers are cheap on stack
+ * because they build their JSON in a PSRAM scratch buffer rather than on it,
+ * which is what the comment in dispatch() is about.
+ *
+ * Not trimmed to the 3,312 measured. 8,192 leaves 59% headroom over it, and
+ * what is unmeasured is named rather than assumed away: this was TLS 1.2 with
+ * one self-signed P-256 certificate and no client certificate, and a longer
+ * chain or a 1.3 handshake has not been put through it. Cutting to the first
+ * number that fitted is what observore_touch.c carries a comment about.
+ *
+ * The floor is the stack plus the same 8 KB again, so the server refuses
+ * rather than starting and then running the heap into the ground -- which this
+ * project has done before, at 1.4 KB free, when the SoftAP stopped answering
+ * ARP. */
+#define TLS_STACK      8192
+#define TLS_HEAP_FLOOR (TLS_STACK + 8192)
 
 esp_err_t observore_web_start(void)
 {
@@ -1351,46 +1459,92 @@ esp_err_t observore_web_start(void)
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},
         {"/api/notify",    HTTP_POST, notify_set_handler, false},
     };
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.lru_purge_enable = true;
-    /* Close with a reset, not a FIN that waits for a reply.
-     *
-     * Three overnight runs ended with the internal heap at a few hundred bytes
-     * and the console unable to start, and the serial log of the third showed
-     * why: a browser tab left open on the console reconnects each uplink
-     * window, asks for the history, and stops reading. The send fails with
-     * EAGAIN, the handler gives up, the server is stopped when the device
-     * leaves the uplink -- and lwIP keeps the unsent 9 KB queued behind a FIN
-     * it retransmits for minutes to a client that is not there, then does it
-     * again next window. Three windows cost 26 KB for good.
-     *
-     * A zero linger turns close into a reset: the connection and everything
-     * queued on it are freed at once. Nothing is lost that was going to arrive
-     * anyway, since the client had stopped reading. */
-    cfg.enable_so_linger = true;
-    cfg.linger_timeout = 0;
-    /* And fewer of them, purged sooner. A browser opens about six connections
-     * and a backgrounded tab stops reading on all of them; with the default
-     * seven allowed and five seconds before a blocked send gives up, six
-     * stalled responses sit in lwIP's send buffers at once and the heap is
-     * gone before the reset above ever gets its chance. Three sockets is
-     * plenty for one person reading a page, LRU purge evicts the oldest the
-     * moment a fourth arrives, and a send that cannot make progress in two
-     * seconds is to a client that has stopped listening. */
-    cfg.max_open_sockets = 3;
-    cfg.send_wait_timeout = 2;
-    cfg.recv_wait_timeout = 2;
-    cfg.stack_size = 8192;   /* the JSON handlers are not frugal */
-    /* Sized from the table rather than left at the default of 8.  Overflowing
-     * it makes httpd_register_uri_handler fail and the route simply not exist,
-     * which surfaces as a 405 on a route that is plainly in the source. */
-    cfg.max_uri_handlers = sizeof(routes) / sizeof(routes[0]);
+    const size_t n_routes = sizeof(routes) / sizeof(routes[0]);
 
-    esp_err_t err = httpd_start(&s_server, &cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
-        return err;
+#if CONFIG_OBSERVORE_CONSOLE_HTTPS
+    /* TLS, but only where it is both wanted and affordable, and never on the
+     * SoftAP -- see observore_httpscert.h for why that link stays plain.
+     *
+     * Each decision is logged with its reason. A console that silently came up
+     * plain when the owner believed it was encrypted is worse than one that
+     * says it could not. */
+    if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
+        uint32_t free_heap = heap_caps_get_free_size(OBSERVORE_HEAP_CAPS);
+        if (!observore_httpscert_present()) {
+            ESP_LOGW(TAG, "serving plain HTTP: no certificate was generated");
+        } else if (free_heap < TLS_HEAP_FLOOR) {
+            ESP_LOGW(TAG, "serving plain HTTP: %" PRIu32 " bytes of internal "
+                     "heap free, below the %d this needs to serve TLS",
+                     free_heap, TLS_HEAP_FLOOR);
+        } else {
+            httpd_ssl_config_t scfg = HTTPD_SSL_CONFIG_DEFAULT();
+            /* Only the fields this project has earned, applied onto the TLS
+             * defaults rather than over them: HTTPD_SSL_CONFIG_DEFAULT uses a
+             * different ctrl_port and a larger task stack than the plain
+             * config, and overwriting its httpd block wholesale would quietly
+             * undo both. */
+            tune(&scfg.httpd, n_routes);
+            scfg.httpd.stack_size = TLS_STACK;
+            /* The device is associated for about thirty seconds in every two
+             * and a half minutes, so a browser renegotiates almost every
+             * window. Tickets take the asymmetric work off every visit after
+             * the first.
+             *
+             * Asked for only when the build can actually provide them. The
+             * Kconfig option selects ESP_TLS_SERVER_SESSION_TICKETS, but
+             * asking for tickets in a build without it does not degrade --
+             * httpd_ssl_start fails with ESP_ERR_NOT_SUPPORTED and the console
+             * comes up plain, reporting a TLS failure whose cause is nowhere
+             * near the message. That cost an hour; the guard costs two
+             * lines. */
+#if CONFIG_ESP_TLS_SERVER_SESSION_TICKETS
+            scfg.session_tickets = true;
+#else
+            ESP_LOGW(TAG, "serving TLS without session tickets: every visit "
+                          "will pay a full handshake");
+#endif
+
+            const char *cert = NULL, *key = NULL;
+            size_t cert_len = 0, key_len = 0;
+            if (observore_httpscert_get(&cert, &cert_len, &key, &key_len)) {
+                scfg.servercert     = (const uint8_t *)cert;
+                scfg.servercert_len = cert_len;
+                scfg.prvtkey_pem    = (const uint8_t *)key;
+                scfg.prvtkey_len    = key_len;
+
+                uint32_t before = heap_caps_get_free_size(OBSERVORE_HEAP_CAPS);
+                esp_err_t serr = httpd_ssl_start(&s_server, &scfg);
+                if (serr == ESP_OK) {
+                    s_tls = true;
+                    ESP_LOGI(TAG, "console is HTTPS on port %d; internal heap "
+                             "%" PRIu32 " -> %" PRIu32,
+                             scfg.port_secure, before,
+                             heap_caps_get_free_size(OBSERVORE_HEAP_CAPS));
+                } else {
+                    /* Not fatal. Fall through to plain HTTP below, because a
+                     * console that answers is worth more than one that was
+                     * meant to be encrypted and is not there. */
+                    s_server = NULL;
+                    ESP_LOGW(TAG, "could not start HTTPS (%s); serving plain "
+                             "HTTP", esp_err_to_name(serr));
+                }
+            }
+        }
     }
+#endif /* CONFIG_OBSERVORE_CONSOLE_HTTPS */
+
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    tune(&cfg, n_routes);
+    cfg.stack_size = 8192;   /* the JSON handlers are not frugal */
+
+    if (!s_server) {
+        esp_err_t err = httpd_start(&s_server, &cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+    esp_err_t err = ESP_OK;
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         const httpd_uri_t u = {
@@ -1404,8 +1558,7 @@ esp_err_t observore_web_start(void)
             /* Never silently serve a partial API. */
             ESP_LOGE(TAG, "could not register %s: %s", routes[i].uri,
                      esp_err_to_name(err));
-            httpd_stop(s_server);
-            s_server = NULL;
+            observore_web_stop();
             return err;
         }
     }
@@ -1418,8 +1571,23 @@ esp_err_t observore_web_stop(void)
     if (!s_server) {
         return ESP_OK;
     }
-    esp_err_t err = httpd_stop(s_server);
+    esp_err_t err;
+#if CONFIG_OBSERVORE_CONSOLE_HTTPS
+    if (s_tls) {
+        err = httpd_ssl_stop(s_server);
+        s_tls = false;
+    } else {
+        err = httpd_stop(s_server);
+    }
+#else
+    err = httpd_stop(s_server);
+#endif
     s_server = NULL;
     scratch_free();
     return err;
+}
+
+bool observore_web_is_tls(void)
+{
+    return s_tls;
 }

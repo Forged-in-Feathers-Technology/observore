@@ -881,6 +881,7 @@ config OBSERVORE_AP_PASSWORD
 config OBSERVORE_CONSOLE_HTTPS
     bool "Serve the console over HTTPS in uplink mode (needs PSRAM)"
     default n
+    select ESP_TLS_SERVER_SESSION_TICKETS
     help
         Generate a self-signed certificate on first boot and serve the console
         over TLS while the device is on your own network (#11). Off by default.
@@ -909,19 +910,27 @@ config OBSERVORE_CONSOLE_HTTPS
 
         Two practical costs:
 
-        Internal RAM. Serving a handshake costs more than making one. Boards
-        with PSRAM reach a low-water mark of roughly 10 KB under an outbound
-        handshake; the classic-ESP32 displays reach 820 to 932 bytes. This
-        option is therefore for the PSRAM boards, and the firmware refuses to
-        serve TLS at runtime when free internal heap is short -- it serves
-        plain HTTP and says why, because a console that answers is worth more
-        than one that was meant to be encrypted and is not there.
+        Internal RAM. Serving costs one httpd task stack, 8 KB, paid once
+        rather than per connection -- mbedTLS's session buffers come out of
+        PSRAM here. Measured on a Waveshare S3 AMOLED: 12,764 bytes of
+        internal heap to start the server, and a low-water mark of 13,908
+        bytes under authenticated load. The classic-ESP32 displays run at 820
+        to 932 bytes and cannot do this at all, so the firmware refuses at
+        runtime when free internal heap is short -- it serves plain HTTP and
+        says why, because a console that answers is worth more than one that
+        was meant to be encrypted and is not there.
 
         The uplink window. The device is only associated for about thirty
         seconds in every two and a half minutes, so a browser renegotiates
-        almost every window and a full handshake has been measured at around
-        three seconds. Session tickets are enabled to take that cost off the
-        repeat visits.
+        almost every window. Measured, that is cheaper than feared: a full
+        request including the handshake takes about 0.7 seconds, and the
+        15 KB console page came back in 0.77. Session tickets take the
+        asymmetric work off the repeat visits,
+        which is why this selects ESP_TLS_SERVER_SESSION_TICKETS rather than
+        leaving it to be remembered: asking esp_https_server for tickets
+        without that symbol makes httpd_ssl_start fail outright with
+        ESP_ERR_NOT_SUPPORTED, so the console would have come up plain with a
+        message about heap that had nothing to do with it.
 
         The SoftAP stays HTTP deliberately. During first-time setup there is no
         name to put in a certificate and no fingerprint anybody has seen yet,

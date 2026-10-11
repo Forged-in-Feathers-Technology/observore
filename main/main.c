@@ -172,8 +172,14 @@ static void enter_mode(observore_mode_t next)
     observore_web_start();
     observore_led_set_console(true);
     if (next == OBSERVORE_MODE_UPLINK) {
-        ESP_LOGI(TAG, "console at http://%s/ or http://%s/ on your network",
-                 observore_wifi_uplink_ip(), observore_wifi_hostname());
+        /* The scheme that is actually in use, not the one that was asked
+         * for: serving TLS can be refused at runtime, and printing https
+         * for a plain server would be the one lie this console must not
+         * tell. */
+        const char *scheme = observore_web_is_tls() ? "https" : "http";
+        ESP_LOGI(TAG, "console at %s://%s/ or %s://%s/ on your network",
+                 scheme, observore_wifi_uplink_ip(),
+                 scheme, observore_wifi_hostname());
     } else {
         ESP_LOGI(TAG, "console up: join \"%s\" (password \"%s\"), "
                       "then open http://192.168.4.1/",
