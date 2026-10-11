@@ -13,6 +13,7 @@
 #include "observore_auth.h"
 #include "observore_ble.h"
 #include "observore_clock.h"
+#include "observore_crashlog.h"
 #include "observore_meshkey.h"
 #include "observore_history.h"
 #include "observore_notify.h"
@@ -281,6 +282,9 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_census_counts(observore_clock_day(),
                             &census_household, &census_known);
 
+    char crash[96];
+    observore_crashlog_line(crash, sizeof(crash));
+
     /* The last check's error, escaped: it can carry an esp-tls string. */
     char cerr[96];
     observore_json_escape(observore_update_error(), cerr, sizeof(cerr));
@@ -306,7 +310,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"checked_s\":%ld,\"checking\":%s,\"check_error\":\"%s\""
         ",\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u"
         ",\"min_at_s\":%lld,\"min_mode\":\"%s\",\"min_queued\":%u}"
-        ",\"reset_reason\":\"%s\",\"notifier\":%s"
+        ",\"reset_reason\":\"%s\",\"crash\":\"%s\",\"notifier\":%s"
         ",\"bright\":%d,\"bright_now\":%d,\"bright_steps\":%d"
         ",\"motion\":{\"sensor\":%s,\"carried\":%s,\"journeys\":%u"
         ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
@@ -340,6 +344,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         latest ? latest->mode : "",
         latest ? (unsigned)latest->queued : 0u,
         observore_reset_reason_name(esp_reset_reason()),
+        /* The previous panic, if the device kept one. Empty when there is
+         * none -- including on a board flashed before the coredump partition
+         * existed, which has nowhere to write one. */
+        crash,
 #if CONFIG_OBSERVORE_NOTIFIER
         "true"
 #else
@@ -1113,6 +1121,25 @@ static esp_err_t mesh_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* The stored crash report, and the only way to be rid of it.
+ *
+ * Kept rather than erased on read: a dump is worth more than its summary --
+ * espcoredump.py turns it into a backtrace with line numbers -- and a report
+ * that vanished when somebody glanced at the console would be the worst of
+ * both. */
+static esp_err_t crash_handler(httpd_req_t *req)
+{
+    char value[8];
+    if (query_param(req, "clear", value, sizeof(value))) {
+        if (!observore_crashlog_clear()) {
+            return fail(req, "there was nothing stored, or it could not be erased");
+        }
+        return ok(req);
+    }
+    return fail(req, "clear=1 is the only thing this does; the summary is in "
+                     "/api/status");
+}
+
 static esp_err_t monitors_get_handler(httpd_req_t *req)
 {
     char body[768];
@@ -1316,6 +1343,7 @@ esp_err_t observore_web_start(void)
         {"/api/census",    HTTP_GET,  census_handler,     false},
         {"/api/time",      HTTP_POST, time_handler,       false},
         {"/api/mesh",      HTTP_POST, mesh_handler,       false},
+        {"/api/crash",     HTTP_POST, crash_handler,      false},
         {"/api/monitors",  HTTP_GET,  monitors_get_handler, false},
         {"/api/monitors",  HTTP_POST, monitors_set_handler, false},
         {"/api/netcfg",    HTTP_GET,  netcfg_get_handler, false},

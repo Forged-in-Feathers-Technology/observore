@@ -19,6 +19,7 @@ idf_component_register(
         "observore_touchcal.c"
         "observore_tap.c"
         "observore_update.c"
+        "observore_crashlog.c"
         "observore_heapwatch.c"
         "observore_runs.c"
         "observore_display.c"
@@ -41,6 +42,7 @@ idf_component_register(
     REQUIRES
         bt
         esp_adc
+        espcoredump
         driver
         esp_event
         esp_http_server

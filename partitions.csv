@@ -39,9 +39,38 @@
 # every target, so it fails there rather than in the field, exactly as it did
 # when the old 1500K partition overflowed by 27 KB.
 #
-# Name,     Type, SubType, Offset,    Size,  Flags
-nvs,        data, nvs,     0x9000,    24K,
-phy_init,   data, phy,     0xf000,    4K,
-otadata,    data, ota,     0x10000,   8K,
-ota_0,      app,  ota_0,   0x20000,   1984K,
-ota_1,      app,  ota_1,   0x210000,  1984K,
+# A coredump partition, and what it cost
+#
+# The 3.5" CYD has ended five runs in a panic, 3.5 to 9.5 hours apart, with a
+# healthy heap. Two serial catchers failed to be listening at the right
+# moment, and the one that probably was had its log thrown away. A dump
+# written to flash survives the reboot and needs nobody watching, which is the
+# only arrangement that works for a fault that fires twice a day.
+#
+# The 4 MB table was exactly full, so the space came from the application
+# slots: 1984K each to 1920K. The largest image this project builds is about
+# 1578 KB, so that is still a third of a slot spare, and CI builds every
+# target and fails there rather than in the field.
+#
+# Both slots shrink by the same amount on purpose. An OTA writes into
+# whichever slot is not running, so a pair of different sizes is a trap: an
+# image that fits the one you tested would fail on the other half of the time.
+#
+# 64K spare is left above the coredump rather than given to the slots, because
+# #185 needs an nvs_keys partition if NVS encryption is ever enabled, and a
+# partition table change cannot reach an existing device over the air -- the
+# browser flasher writes the table and OTA does not. The cable upgrade should
+# be spent once.
+#
+# Safe for devices still on the old table: esp_core_dump finds its partition
+# by name at runtime, so a device without one simply never writes a dump. It
+# does not fall back to an offset, which on an old table would be the tail of
+# that device's own ota_1 slot.
+#
+# Name,     Type, SubType,  Offset,    Size,  Flags
+nvs,        data, nvs,      0x9000,    24K,
+phy_init,   data, phy,      0xf000,    4K,
+otadata,    data, ota,      0x10000,   8K,
+ota_0,      app,  ota_0,    0x20000,   1920K,
+ota_1,      app,  ota_1,    0x200000,  1920K,
+coredump,   data, coredump, 0x3E0000,  64K,

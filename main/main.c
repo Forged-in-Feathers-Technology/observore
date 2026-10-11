@@ -16,6 +16,7 @@
 
 #include "observore_census.h"
 #include "observore_clock.h"
+#include "observore_crashlog.h"
 #include "observore_history.h"
 #include "observore_improv.h"
 #include "observore_led.h"
@@ -558,6 +559,9 @@ void app_main(void)
     observore_auth_init();
     observore_notify_init();
     observore_update_init();
+    /* Before the radios start, so the previous run's panic is near the top of
+     * the log rather than buried under Wi-Fi's own chatter. */
+    observore_crashlog_init();
     observore_heapwatch_init();
     observore_runs_init();
     observore_display_init();
