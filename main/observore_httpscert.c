@@ -54,6 +54,9 @@ bool observore_fp_short(const uint8_t *fp, char *out, size_t out_len)
 #if CONFIG_OBSERVORE_CONSOLE_HTTPS
 
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -211,28 +214,28 @@ static esp_err_t generate(void)
         goto done;
     }
 
-    unsigned char pem[CERT_PEM_MAX];
-    if ((rc = mbedtls_x509write_crt_pem(&crt, pem, sizeof(pem),
+    /* Written straight into the buffers they are destined for. These were
+     * stack temporaries once, and those 1,536 bytes were part of why the
+     * first board to run this overflowed its task. mbedTLS reports
+     * BUFFER_TOO_SMALL rather than overrunning, so the size check is the
+     * return value. */
+    if ((rc = mbedtls_x509write_crt_pem(&crt, (unsigned char *)s_cert,
+                                        sizeof(s_cert),
                                         mbedtls_ctr_drbg_random, &drbg)) != 0) {
-        ESP_LOGE(TAG, "could not write the certificate: -0x%04x", -rc);
+        ESP_LOGE(TAG, "could not write the certificate: -0x%04x "
+                 "(buffer is %u bytes)", -rc, (unsigned)sizeof(s_cert));
         goto done;
     }
-    if (strlen((char *)pem) >= sizeof(s_cert)) {
-        ESP_LOGE(TAG, "certificate is %u bytes, buffer is %u",
-                 (unsigned)strlen((char *)pem), (unsigned)sizeof(s_cert));
+    if ((rc = mbedtls_pk_write_key_pem(&pk, (unsigned char *)s_key,
+                                       sizeof(s_key))) != 0) {
+        ESP_LOGE(TAG, "could not write the key: -0x%04x "
+                 "(buffer is %u bytes)", -rc, (unsigned)sizeof(s_key));
         goto done;
     }
-    strcpy(s_cert, (char *)pem);
-
-    unsigned char kpem[KEY_PEM_MAX];
-    if ((rc = mbedtls_pk_write_key_pem(&pk, kpem, sizeof(kpem))) != 0) {
-        ESP_LOGE(TAG, "could not write the key: -0x%04x", -rc);
+    if (s_cert[0] == '\0' || s_key[0] == '\0') {
+        ESP_LOGE(TAG, "the writer reported success and produced nothing");
         goto done;
     }
-    if (strlen((char *)kpem) >= sizeof(s_key)) {
-        goto done;
-    }
-    strcpy(s_key, (char *)kpem);
 
     err = ESP_OK;
 done:
@@ -242,6 +245,84 @@ done:
     mbedtls_ctr_drbg_free(&drbg);
     mbedtls_entropy_free(&ent);
     return err;
+}
+
+/* Generation runs on its own task, because it does not fit on the one that
+ * calls it.
+ *
+ * It ran on the main task first, and the first board it touched reported
+ * "A stack overflow in task main has been detected", saved a core dump, and
+ * boot-looped -- rewriting that dump every 1.1 seconds. The main task has
+ * 6,144 bytes in this build, a figure sized for something that calls init
+ * functions rather than something that generates a keypair:
+ * mbedtls_ecp_gen_key and the X.509 writer together want several kilobytes,
+ * and they want them on top of whatever main was already using.
+ *
+ * Raising the main task's stack would spend that RAM for the life of the
+ * device, on every board, for something that happens once. A task that exists
+ * only while generating gives its stack back when it exits.
+ *
+ * The size is reported rather than assumed -- the log line says what was
+ * actually used, so the next person to change this has a number instead of a
+ * guess. That is the lesson observore_touch.c already records: a stack "cut by
+ * eye during a heap fix" survived the shipping build and overflowed the moment
+ * anything was logged from it.
+ *
+ * Measured on a Waveshare S3 AMOLED: 4,668 bytes used of 12,288, 7,620 spare.
+ * The headroom is kept rather than trimmed to fit, deliberately. It is
+ * transient -- the task exits and the stack is returned within half a second
+ * of boot, on a board that had 132 KB of internal heap free at the time -- and
+ * ECDSA key generation is a rejection-sampling loop, so one board's one
+ * measurement is not the worst case. Trimming to the first number that fitted
+ * is the mistake touch.c is still carrying the comment about. */
+#define GEN_TASK_STACK 12288
+
+static struct {
+    esp_err_t         err;
+    SemaphoreHandle_t done;
+} s_gen;
+
+static void gen_task(void *arg)
+{
+    (void)arg;
+    s_gen.err = generate();
+    size_t spare = uxTaskGetStackHighWaterMark(NULL);
+    ESP_LOGI(TAG, "generation used %u of %u stack bytes, %u spare",
+             (unsigned)(GEN_TASK_STACK - spare), (unsigned)GEN_TASK_STACK,
+             (unsigned)spare);
+    /* Nothing below touches s_gen, so the waiter may proceed immediately. */
+    xSemaphoreGive(s_gen.done);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t generate_on_own_task(void)
+{
+    s_gen.done = xSemaphoreCreateBinary();
+    if (!s_gen.done) {
+        ESP_LOGE(TAG, "no memory for the generation semaphore");
+        return ESP_ERR_NO_MEM;
+    }
+    s_gen.err = ESP_FAIL;
+    TaskHandle_t t = NULL;
+    if (xTaskCreate(gen_task, "observore_gen", GEN_TASK_STACK, NULL, 5, &t)
+        != pdPASS) {
+        ESP_LOGE(TAG, "could not start the generation task (%u bytes of "
+                 "stack)", (unsigned)GEN_TASK_STACK);
+        vSemaphoreDelete(s_gen.done);
+        s_gen.done = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    /* A wait that cannot time out, on purpose. Everything in the generation
+     * path is computation -- the entropy source is the hardware RNG and does
+     * not block, and ECDSA key generation is a bounded rejection loop -- so
+     * there is nothing here to hang on. A timeout would mean the task might
+     * still be writing into s_cert after this function had given up and
+     * returned, which is a data race in exchange for a guard against a failure
+     * mode that does not exist. */
+    xSemaphoreTake(s_gen.done, portMAX_DELAY);
+    vSemaphoreDelete(s_gen.done);
+    s_gen.done = NULL;
+    return s_gen.err;
 }
 
 /* ------------------------------------------------------------------ */
@@ -314,7 +395,7 @@ void observore_httpscert_init(void)
          * the most free internal heap, and the cost is paid once. */
         ESP_LOGI(TAG, "no certificate stored; generating one");
         uint32_t before = heap_caps_get_free_size(OBSERVORE_HEAP_CAPS);
-        if (generate() != ESP_OK) {
+        if (generate_on_own_task() != ESP_OK) {
             memset(s_cert, 0, sizeof(s_cert));
             memset(s_key, 0, sizeof(s_key));
             return;

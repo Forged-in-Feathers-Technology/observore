@@ -115,6 +115,66 @@ that the generated private key belongs to it. A TLS 1.3 handshake against
 `Verification error: self-signed certificate` — which is the expected result
 and the warning the fingerprint exists to answer.
 
+## What it actually cost, on a board
+
+Measured on a Waveshare ESP32-S3 AMOLED, which has PSRAM, by capturing its
+first boot after flashing:
+
+```
+I (834)  no certificate stored; generating one
+I (1144) generation used 4668 of 12288 stack bytes, 7620 spare
+I (1144) generated a P-256 certificate (635 bytes) and its key;
+         internal heap 132367 -> 119223
+W (1204) console certificate SHA-256 fingerprint:
+         18:5E:57:A3:5E:5A:67:B9:38:B9:BE:B2:8D:7C:2E:52:...
+```
+
+| | |
+|---|---|
+| generation time | **310 ms**, once in the device's life |
+| stack used | **4,668 bytes** |
+| internal heap across generation | 132,367 → 119,223 |
+| certificate | 635 bytes of PEM — the same figure the host produced |
+
+A reboot loads it rather than making a new one, and reports the same
+fingerprint — which is the property the whole scheme rests on, since a
+fingerprint that changed on every boot would be one nobody could ever have
+verified.
+
+### It overflowed the main task first
+
+The first board to run this printed
+`A stack overflow in task main has been detected`, saved a core dump, and
+boot-looped, rewriting that dump every 1.1 seconds.
+
+Generation had been called straight from the init sequence. The main task has
+6,144 bytes of stack in this build — a figure sized for something that calls
+init functions, not something that generates a keypair and writes an X.509
+certificate. The 4,668 bytes above needed to fit *on top of* whatever main was
+already using, and did not.
+
+It now runs on its own task, which exists only while generating and returns its
+stack when it exits; raising the main task's stack would have spent that RAM
+for the life of every device, on every board, for something that happens once.
+Two 1,024- and 512-byte PEM buffers also moved off the stack into the statics
+they were going to be copied into anyway.
+
+Worth noting what reported it: the next boot said
+`the previous run panicked in task "main" at pc 0x40383aa5` by itself, which is
+the crash reporting from [firmware.md](firmware.md) doing its job on a bug
+introduced two commits earlier.
+
+### A figure that is still wrong
+
+That same board's heartbeat reports an internal-heap low-water mark of
+**19,092 bytes** during an uplink window. The refusal threshold described
+below is 32 KB — so as written it would refuse to serve on the one board
+class this option is for, depending on when the check happens to run.
+
+That is the threshold being chosen rather than measured, caught by putting it
+on hardware. It is the first thing the serving half has to fix, with a real
+measurement taken while something is actually serving.
+
 ## Why P-256 and not RSA
 
 Key generation happens on the device, once, at first boot. An RSA-2048 keypair
