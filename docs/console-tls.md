@@ -52,7 +52,18 @@ A screen. Five of the nine boards have one.
 
 So the certificate is self-signed and generated on the device, and its
 fingerprint is shown somewhere an attacker on the network cannot reach: on the
-glass, and on the serial console at boot.
+serial console at boot, and on the **system page** of a board that has a
+screen — tap through the pages to the one headed `OBSERVORE system`:
+
+```
+ cert     185E 57A3 5E5A 67B9 38B9
+```
+
+That line was claimed by this document before it existed. The fingerprint was
+printed on serial and nowhere else for two releases, while the argument for
+this whole approach rested on the screen — and a display board is precisely
+the case with no serial cable attached. It was caught by someone looking at
+the board and not finding it.
 
 ```
 W (3412) observore.httpscert: console certificate SHA-256 fingerprint:
@@ -78,10 +89,12 @@ A full SHA-256 is sixty-four hex characters. On a 320-pixel panel that is
 either unreadable or four lines of hex nobody will actually compare, and a
 comparison nobody performs is worth less than a shorter one they do.
 
-The screen shows the first ten bytes, as five groups of four:
+The screen shows the first ten bytes, as five groups of four — twenty-four
+characters, which fits beside a label on the narrowest panel here at forty
+columns:
 
 ```
-E3B0 C442 98FC 1C14 9AFB
+ cert     185E 57A3 5E5A 67B9 38B9
 ```
 
 Ten bytes is eighty bits. To defeat that an attacker must produce a certificate
