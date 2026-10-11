@@ -90,6 +90,60 @@ bool observore_version_is_newer(const char *candidate, const char *running)
     return observore_version_cmp(&c, &r) > 0;
 }
 
+void observore_json_scan_init(observore_json_scan_t *s)
+{
+    if (!s) {
+        return;
+    }
+    s->len = 0;
+    s->buf[0] = '\0';
+    s->value[0] = '\0';
+    s->found = false;
+}
+
+bool observore_json_scan(observore_json_scan_t *s, const char *key,
+                         const char *data, size_t n)
+{
+    if (!s || !key) {
+        return false;
+    }
+    if (s->found) {
+        return true;
+    }
+    if (!data) {
+        return false;
+    }
+
+    while (n > 0) {
+        size_t room = OBSERVORE_JSON_SCAN_BUF - s->len;
+        size_t take = (n < room) ? n : room;
+        memcpy(s->buf + s->len, data, take);
+        s->len += take;
+        s->buf[s->len] = '\0';
+        data += take;
+        n    -= take;
+
+        if (observore_json_string_field(s->buf, key, s->value,
+                                        sizeof(s->value))) {
+            s->found = true;
+            return true;
+        }
+
+        if (s->len == OBSERVORE_JSON_SCAN_BUF) {
+            /* Full and nothing found. Keep the tail and carry on: the token
+             * may be straddling this boundary, and dropping the whole buffer
+             * would lose its first half. The tail is far longer than any
+             * key-and-value pair this reads, so it cannot be cut in two
+             * twice. */
+            memmove(s->buf, s->buf + s->len - OBSERVORE_JSON_SCAN_KEEP,
+                    OBSERVORE_JSON_SCAN_KEEP);
+            s->len = OBSERVORE_JSON_SCAN_KEEP;
+            s->buf[s->len] = '\0';
+        }
+    }
+    return false;
+}
+
 bool observore_json_string_field(const char *json, const char *key,
                                  char *out, size_t out_len)
 {

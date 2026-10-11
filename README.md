@@ -2604,6 +2604,38 @@ trailing slashes, header names, body encoding, and the priority mapping. The
 Pushover body is form-encoded, so an advertised device name containing `&`
 cannot inject a field. There is a test for exactly that.
 
+### Reading a manifest that outgrew its buffer
+
+The device wants exactly one string from the update manifest — the version —
+and used to hold the whole document to get it, in a 2,048-byte static. The
+published manifest is **2,772 bytes** and lists every board, so it grows
+whenever a board is added. The read kept a prefix, and it worked only because
+the field it wants happens to be the first one in the file.
+
+There *was* a size guard, and it never fired. Cloudflare serves this over
+HTTP/1.1 with `Transfer-Encoding: chunked` and no `Content-Length`, so
+`esp_http_client_fetch_headers()` reports no length and the guard was skipped
+on every check. It was also a landmine: had the server ever sent a
+`Content-Length`, the guard would have refused a 2,772-byte document outright
+and **every device would have stopped seeing updates** — on a server
+configuration change nobody would connect to the firmware.
+
+The body is now scanned as it arrives, through a 768-byte window that carries
+its tail forward between reads. The document can be any size, the field can be
+anywhere in it, and the 2 KB static is gone — so the boards with the least RAM
+get some back.
+
+**The window's recycle point is the thing that needed testing**, and the first
+test of it was worthless. It split documents between *feeds* and passed with
+the tail-carry deliberately removed, because the documents were shorter than
+the window, so the window never filled and the recycling code never ran. The
+test now places the field at every offset across the recycle point; removing
+the carry fails eighteen of them.
+
+A manifest longer than 64 KB is refused. Not for memory — there is no buffer
+to overflow — but because a far end serving a captive portal or an error page
+is not worth reading through a radio to the end.
+
 ## Cutting a release
 
 ```bash
