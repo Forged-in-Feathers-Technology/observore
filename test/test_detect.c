@@ -15,6 +15,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_census.h"
+#include "observore_httpscert.h"
 #include "observore_clock.h"
 #include "observore_monitors.h"
 #include "observore_odid.h"
@@ -5291,6 +5292,103 @@ static void test_digest(void)
           strlen(req.body));
 }
 
+
+/* The certificate fingerprint the owner actually compares (#11).
+ *
+ * The expected strings here were derived independently -- SHA-256 of the empty
+ * string, formatted in Python -- rather than captured from this
+ * implementation's own output, because a test that records what the code did
+ * cannot notice the code doing the wrong thing consistently.
+ */
+static void test_cert_fingerprint(void)
+{
+    banner("console certificate fingerprint");
+
+    /* sha256("") -- a value anyone can reproduce in one line. */
+    const uint8_t fp[OBSERVORE_FP_BYTES] = {
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+        0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
+        0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    };
+    const char *want_full =
+        "E3:B0:C4:42:98:FC:1C:14:9A:FB:F4:C8:99:6F:B9:24:"
+        "27:AE:41:E4:64:9B:93:4C:A4:95:99:1B:78:52:B8:55";
+    const char *want_short = "E3B0 C442 98FC 1C14 9AFB";
+
+    char full[OBSERVORE_FP_HEX_LEN];
+    CHECK(observore_fp_format(fp, full, sizeof(full)),
+          "a correctly sized buffer should take the fingerprint");
+    CHECK(strcmp(full, want_full) == 0,
+          "fingerprint should be the form a browser shows:\n  got  %s\n  want %s",
+          full, want_full);
+    CHECK(strlen(full) == 95, "95 characters, not %zu", strlen(full));
+
+    char shrt[OBSERVORE_FP_SHORT_LEN];
+    CHECK(observore_fp_short(fp, shrt, sizeof(shrt)),
+          "a correctly sized buffer should take the short form");
+    CHECK(strcmp(shrt, want_short) == 0,
+          "short form should be five groups of four:\n  got  %s\n  want %s",
+          shrt, want_short);
+    CHECK(strlen(shrt) == 24, "24 characters, not %zu", strlen(shrt));
+
+    /* The short form must be a prefix of the long one with the separators
+     * taken out, or the two are not the same fingerprint and comparing either
+     * against a browser proves nothing about the other. */
+    char stripped[OBSERVORE_FP_SHORT_LEN];
+    size_t o = 0;
+    for (size_t i = 0; want_full[i] && o < OBSERVORE_FP_SHORT_BYTES * 2; i++) {
+        if (want_full[i] != ':') {
+            stripped[o++] = want_full[i];
+        }
+    }
+    stripped[o] = '\0';
+    char shrt_nospace[OBSERVORE_FP_SHORT_LEN];
+    o = 0;
+    for (size_t i = 0; shrt[i]; i++) {
+        if (shrt[i] != ' ') {
+            shrt_nospace[o++] = shrt[i];
+        }
+    }
+    shrt_nospace[o] = '\0';
+    CHECK(strcmp(stripped, shrt_nospace) == 0,
+          "the short form must be the long one's first ten bytes: %s vs %s",
+          shrt_nospace, stripped);
+
+    /* A buffer one byte short must be refused and left alone. An almost-right
+     * fingerprint is the single failure this whole mechanism exists to make
+     * visible, so the device must never be the thing that produces one. */
+    char tight[OBSERVORE_FP_HEX_LEN];
+    memset(tight, '!', sizeof(tight));
+    CHECK(!observore_fp_format(fp, tight, OBSERVORE_FP_HEX_LEN - 1),
+          "a buffer one byte short must be refused");
+    CHECK(tight[0] == '!',
+          "a refused format must not write anything, found %c", tight[0]);
+
+    char tight_s[OBSERVORE_FP_SHORT_LEN];
+    memset(tight_s, '!', sizeof(tight_s));
+    CHECK(!observore_fp_short(fp, tight_s, OBSERVORE_FP_SHORT_LEN - 1),
+          "a short buffer one byte short must be refused");
+    CHECK(tight_s[0] == '!', "a refused short format must not write anything");
+
+    CHECK(!observore_fp_format(NULL, full, sizeof(full)),
+          "no fingerprint, no output");
+    CHECK(!observore_fp_format(fp, NULL, OBSERVORE_FP_HEX_LEN),
+          "no buffer, no output");
+    CHECK(!observore_fp_short(NULL, shrt, sizeof(shrt)),
+          "no fingerprint, no short output");
+    CHECK(!observore_fp_short(fp, NULL, OBSERVORE_FP_SHORT_LEN),
+          "no buffer, no short output");
+
+    /* Zero is a legitimate byte value, not an absent fingerprint. */
+    const uint8_t zeros[OBSERVORE_FP_BYTES] = {0};
+    CHECK(observore_fp_format(zeros, full, sizeof(full)),
+          "an all-zero fingerprint still formats");
+    CHECK(strcmp(full, "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:"
+                       "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00") == 0,
+          "all zeros should print as zeros, got %s", full);
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -5355,6 +5453,7 @@ int main(void)
     test_version();
     test_name_keywords();
     test_digest();
+    test_cert_fingerprint();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

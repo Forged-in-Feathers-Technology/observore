@@ -15,6 +15,7 @@ idf_component_register(
         "observore_odid.c"
         "observore_peer.c"
         "observore_meshkey.c"
+        "observore_httpscert.c"
         "observore_monitors.c"
         "observore_touchcal.c"
         "observore_tap.c"
@@ -50,6 +51,7 @@ idf_component_register(
         esp_timer
         espressif__mdns
         esp-tls
+        mbedtls
         esp_http_client
         esp_wifi
         app_update

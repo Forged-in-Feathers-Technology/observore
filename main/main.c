@@ -11,6 +11,7 @@
 #include "esp_ota_ops.h"
 
 #include "observore_auth.h"
+#include "observore_httpscert.h"
 #include "observore_ble.h"
 #include <limits.h>
 
@@ -557,6 +558,12 @@ void app_main(void)
     observore_history_init();
     observore_netcfg_init();
     observore_auth_init();
+#if CONFIG_OBSERVORE_CONSOLE_HTTPS
+    /* Before the console can be asked for, and while the heap is at its
+     * emptiest: generating a key is the one expensive thing this does, and it
+     * happens once in the device's life. */
+    observore_httpscert_init();
+#endif
     observore_notify_init();
     observore_update_init();
     /* Before the radios start, so the previous run's panic is near the top of
