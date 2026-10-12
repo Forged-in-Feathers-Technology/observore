@@ -16,6 +16,7 @@
 #include "observore_rtc.h"
 #include "observore_census.h"
 #include "observore_httpscert.h"
+#include "observore_watchcfg.h"
 #include "observore_clock.h"
 #include "observore_monitors.h"
 #include "observore_odid.h"
@@ -5389,6 +5390,77 @@ static void test_cert_fingerprint(void)
           "all zeros should print as zeros, got %s", full);
 }
 
+
+/* Watch face preferences: the validation and the tap cycle.
+ *
+ * The validation is the part that matters. A stored blob whose shape changed
+ * has already cost this project two boards' run histories, so anything that
+ * does not match exactly is replaced with the defaults rather than
+ * interpreted -- and "exactly" is what these checks pin down.
+ */
+static void test_watchcfg(void)
+{
+    banner("watch face preferences");
+
+    CHECK(sizeof(observore_watchcfg_t) == 4,
+          "the blob is the struct: 4 bytes, not %zu",
+          sizeof(observore_watchcfg_t));
+
+    observore_watchcfg_t d = observore_watchcfg_default();
+    CHECK(observore_watchcfg_valid(&d), "the defaults must be drawable");
+    CHECK(d.numerals == OBSERVORE_NUMERALS_NONE && d.digital == 0,
+          "the defaults are the dial as it shipped");
+    /* Zero means 24-hour deliberately, so a blob stored before this was a
+     * choice reads as the behaviour it already had. */
+    CHECK(d.hour12 == 0, "the default clock is 24-hour, as the face already was");
+
+    /* Every field that can be wrong, one at a time. */
+    observore_watchcfg_t c = d;
+    c.version = OBSERVORE_WATCHCFG_VERSION + 1;
+    CHECK(!observore_watchcfg_valid(&c), "a future version is not drawable");
+    c = d; c.version = 0;
+    CHECK(!observore_watchcfg_valid(&c), "version zero is not drawable");
+    c = d; c.digital = 2;
+    CHECK(!observore_watchcfg_valid(&c), "digital is a flag, not a number");
+    c = d; c.numerals = 6;
+    CHECK(!observore_watchcfg_valid(&c), "six numerals is not a setting");
+    c = d; c.numerals = 1;
+    CHECK(!observore_watchcfg_valid(&c), "one numeral is not a setting");
+    c = d; c.hour12 = 2;
+    CHECK(!observore_watchcfg_valid(&c), "hour12 is a flag, not a number");
+    CHECK(!observore_watchcfg_valid(NULL), "no blob is not a valid blob");
+
+    /* The three settings that are valid. */
+    c = d; c.numerals = OBSERVORE_NUMERALS_QUARTERS;
+    CHECK(observore_watchcfg_valid(&c), "quarters is a setting");
+    c.numerals = OBSERVORE_NUMERALS_ALL;
+    CHECK(observore_watchcfg_valid(&c), "all twelve is a setting");
+    c.digital = 1;
+    CHECK(observore_watchcfg_valid(&c), "digital and numerals together");
+    c.hour12 = 1;
+    CHECK(observore_watchcfg_valid(&c), "a 12-hour clock is a setting");
+
+    /* The tap cycle, which is the whole interaction on a screen with one
+     * gesture. It must return to where it started. */
+    uint8_t n = OBSERVORE_NUMERALS_NONE;
+    n = observore_watchcfg_next_numerals(n);
+    CHECK(n == OBSERVORE_NUMERALS_QUARTERS, "none -> quarters, got %u", n);
+    n = observore_watchcfg_next_numerals(n);
+    CHECK(n == OBSERVORE_NUMERALS_ALL, "quarters -> all, got %u", n);
+    n = observore_watchcfg_next_numerals(n);
+    CHECK(n == OBSERVORE_NUMERALS_NONE,
+          "all -> none, so the cycle closes, got %u", n);
+
+    CHECK(observore_watchcfg_next_numerals(99) == OBSERVORE_NUMERALS_NONE,
+          "stepping from a value this build does not know lands somewhere "
+          "defined");
+
+    /* set refuses what valid refuses, so nothing undrawable is persisted. */
+    c = d; c.numerals = 7;
+    CHECK(!observore_watchcfg_set(&c), "set must refuse an invalid setting");
+    CHECK(observore_watchcfg_set(&d), "set must accept the defaults");
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -5454,6 +5526,7 @@ int main(void)
     test_name_keywords();
     test_digest();
     test_cert_fingerprint();
+    test_watchcfg();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

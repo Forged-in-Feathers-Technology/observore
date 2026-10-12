@@ -1,5 +1,6 @@
 #include "observore_heapwatch.h"
 #include "observore_httpscert.h"
+#include "observore_watchcfg.h"
 #include "observore_display.h"
 
 #include <stdio.h>
@@ -503,6 +504,9 @@ typedef enum {
                PAGE_WATCH,  PAGE_SYSTEM,
 #if CONFIG_OBSERVORE_TOUCH
                PAGE_WIFI,
+               /* Settings needs a gesture to be worth having, so it exists
+                * only where there is one. */
+               PAGE_SETTINGS,
 #endif
                PAGE_COUNT } page_t;
 static page_t  s_page;
@@ -805,6 +809,18 @@ static void bl_save(void)
     observore_nvs_item_t item = {.key = "bright", .type = OBSERVORE_NVS_BLOB,
                                  .buf = &v, .len = sizeof(v)};
     observore_nvs_write(&item, 1);
+}
+
+/* The brightness cycle, in one place. The button bar has had it since the
+ * panel did; the settings page needs the same step, and two copies of a
+ * modular increment is how one of them ends up off by one. */
+static void bright_cycle(void)
+{
+    uint8_t top = observore_display_has_light_sensor()
+                      ? OBSERVORE_BRIGHT_AUTO : BL_COUNT - 1;
+    s_bl_level = (uint8_t)((s_bl_level + 1) % (top + 1));
+    bl_apply();
+    bl_save();
 }
 
 static void bl_init(void)
@@ -1345,10 +1361,72 @@ static void draw_clockface(const observore_status_t *st)
         observore_watch_line(&c, x0, y0, x1, y1, (h % 3 == 0) ? 7 : 3, mark);
     }
 
+    /* Numerals, if they were asked for.
+     *
+     * Inside the marks rather than outside them: the quarter marks reach
+     * r - 34, and a numeral beyond that would sit under the ring or off the
+     * glass once the dial takes one of its walk steps. The text is centred on
+     * the point, so the y is lifted by half a glyph -- observore_watch_text
+     * centres horizontally and takes a top edge, which is the asymmetry worth
+     * remembering when reading this.
+     *
+     * The stored setting is the count, so the step is 12 / count and the loop
+     * does not need to know which settings exist. */
+    observore_watchcfg_t wcfg = observore_watchcfg_get();
+    if (wcfg.numerals >= OBSERVORE_NUMERALS_QUARTERS) {
+        const int step  = 12 / wcfg.numerals;
+        const int scale = 2;
+        /* A table rather than snprintf: the drawing task runs on a 3 KB
+         * stack that has been measured with 704 bytes spare, and formatting
+         * one line costs about a kilobyte on this chip. It also sidesteps a
+         * truncation warning the compiler is right to raise, since it cannot
+         * see that the hour is one to twelve. */
+        static const char *const HOURS[12] = {
+            "12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11",
+        };
+        for (int h = 0; h < 12; h += step) {
+            int nx, ny;
+            observore_watch_hand_end(cx, cy, r - 44, h, 12, &nx, &ny);
+            observore_watch_text(&c, nx, ny - OBSERVORE_FONT_H * scale / 2,
+                                 HOURS[h], scale, px(C_SILVER));
+        }
+    }
+
     /* The date, where a pocket watch keeps it. */
     char date[16];
     strftime(date, sizeof(date), "%a %d %b", &lt);
     observore_watch_text(&c, cx, cy + r / 2 - 8, date, 2, px(C_GREY));
+
+    /* A digital line, for anybody who wanted the time rather than the dial.
+     *
+     * Above the centre, mirroring the date below it -- and in the place the
+     * "not set" warning uses, which is safe because that warning only appears
+     * when there is no clock and this only appears when there is one. */
+    if (wcfg.digital && observore_clock_valid()) {
+        /* strftime rather than snprintf: this runs on the drawing task, whose
+         * 3 KB stack has been measured with 728 bytes spare, and formatting a
+         * line with snprintf costs about a kilobyte on this chip. strftime is
+         * already used twice on this face.
+         *
+         * %I pads to two digits, which reads oddly on a watch -- "03:04" is
+         * not what a clock face shows -- so a leading zero is shifted out by
+         * hand, and the meridiem is lowercased for the same reason. */
+        char hhmm[12];
+        if (wcfg.hour12) {
+            strftime(hhmm, sizeof(hhmm), "%I:%M %p", &lt);
+            if (hhmm[0] == '0') {
+                memmove(hhmm, hhmm + 1, strlen(hhmm));
+            }
+            for (char *q = hhmm; *q; q++) {
+                if (*q >= 'A' && *q <= 'Z') {
+                    *q = (char)(*q - 'A' + 'a');
+                }
+            }
+        } else {
+            strftime(hhmm, sizeof(hhmm), "%H:%M", &lt);
+        }
+        observore_watch_text(&c, cx, cy - r / 2, hhmm, 2, px(C_WHITE));
+    }
 
     /* Hands. The hour hand moves with the minutes, as a real one does, which
      * is 720 positions round the dial rather than twelve. */
@@ -1664,19 +1742,13 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
      * button with no indication of where you are in the cycle is how a person
      * ends up asking whether auto is even switched on -- and on a board
      * without a sensor the brightness speaks for itself. */
-    {
-        static const char *const names[] = {"full", "bright", "dim", "dimmest"};
-        int set = observore_display_brightness();
-        int now = observore_display_brightness_effective();
-        if (set == OBSERVORE_BRIGHT_AUTO) {
-            snprintf(text, sizeof(text), " light    auto (%s)",
-                     now >= 0 && now < 4 ? names[now] : "?");
-        } else {
-            snprintf(text, sizeof(text), " light    %s",
-                     set >= 0 && set < 4 ? names[set] : "?");
-        }
-        line(r++, text, C_WHITE, C_BLACK);
-    }
+    /* The brightness row moved to the settings page, where it can be changed
+     * rather than only read.
+     *
+     * That freed the row the certificate fingerprint needed. This page used
+     * exactly 15 of the 15 rows a 2.8" panel has -- measured, not counted --
+     * so the fingerprint was a sixteenth row and the guard in line() dropped
+     * it (#199). It fits now. */
 #endif
 
 #if CONFIG_OBSERVORE_BATTERY
@@ -1873,6 +1945,138 @@ static int button_at(int x, int y)
     if (col < 2 * COLS / 3) return 1;
     return 2;
 }
+
+#if CONFIG_OBSERVORE_TOUCH
+/* Settings.
+ *
+ * It exists because a preference compiled into the firmware is a preference
+ * nobody can have, and the people this is for flash a release from a browser
+ * rather than a toolchain.
+ *
+ * Which row does what is recorded while drawing rather than worked out again
+ * when a tap arrives. The alternative is two places that both know the layout
+ * and a tap that changes the wrong setting the moment a row is conditional --
+ * and every row here is conditional on something. */
+typedef enum {
+    SET_NONE = 0,
+    SET_BRIGHT,
+#if CONFIG_OBSERVORE_WATCHFACE
+    SET_DIGITAL,
+    SET_CLOCK12,
+    SET_NUMERALS,
+#endif
+} setting_t;
+
+static uint8_t s_settings_row[ROWS];
+
+static void draw_settings(void)
+{
+    char text[COLS + 1];
+    memset(s_settings_row, SET_NONE, sizeof(s_settings_row));
+
+    int r = 0;
+    line(r++, "  OBSERVORE  settings", C_BLACK, C_GREY);
+    line(r++, " tap a row to change it", C_GREY, C_BLACK);
+
+    {
+        static const char *const names[] = {"full", "bright", "dim", "dimmest"};
+        int set = observore_display_brightness();
+        int now = observore_display_brightness_effective();
+        if (set == OBSERVORE_BRIGHT_AUTO) {
+            snprintf(text, sizeof(text), " light     auto (%s)",
+                     now >= 0 && now < 4 ? names[now] : "?");
+        } else {
+            snprintf(text, sizeof(text), " light     %s",
+                     set >= 0 && set < 4 ? names[set] : "?");
+        }
+        s_settings_row[r] = SET_BRIGHT;
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+
+#if CONFIG_OBSERVORE_WATCHFACE
+    {
+        observore_watchcfg_t cfg = observore_watchcfg_get();
+
+        snprintf(text, sizeof(text), " digital   %s",
+                 cfg.digital ? "on" : "off");
+        s_settings_row[r] = SET_DIGITAL;
+        line(r++, text, C_WHITE, C_BLACK);
+
+        /* Shown whatever the digital line is set to, rather than hidden when
+         * it is off: a row that appears and disappears as you change the row
+         * above it makes the rows below it move, and on a touch panel a row
+         * that moves under your finger is a row you mis-tap. */
+        snprintf(text, sizeof(text), " clock     %s%s",
+                 cfg.hour12 ? "12-hour" : "24-hour",
+                 cfg.digital ? "" : "  (digital off)");
+        s_settings_row[r] = SET_CLOCK12;
+        line(r++, text, C_WHITE, C_BLACK);
+
+        const char *n = "none";
+        if (cfg.numerals == OBSERVORE_NUMERALS_QUARTERS) {
+            n = "12 3 6 9";
+        } else if (cfg.numerals == OBSERVORE_NUMERALS_ALL) {
+            n = "all twelve";
+        }
+        snprintf(text, sizeof(text), " numerals  %s", n);
+        s_settings_row[r] = SET_NUMERALS;
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+#else
+    line(r++, "", C_WHITE, C_BLACK);
+    line(r++, " this board has no watch face", C_GREY, C_BLACK);
+#endif
+
+    /* Blank the rest, so a row that was here last draw does not linger and
+     * invite a tap that now means nothing. */
+    while (r < ROWS - BAR_LAST) {
+        line(r++, "", C_WHITE, C_BLACK);
+    }
+}
+
+static void settings_tap(int x, int y)
+{
+    (void)x;
+    int row = y / OBSERVORE_FONT_H;
+    if (row < 0 || row >= ROWS) {
+        return;
+    }
+    switch (s_settings_row[row]) {
+        case SET_BRIGHT:
+            bright_cycle();
+            break;
+#if CONFIG_OBSERVORE_WATCHFACE
+        case SET_DIGITAL: {
+            observore_watchcfg_t cfg = observore_watchcfg_get();
+            cfg.digital = cfg.digital ? 0 : 1;
+            observore_watchcfg_set(&cfg);
+            /* The face is drawn from a cached minute, so a settings change has
+             * to say that what is on the glass is no longer what it should
+             * be -- otherwise the new look appears whenever the minute next
+             * happens to turn, which reads as a tap that did nothing. */
+            s_face_minute = -1;
+            break;
+        }
+        case SET_CLOCK12: {
+            observore_watchcfg_t cfg = observore_watchcfg_get();
+            cfg.hour12 = cfg.hour12 ? 0 : 1;
+            observore_watchcfg_set(&cfg);
+            s_face_minute = -1;
+            break;
+        }
+        case SET_NUMERALS: {
+            observore_watchcfg_t cfg = observore_watchcfg_get();
+            cfg.numerals = observore_watchcfg_next_numerals(cfg.numerals);
+            observore_watchcfg_set(&cfg);
+            s_face_minute = -1;
+            break;
+        }
+#endif
+        default:
+            break;
+    }
+}
+#endif /* CONFIG_OBSERVORE_TOUCH */
 
 static void draw_buttons(void)
 {
@@ -2101,21 +2305,44 @@ static void draw_current(void)
     }
     s_drew_face = (s_page == PAGE_CLOCK);
 #endif
-#if CONFIG_OBSERVORE_TOUCH
-    if (s_page == PAGE_WIFI) {
-        draw_wifi();
-    } else
-#endif
+    /* One page, drawn once.
+     *
+     * This was an if/else chain with #if directives threaded through it, and
+     * on a board with a watch face the else bound to the wrong branch: the
+     * trailing `if (s_page == PAGE_SYSTEM) ... else draw_watch()` stopped
+     * being part of the chain and became a statement that always ran. So the
+     * Wi-Fi page drew and was immediately overwritten by the findings list,
+     * and the settings page did the same the day it was added. On a board
+     * without a watch face the same text dispatches correctly, which is why
+     * it survived: the bug lived in the preprocessor, not in the C.
+     *
+     * Each conditional block is now a complete statement and the fallback is
+     * explicit. It is longer, and it cannot bind an else to a branch that a
+     * board's configuration moved. */
 #if CONFIG_OBSERVORE_WATCHFACE
     if (s_page == PAGE_CLOCK) {
+        /* The face owns the whole panel, button bar included. */
         draw_clockface(&s_snap_st);
         return;
     }
 #endif
-    if (s_page == PAGE_SYSTEM) {
-        draw_system(&s_snap_st, s_snap_now_us);
-    } else {
-        draw_watch(&s_snap_st, s_snap_top, s_snap_n, s_snap_now_us);
+
+    bool drawn = false;
+#if CONFIG_OBSERVORE_TOUCH
+    if (s_page == PAGE_WIFI) {
+        draw_wifi();
+        drawn = true;
+    } else if (s_page == PAGE_SETTINGS) {
+        draw_settings();
+        drawn = true;
+    }
+#endif
+    if (!drawn) {
+        if (s_page == PAGE_SYSTEM) {
+            draw_system(&s_snap_st, s_snap_now_us);
+        } else {
+            draw_watch(&s_snap_st, s_snap_top, s_snap_n, s_snap_now_us);
+        }
     }
 #if CONFIG_OBSERVORE_TOUCH
     draw_buttons();
@@ -2311,6 +2538,8 @@ static void handle_tap(int x, int y)
         /* Above the bar, each page decides for itself. */
         if (s_page == PAGE_WIFI) {
             wifi_tap(x, y);
+        } else if (s_page == PAGE_SETTINGS) {
+            settings_tap(x, y);
         } else if (s_page == PAGE_SYSTEM) {
             system_tap(x, y);
         } else {
@@ -2352,14 +2581,9 @@ static void handle_tap(int x, int y)
             snprintf(s_notice, sizeof(s_notice), " baseline requested");
             s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
             break;
-        case 2: {
-            uint8_t top = observore_display_has_light_sensor()
-                              ? OBSERVORE_BRIGHT_AUTO : BL_COUNT - 1;
-            s_bl_level = (uint8_t)((s_bl_level + 1) % (top + 1));
-            bl_apply();
-            bl_save();
+        case 2:
+            bright_cycle();
             break;
-        }
     }
     s_dirty = true;
 }
