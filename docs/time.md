@@ -132,6 +132,93 @@ ISO-8601 UTC. A client with no clock of its own still needs the first.
 page on the screen shows the time with the source beside it — `not set` where
 there is none, and where to set it.
 
+## Reading the time off a GPS
+
+Eight of the nine boards have no clock chip. They cold boot into 1970 and stay
+there until a browser at the console or SNTP tells them otherwise — and a
+device on a camera VLAN with no route out never hears from an NTP server, which
+is the same isolation that stops a notification reaching its provider.
+
+A module fixes that with no network at all, permanently, and keeps working on a
+VLAN with no route anywhere. That is the argument for putting one on a detector
+that never moves: not to learn where it is, but to learn what day it is, which
+is the thing the census cannot do without.
+
+Off by default (`OBSERVORE_GPS`), and on for the **NM-CYD-C5**: it has PSRAM
+for the ring and the task, it is dual-band so it already sees the most, and it
+is not the board with the unexplained panic.
+
+### This half reads, and does not yet set
+
+It reports what it sees and leaves the clock alone — the shape the census and
+the mesh both shipped in, and here forced by honesty as much as caution. A
+module indoors sees no satellites, so the step from "a fix arrived" to "the
+clock is set" cannot be watched from a desk. What can be watched went first.
+
+### The pin was measured
+
+GPIO 4 at 9600 baud, found by configuring UART RX on every free pin in turn and
+listening 1.5 seconds for a sentence:
+
+```
+FOUND  GPIO 4 at 9600 baud: $GNGGA,,,,,,0,00,25.5,,,,,,*64
+GPIO 15 reserved by the system, skipped
+GPIO 16 reserved by the system, skipped
+      ... 17, 18, 20, 21, 22 also reserved
+```
+
+Those reserved pins are flash and PSRAM, and the probe asked
+`esp_gpio_is_reserved()` rather than assuming — reconfiguring one of them would
+have taken the board down mid-probe. `~/.observore-boards` carries a warning
+about exactly this: a pin map written from an assumption is confirmed as
+correct every time, forever.
+
+### What the module says, and what is worth reading
+
+The bench module emits GGA, GLL, RMC, VTG, ZDA, GSA, GSV and a TXT antenna
+status, all with the `GN` talker.
+
+**RMC is the one that matters.** It carries the date, the time and a validity
+flag in one sentence. GGA has a time field and no date, so GGA alone could
+never set a clock. GGA is read for the fix quality and the satellite count, GSV
+for satellites in view, and TXT for the antenna — because an antenna fault and
+a basement look identical from a count of zero, and they want different
+answers.
+
+**The checksum is never optional.** A flipped bit in a date field is a clock
+set to the wrong century, and the line is shared with whatever else is on the
+bench. Sentences that fail are counted, not merely dropped.
+
+**The two-digit year says nothing about the century.** 00–79 reads as 2000–2079
+and the rest as 1980–1999. The clock's own sanity window then refuses anything
+before 2025 regardless.
+
+### Measured on the board
+
+```
+reading a module on GPIO 4 at 9600 baud
+no fix: 0 in view, antenna ok, 302 sentences, 0 bad checksums
+stack headroom: 1028 bytes of 3072
+```
+
+302 sentences in a minute, none corrupt. `antenna ok` with nothing in view is
+simply indoors — the module is healthy and cannot see sky.
+
+| | |
+|---|---|
+| internal heap low-water, GPS on | 15,912 |
+| internal heap low-water, GPS off | **15,912** |
+
+The same. Enabling GPS does not move the low-water on this board: the ring and
+the task stack are taken at startup, well before the uplink window that
+actually sets the mark. An arithmetic estimate had said it would cost about
+4 KB, which is why it was measured instead.
+
+Worth knowing separately: this board runs tighter than the round AMOLED —
+about 21 KB free against 31 KB — so a build with both GPS and
+`OBSERVORE_CONSOLE_HTTPS` on has less margin than either alone, and that
+combination has not been tried.
+
 ## Which zone it reads the clock in
 
 Everything stored is UTC. The timezone only affects what a person is shown —

@@ -25,6 +25,7 @@
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
 #include "observore_tz.h"
+#include "observore_gps.h"
 #include "observore_clock.h"
 #include "observore_monitors.h"
 #include "observore_odid.h"
@@ -5575,6 +5576,159 @@ static void test_timezone(void)
     tzset();
 }
 
+
+/* The GPS, read for the time.
+ *
+ * The no-fix sentences here are verbatim from the module on the bench, with
+ * the checksums it actually sent. Those checksums were also recomputed from
+ * scratch in Python and agreed, so these expectations rest on the hardware and
+ * on a second implementation rather than on this one.
+ */
+static void test_gps(void)
+{
+    banner("gps: sentences and the time in them");
+
+    /* ---- checksums, which are never optional ---- */
+    CHECK(observore_nmea_checksum_ok("$GNGGA,,,,,,0,00,25.5,,,,,,*64"),
+          "the module's own GGA must verify");
+    CHECK(observore_nmea_checksum_ok("$GNRMC,,V,,,,,,,,,,N*4D"),
+          "the module's own RMC must verify");
+    CHECK(observore_nmea_checksum_ok("$GPTXT,01,01,01,ANTENNA OK*35"),
+          "the module's own TXT must verify");
+    CHECK(!observore_nmea_checksum_ok("$GNGGA,,,,,,0,00,25.5,,,,,,*65"),
+          "one wrong checksum digit must fail");
+    CHECK(!observore_nmea_checksum_ok("$GNGGA,,,,,,1,00,25.5,,,,,,*64"),
+          "one flipped body character must fail");
+    CHECK(!observore_nmea_checksum_ok("$GNGGA,,,,,,0,00,25.5,,,,,,"),
+          "no checksum at all must fail");
+    CHECK(!observore_nmea_checksum_ok("$GNGGA*6"),
+          "a half-written checksum must fail");
+    CHECK(!observore_nmea_checksum_ok("GNGGA,,*64"), "a sentence starts with $");
+    CHECK(!observore_nmea_checksum_ok(NULL), "no sentence is not valid");
+
+    /* ---- the bench module, indoors, with no fix ---- */
+    observore_gps_t g = {0};
+    CHECK(observore_gps_apply(&g, "$GNRMC,,V,,,,,,,,,,N*4D"),
+          "a void RMC is understood, not rejected");
+    CHECK(!g.time_valid, "a void RMC must not leave a time behind");
+    CHECK(observore_gps_apply(&g, "$GNGGA,,,,,,0,00,25.5,,,,,,*64"),
+          "the no-fix GGA is understood");
+    CHECK(g.fix_quality == 0, "no fix means quality zero, got %u",
+          g.fix_quality);
+    CHECK(g.satellites == 0, "no fix means no satellites, got %u",
+          g.satellites);
+    CHECK(observore_gps_apply(&g, "$GPGSV,1,1,00*79"), "GSV is understood");
+    CHECK(g.in_view == 0, "indoors means nothing in view, got %u", g.in_view);
+    CHECK(observore_gps_apply(&g, "$GPTXT,01,01,01,ANTENNA OK*35"),
+          "the antenna status is understood");
+    CHECK(g.antenna_seen && g.antenna_ok,
+          "the bench antenna reports OK, which is not the same as having a fix");
+    CHECK(!observore_gps_utc(&g, &(struct tm){0}),
+          "no valid time means no tm, however many sentences arrived");
+
+    /* Sentences this build does not read are not errors. */
+    CHECK(!observore_gps_apply(&g, "$GNVTG,,,,,,,,,N*2E"), "VTG is ignored");
+    CHECK(!observore_gps_apply(&g, "$GNGLL,,,,,,V,N*7A"), "GLL is ignored");
+
+    /* ---- a fix, which the bench cannot produce indoors ---- */
+    observore_gps_t f = {0};
+    const char *rmc =
+        "$GNRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,120326,003.1,W*7F";
+    CHECK(observore_nmea_checksum_ok(rmc), "the synthetic RMC must verify");
+    CHECK(observore_gps_apply(&f, rmc), "an active RMC is understood");
+    CHECK(f.time_valid, "an active RMC leaves a time");
+    CHECK(f.year == 2026 && f.mon == 3 && f.day == 12,
+          "120326 is 12 March 2026, got %04d-%02d-%02d", f.year, f.mon, f.day);
+    CHECK(f.hour == 12 && f.min == 35 && f.sec == 19,
+          "123519 is 12:35:19 UTC, got %02d:%02d:%02d",
+          f.hour, f.min, f.sec);
+
+    /* The C library counts years from 1900 and months from zero; NMEA does
+     * neither, and conflating them is a twelve-month error that still looks
+     * like a working clock. */
+    struct tm tm_out;
+    CHECK(observore_gps_utc(&f, &tm_out), "a valid time converts");
+    CHECK(tm_out.tm_year == 126, "tm_year is years since 1900: 126, got %d",
+          tm_out.tm_year);
+    CHECK(tm_out.tm_mon == 2, "tm_mon counts from zero: 2 for March, got %d",
+          tm_out.tm_mon);
+    CHECK(tm_out.tm_mday == 12 && tm_out.tm_hour == 12 &&
+          tm_out.tm_min == 35 && tm_out.tm_sec == 19, "and the rest carries");
+
+    /* The two-digit year, which says nothing about the century. */
+    observore_gps_t y = {0};
+    CHECK(observore_gps_apply(&y,
+          "$GNRMC,235959,A,4807.038,N,01131.000,E,000.0,000.0,311279,,*0F"),
+          "a year of 79 is understood");
+    CHECK(y.year == 2079, "79 reads as 2079, got %d", y.year);
+    CHECK(observore_gps_apply(&y,
+          "$GNRMC,000000,A,4807.038,N,01131.000,E,000.0,000.0,010180,,*09"),
+          "a year of 80 is understood");
+    CHECK(y.year == 1980, "80 reads as 1980, which the clock's own sanity "
+          "window then refuses, got %d", y.year);
+
+    /* A fix in GGA. */
+    observore_gps_t q = {0};
+    CHECK(observore_gps_apply(&q,
+          "$GNGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*59"),
+          "a GGA with a fix is understood");
+    CHECK(q.fix_quality == 1, "quality 1 is a GPS fix, got %u", q.fix_quality);
+    CHECK(q.satellites == 8, "eight satellites, got %u", q.satellites);
+    CHECK(observore_gps_apply(&q, "$GPGSV,3,1,11*7B"), "GSV with eleven");
+    CHECK(q.in_view == 11, "eleven in view, got %u", q.in_view);
+
+    /* ---- assembling sentences out of a byte stream ---- */
+    observore_nmea_scan_t sc = {0};
+    const char *stream = "rubbish\r\n$GPGSV,1,1,00*79\r\n$GNRMC,,V,,,,,,,,,,N*4D\n";
+    int got = 0;
+    for (const char *p = stream; *p; p++) {
+        const char *line = observore_nmea_feed(&sc, *p);
+        if (line) {
+            got++;
+            CHECK(line[0] == '$', "a completed sentence starts with $: %s", line);
+            CHECK(observore_nmea_checksum_ok(line),
+                  "and verifies: %s", line);
+        }
+    }
+    CHECK(got == 2, "two sentences out of that stream, got %d", got);
+    CHECK(sc.too_long == 0, "none of them was over-long");
+
+    /* A $ mid-sentence restarts rather than desynchronising for good. */
+    observore_nmea_scan_t sc2 = {0};
+    const char *broken = "$GNRMC,trunc$GPGSV,1,1,00*79\r\n";
+    const char *line = NULL;
+    for (const char *p = broken; *p; p++) {
+        const char *l = observore_nmea_feed(&sc2, *p);
+        if (l) { line = l; }
+    }
+    CHECK(line && strcmp(line, "$GPGSV,1,1,00*79") == 0,
+          "a restart recovers the next sentence whole, got %s",
+          line ? line : "(none)");
+
+    /* Longer than NMEA allows: counted, not silently dropped, because a
+     * stream that is always too long is a wrong baud rate and that reads
+     * exactly like no GPS at all. */
+    observore_nmea_scan_t sc3 = {0};
+    observore_nmea_feed(&sc3, '$');
+    for (int i = 0; i < OBSERVORE_NMEA_MAX + 20; i++) {
+        observore_nmea_feed(&sc3, 'A');
+    }
+    CHECK(sc3.too_long >= 1, "an over-long sentence is counted, got %u",
+          (unsigned)sc3.too_long);
+
+    /* Nothing should crash on rubbish. */
+    observore_gps_t j = {0};
+    CHECK(!observore_gps_apply(&j, "$"), "a bare dollar is refused");
+    CHECK(!observore_gps_apply(&j, "$GN*00"), "a stub is refused");
+    CHECK(!observore_gps_apply(&j, ""), "an empty string is refused");
+    CHECK(!observore_gps_apply(NULL, "$GNRMC,,V,,,,,,,,,,N*4D"),
+          "no state is refused");
+    CHECK(!observore_gps_apply(&j, "$GNRMC"), "a truncated RMC is refused");
+    CHECK(!observore_gps_apply(&j, "$GNRMC,123519,A"),
+          "an RMC cut off before its date is refused");
+    CHECK(!j.time_valid, "and none of that left a time behind");
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -5642,6 +5796,7 @@ int main(void)
     test_cert_fingerprint();
     test_watchcfg();
     test_timezone();
+    test_gps();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

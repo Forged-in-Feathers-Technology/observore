@@ -936,4 +936,56 @@ config OBSERVORE_CONSOLE_HTTPS
         name to put in a certificate and no fingerprint anybody has seen yet,
         and WPA2 already protects that link with a password only you have.
 
+config OBSERVORE_GPS
+    bool "Read a GPS module for the time"
+    default n
+    help
+        Read NMEA from a GPS module on a UART, for the time rather than the
+        position.
+
+        Eight of the nine boards have no clock chip. They cold boot into 1970
+        and stay there until a browser at the console or SNTP tells them
+        otherwise -- and a device on a camera VLAN with no route out never
+        hears from an NTP server, which is the same isolation that stops a
+        notification reaching its provider.
+
+        That is not cosmetic. The census counts a device as household on three
+        distinct days inside a sixteen-day window, and it cannot count a day
+        without a trusted clock. No clock means the household table never
+        fills, nothing is ever recognised as furniture, and reporting what is
+        new never starts working.
+
+        A module fixes that with no network at all, and keeps working on a
+        VLAN with no route anywhere.
+
+        This half reads sentences and reports what it sees. It does not set the
+        clock yet: a module indoors sees no satellites, so the step from "a fix
+        arrived" to "the clock is set" cannot be watched from a desk, and the
+        parts that can be watched went first.
+
+        Costs a UART, a task with a 3 KB stack and a kilobyte of ring buffer,
+        so it is off unless a board actually has a module wired to it.
+
+config OBSERVORE_GPS_RX_GPIO
+    int "GPIO the module's TX is wired to"
+    depends on OBSERVORE_GPS
+    default 4
+    help
+        Receive only -- nothing here ever drives the pin, because the module
+        streams without being asked. An input-only pin is therefore fine.
+
+        The default is the NM-CYD-C5's, measured rather than looked up: a
+        diagnostic configured UART RX on every free pin in turn and listened
+        for a sentence. The same probe reported GPIOs 15 to 22 as reserved by
+        the system -- flash and PSRAM -- so asking esp_gpio_is_reserved()
+        rather than assuming is what kept the board up.
+
+config OBSERVORE_GPS_BAUD
+    int "Module baud rate"
+    depends on OBSERVORE_GPS
+    default 9600
+    help
+        9600 is what almost every NMEA module ships with, and what the bench
+        module answered on.
+
 endmenu
