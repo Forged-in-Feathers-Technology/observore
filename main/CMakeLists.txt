@@ -18,6 +18,7 @@ idf_component_register(
         "observore_httpscert.c"
         "observore_watchcfg.c"
         "observore_tz.c"
+        "observore_gps.c"
         "observore_monitors.c"
         "observore_touchcal.c"
         "observore_tap.c"

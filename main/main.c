@@ -13,6 +13,7 @@
 #include "observore_auth.h"
 #include "observore_httpscert.h"
 #include "observore_tz.h"
+#include "observore_gps.h"
 #include "observore_ble.h"
 #include <limits.h>
 
@@ -553,6 +554,11 @@ void app_main(void)
     observore_nvs_migrate();
     /* Before the census and the clock both: a day is counted in local time,
      * so the zone has to be the owner's before anything asks what day it is. */
+#if CONFIG_OBSERVORE_GPS
+    /* Before the clock, like the zone: it is a clock source, and the sooner it
+     * starts the sooner it has something to say. */
+    observore_gps_init();
+#endif
     observore_tz_init();
     /* Before the clock, deliberately: the table is read from flash here, and
      * what it holds is days rather than anything relative to this boot. */

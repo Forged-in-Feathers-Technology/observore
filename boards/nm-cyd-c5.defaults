@@ -97,3 +97,14 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_OBSERVORE_MAX_DEVICES=96
 
 CONFIG_OBSERVORE_BOARD="nm-cyd-c5"
+
+# A GPS module, read for the time. This board is the one it is wired to: it has
+# PSRAM for the ring and the task, it is dual-band so it already sees the most,
+# and it is not the board with the unexplained panic.
+#
+# GPIO 4 at 9600 baud, measured on this board rather than looked up -- a
+# diagnostic configured UART RX on every free pin and listened for a sentence.
+# The module answered with $GNGGA on 4 and nothing anywhere else.
+CONFIG_OBSERVORE_GPS=y
+CONFIG_OBSERVORE_GPS_RX_GPIO=4
+CONFIG_OBSERVORE_GPS_BAUD=9600
