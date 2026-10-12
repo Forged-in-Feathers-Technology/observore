@@ -46,7 +46,8 @@
     X(MESHKEY,     "meshkey",     OBSERVORE_NVS_STR)  \
     X(TLSCERT,     "tlscert",     OBSERVORE_NVS_STR)  \
     X(TLSKEY,      "tlskey",      OBSERVORE_NVS_STR)  \
-    X(WATCHCFG,    "watchcfg",    OBSERVORE_NVS_BLOB)
+    X(WATCHCFG,    "watchcfg",    OBSERVORE_NVS_BLOB) \
+    X(TZ,          "tz",          OBSERVORE_NVS_STR)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 

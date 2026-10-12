@@ -181,9 +181,12 @@ void observore_clock_init(void)
      * often is not.  The configured server remains as the fallback for
      * networks that hand out no NTP option. */
     /* The timezone belongs to whoever reads a time, not to the time itself:
-     * everything stored stays UTC. This only affects what a person is shown. */
-    setenv("TZ", CONFIG_OBSERVORE_TZ, 1);
-    tzset();
+     * everything stored stays UTC. This only affects what a person is shown.
+     *
+     * Applied by observore_tz_init(), which runs before this and reads a zone
+     * the owner can change -- it used to be set here from the build's own
+     * CONFIG_OBSERVORE_TZ, which then silently overwrote whatever they had
+     * chosen. Nothing here may touch TZ for that reason. */
 
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_OBSERVORE_NTP_SERVER);
     cfg.server_from_dhcp = true;

@@ -19,6 +19,7 @@
 #include "observore_notify.h"
 #include "observore_util.h"
 #include "observore_track.h"
+#include "observore_tz.h"
 #include "observore_update.h"
 #include "observore_display.h"
 #include "observore_heapwatch.h"
@@ -519,6 +520,11 @@ static esp_err_t fail(httpd_req_t *req, const char *why)
 {
     httpd_resp_set_status(req, "400 Bad Request");
     char body[160];
+    /* Ninety-five characters of reason, and a longer one is cut where it
+     * reaches the limit -- which on the first attempt at the timezone message
+     * ended it mid-word, at "so fi". Escaping a quote costs two of those
+     * characters, so a message with quotes in it has less room than it looks.
+     * Keep them short enough to survive. */
     char safe[96];
     observore_json_escape(why, safe, sizeof(safe));
     snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", safe);
@@ -1419,6 +1425,43 @@ static void tune(httpd_config_t *h, size_t n_routes)
 #define TLS_STACK      8192
 #define TLS_HEAP_FLOOR (TLS_STACK + 8192)
 
+static esp_err_t tz_get_handler(httpd_req_t *req)
+{
+    /* Both forms, because they answer different questions. The POSIX string is
+     * what the device actually keeps time by and what to send back to set it;
+     * the offset is what a person recognises, and it is absent for a zone with
+     * daylight-saving rules because such a zone has no one offset. */
+    const char *tz = observore_tz_get();
+    int east = observore_tz_offset_of(tz);
+    char body[128];
+    if (east == OBSERVORE_TZ_NOT_FIXED) {
+        snprintf(body, sizeof(body),
+                 "{\"tz\":\"%s\",\"fixed\":false}", tz);
+    } else {
+        snprintf(body, sizeof(body),
+                 "{\"tz\":\"%s\",\"fixed\":true,\"offset_minutes\":%d}",
+                 tz, east);
+    }
+    return send_json(req, body);
+}
+
+static esp_err_t tz_set_handler(httpd_req_t *req)
+{
+    char value[OBSERVORE_TZ_MAX + 2];
+    if (!query_param(req, "tz", value, sizeof(value))) {
+        return fail(req, "tz is required, as a POSIX TZ string such as "
+                         "UTC0, UTC-5 or EST5EDT,M3.2.0,M11.1.0");
+    }
+    if (!observore_tz_set(value)) {
+        /* The sign is named because it is the mistake everybody makes once: a
+         * POSIX string counts how far the zone is behind UTC, so five hours
+         * east of UTC is written with a minus. */
+        return fail(req, "not a POSIX TZ string. It counts hours WEST of "
+                         "UTC: five hours east is UTC-5");
+    }
+    return ok(req);
+}
+
 esp_err_t observore_web_start(void)
 {
     if (s_server) {
@@ -1450,6 +1493,8 @@ esp_err_t observore_web_start(void)
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/census",    HTTP_GET,  census_handler,     false},
         {"/api/time",      HTTP_POST, time_handler,       false},
+        {"/api/tz",        HTTP_GET,  tz_get_handler,     false},
+        {"/api/tz",        HTTP_POST, tz_set_handler,     false},
         {"/api/mesh",      HTTP_POST, mesh_handler,       false},
         {"/api/crash",     HTTP_POST, crash_handler,      false},
         {"/api/monitors",  HTTP_GET,  monitors_get_handler, false},

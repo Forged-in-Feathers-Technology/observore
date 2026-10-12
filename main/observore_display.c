@@ -1,6 +1,7 @@
 #include "observore_heapwatch.h"
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
+#include "observore_tz.h"
 #include "observore_display.h"
 
 #include <stdio.h>
@@ -1960,6 +1961,7 @@ static int button_at(int x, int y)
 typedef enum {
     SET_NONE = 0,
     SET_BRIGHT,
+    SET_ZONE,
 #if CONFIG_OBSERVORE_WATCHFACE
     SET_DIGITAL,
     SET_CLOCK12,
@@ -1990,6 +1992,28 @@ static void draw_settings(void)
                      set >= 0 && set < 4 ? names[set] : "?");
         }
         s_settings_row[r] = SET_BRIGHT;
+        line(r++, text, C_WHITE, C_BLACK);
+    }
+
+    {
+        /* Shown the way people write a timezone -- east of UTC is positive --
+         * which is the opposite sign to the POSIX string the device stores.
+         * Putting "UTC-5" on the glass for a zone five hours east would be
+         * accurate and completely misleading.
+         *
+         * A zone carrying daylight-saving rules has no single offset, so the
+         * string itself is shown and the arrows are absent: there is nothing
+         * for one tap to step it to. */
+        const char *tz = observore_tz_get();
+        int east = observore_tz_offset_of(tz);
+        if (east == OBSERVORE_TZ_NOT_FIXED) {
+            snprintf(text, sizeof(text), " zone      %.*s", COLS - 11, tz);
+        } else {
+            int mag = east < 0 ? -east : east;
+            snprintf(text, sizeof(text), " zone      UTC%c%d:%02d    -   +",
+                     east < 0 ? '-' : '+', mag / 60, mag % 60);
+        }
+        s_settings_row[r] = SET_ZONE;
         line(r++, text, C_WHITE, C_BLACK);
     }
 
@@ -2036,7 +2060,6 @@ static void draw_settings(void)
 
 static void settings_tap(int x, int y)
 {
-    (void)x;
     int row = y / OBSERVORE_FONT_H;
     if (row < 0 || row >= ROWS) {
         return;
@@ -2045,6 +2068,29 @@ static void settings_tap(int x, int y)
         case SET_BRIGHT:
             bright_cycle();
             break;
+        case SET_ZONE: {
+            /* The only row where which half you touched matters, so it is the
+             * only row that reads x. One hour a tap: a panel with one gesture
+             * cannot offer a list of zones, and an hour is the step that
+             * actually exists between most of them. */
+            const char *tz = observore_tz_get();
+            int east = observore_tz_offset_of(tz);
+            if (east == OBSERVORE_TZ_NOT_FIXED) {
+                /* Forty columns, so this says the thing and stops. */
+                snprintf(s_notice, sizeof(s_notice),
+                         " daylight zone: set it at the console");
+                s_notice_until_us = esp_timer_get_time() + 8 * 1000000;
+                break;
+            }
+            east += (x < DISP_W / 2) ? -60 : 60;
+            if (east < -12 * 60) { east = -12 * 60; }
+            if (east > 14 * 60)  { east =  14 * 60; }
+            char next[OBSERVORE_TZ_MAX];
+            if (observore_tz_from_offset(east, next, sizeof(next))) {
+                observore_tz_set(next);
+            }
+            break;
+        }
 #if CONFIG_OBSERVORE_WATCHFACE
         case SET_DIGITAL: {
             observore_watchcfg_t cfg = observore_watchcfg_get();

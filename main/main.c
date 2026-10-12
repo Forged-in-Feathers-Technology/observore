@@ -12,6 +12,7 @@
 
 #include "observore_auth.h"
 #include "observore_httpscert.h"
+#include "observore_tz.h"
 #include "observore_ble.h"
 #include <limits.h>
 
@@ -550,6 +551,9 @@ void app_main(void)
      * and a device flashed with an older build keeps everything under that
      * name. */
     observore_nvs_migrate();
+    /* Before the census and the clock both: a day is counted in local time,
+     * so the zone has to be the owner's before anything asks what day it is. */
+    observore_tz_init();
     /* Before the clock, deliberately: the table is read from flash here, and
      * what it holds is days rather than anything relative to this boot. */
     observore_census_init();

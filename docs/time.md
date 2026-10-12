@@ -27,7 +27,7 @@ say `clock not set`. Only the relative "4m ago" is shown. Emitting 1970 dressed
 up as a timestamp would be worse than admitting the clock is unset, on a device
 whose output is meant to be evidence.
 
-### The clock says what set it
+## The clock says what set it
 
 `observore_clock_valid()` used to be one comparison: is the system clock past
 2025? That conflated two different claims — "the clock holds a plausible
@@ -79,7 +79,7 @@ deciding whether that timestamp is worth believing is a question for the clock.
 Asking it at four separate call sites is how three of them end up still asking
 the old way.
 
-### Setting the clock from the browser
+## Setting the clock from the browser
 
 Most of these boards have no RTC chip, and the places this device is worth
 carrying are routinely places where no NTP server is reachable: a camera VLAN
@@ -131,3 +131,71 @@ ISO-8601 UTC. A client with no clock of its own still needs the first.
 `/api/status` also reports `clock`, which is the source name, and the system
 page on the screen shows the time with the source beside it — `not set` where
 there is none, and where to set it.
+
+## Which zone it reads the clock in
+
+Everything stored is UTC. The timezone only affects what a person is shown —
+and one thing that is not cosmetic at all: **the census counts days in local
+time**, so a device in the wrong zone draws its day boundary in the wrong place
+and measures the sixteen-day membership window against the wrong dates.
+
+It used to be `CONFIG_OBSERVORE_TZ`, applied once at startup. That is the wrong
+place for it: the people this is for flash a release from a browser, so a
+timezone compiled into the firmware is a timezone nobody can correct. It is now
+stored on the device and settable at runtime, from the console or from the
+screen.
+
+```
+GET  /api/tz                        {"tz":"EST5EDT,M3.2.0,M11.1.0","fixed":false}
+POST /api/tz?tz=UTC-5               {"ok":true}
+GET  /api/tz                        {"tz":"UTC-5","fixed":true,"offset_minutes":300}
+```
+
+### Changing it does not rewrite history
+
+A timezone change can move the day index backwards, and the census already
+refuses to rewrite a window it cannot reconstruct — `age_to()` names a
+timezone change as one of the two reasons the clock can go backwards, the other
+being NTP stepping a device that had drifted.
+
+So a change applies to the days that follow it and leaves the days already
+counted as they were. Nothing in the timezone code arranges that; it is worth
+writing down because it is the property that makes a runtime timezone safe at
+all, and it was checked before the feature was written rather than assumed
+afterwards.
+
+### POSIX counts the other way
+
+In a POSIX `TZ` string the offset is how far the zone is **behind** UTC. A zone
+five hours east of UTC is written `UTC-5`. Everybody gets this wrong once.
+
+The host tests do not take anybody's word for it. They build a string, hand it
+to `tzset`, and check what `localtime_r` then makes of a known instant:
+
+```
+TZ=UTC0     -> 12:00    at 12:00 UTC
+TZ=UTC-5    -> 17:00                     five hours east
+TZ=UTC+5    -> 07:00                     five hours west
+TZ=UTC-5:30 -> 17:30                     India
+```
+
+Flipping that one sign fails seventeen checks. The screen and the API both
+report the offset the way people write it — east of UTC is positive — while
+storing the POSIX form, because putting `UTC-5` on the glass for a zone five
+hours east would be accurate and completely misleading.
+
+### Why a POSIX string and not a zone name
+
+ESP-IDF ships no zone database, so `America/Toronto` means nothing to newlib.
+
+A full POSIX string carries daylight-saving rules —
+`EST5EDT,M3.2.0,M11.1.0` — and anyone who knows their zone's rules can set
+exactly that through the console. What a screen can offer is a whole-hour
+offset, correct all year in zones that do not shift and wrong by an hour for
+half the year in zones that do.
+
+So the settings page steps a fixed offset by an hour a tap, and a zone that
+carries rules shows its string with no arrows: there is nothing for one tap to
+step it to, and silently replacing a rule with a fixed offset on a stray tap
+would lose the daylight-saving behaviour without saying so. Tapping it says
+`daylight zone: set it at the console` instead.

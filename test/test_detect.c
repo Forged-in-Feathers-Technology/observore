@@ -4,8 +4,15 @@
  *     make -C test && test/run
  */
 
+/* setenv, unsetenv and localtime_r are POSIX, and -std=c11 hides them --
+ * the same reason observore_census.c carries this. The timezone test sets
+ * TZ and reads it back through the C library. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "observore_detect.h"
 #include "observore_font.h"
@@ -17,6 +24,7 @@
 #include "observore_census.h"
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
+#include "observore_tz.h"
 #include "observore_clock.h"
 #include "observore_monitors.h"
 #include "observore_odid.h"
@@ -5461,6 +5469,112 @@ static void test_watchcfg(void)
     CHECK(observore_watchcfg_set(&d), "set must accept the defaults");
 }
 
+
+/* The timezone, and the sign nobody remembers.
+ *
+ * In a POSIX TZ string the offset is how far the zone is BEHIND UTC, so a zone
+ * five hours east is written "UTC-5". This does not take anybody's word for
+ * that: it builds the string, hands it to tzset, and checks what localtime_r
+ * then makes of a known instant. If the sign is ever flipped these fail with
+ * the hours five apart, which is the only failure that would actually be
+ * noticed on a device.
+ */
+static void test_timezone(void)
+{
+    banner("timezone");
+
+    /* Restored at the end: the census reads local time, so a stray TZ left
+     * here would quietly move another test's day boundary. */
+    const char *saved = getenv("TZ");
+    char keep[64] = {0};
+    if (saved) {
+        snprintf(keep, sizeof(keep), "%s", saved);
+    }
+
+    char tz[OBSERVORE_TZ_MAX];
+
+    /* The string, and then what the C library does with it. 12:00 UTC on
+     * 1 January 2026, which is outside any northern daylight-saving period. */
+    const time_t noon_utc = 1767268800;
+    struct {
+        int east;            /* minutes east of UTC */
+        const char *want;    /* the POSIX string, with the sign inverted */
+        int hour, min;       /* local time at noon_utc */
+    } cases[] = {
+        {     0, "UTC0",     12,  0},
+        {  5*60, "UTC-5",    17,  0},
+        { -5*60, "UTC+5",     7,  0},
+        {   330, "UTC-5:30", 17, 30},
+        {  -570, "UTC+9:30",  2, 30},
+        { 14*60, "UTC-14",    2,  0},   /* Kiritimati, the eastern extreme */
+        {-12*60, "UTC+12",    0,  0},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        CHECK(observore_tz_from_offset(cases[i].east, tz, sizeof(tz)),
+              "%d minutes east should produce a string", cases[i].east);
+        CHECK(strcmp(tz, cases[i].want) == 0,
+              "%d east -> %s, not %s", cases[i].east, cases[i].want, tz);
+
+        setenv("TZ", tz, 1);
+        tzset();
+        struct tm lt;
+        CHECK(localtime_r(&noon_utc, &lt) != NULL, "localtime_r must answer");
+        CHECK(lt.tm_hour == cases[i].hour && lt.tm_min == cases[i].min,
+              "%s should read %02d:%02d at noon UTC, got %02d:%02d",
+              tz, cases[i].hour, cases[i].min, lt.tm_hour, lt.tm_min);
+
+        /* And back, so the screen can show what it stored. */
+        CHECK(observore_tz_offset_of(tz) == cases[i].east,
+              "%s should read back as %d east, got %d", tz, cases[i].east,
+              observore_tz_offset_of(tz));
+    }
+
+    /* Outside the range real zones occupy. */
+    CHECK(!observore_tz_from_offset(15 * 60, tz, sizeof(tz)),
+          "no zone is fifteen hours east");
+    CHECK(!observore_tz_from_offset(-13 * 60, tz, sizeof(tz)),
+          "no zone is thirteen hours west");
+    CHECK(!observore_tz_from_offset(0, tz, 4),
+          "a buffer too small is refused rather than truncated");
+
+    /* What the console may be handed. */
+    CHECK(observore_tz_valid("EST5EDT,M3.2.0,M11.1.0"),
+          "a zone with daylight-saving rules is valid");
+    CHECK(observore_tz_valid("<+05>-5"), "the angle-bracket form is valid");
+    CHECK(!observore_tz_valid(""), "an empty string is not a zone");
+    CHECK(!observore_tz_valid("X"), "one character is not a zone");
+    CHECK(!observore_tz_valid(NULL), "no string is not a zone");
+    CHECK(!observore_tz_valid("5EST"),
+          "a zone has to start with its abbreviation, not its offset");
+    CHECK(!observore_tz_valid("EST 5"), "a space is not a POSIX TZ character");
+    CHECK(!observore_tz_valid("EST5;rm -rf"),
+          "nothing that is not a POSIX TZ character gets through");
+    {
+        char too_long[OBSERVORE_TZ_MAX + 8];
+        memset(too_long, 'A', sizeof(too_long) - 1);
+        too_long[sizeof(too_long) - 1] = '\0';
+        CHECK(!observore_tz_valid(too_long), "a string longer than the field");
+    }
+
+    /* A zone with rules has no single offset, and saying it does would put a
+     * number on the screen the device does not keep time by. */
+    CHECK(observore_tz_offset_of("EST5EDT,M3.2.0,M11.1.0") ==
+              OBSERVORE_TZ_NOT_FIXED,
+          "a daylight-saving zone has no one offset");
+    CHECK(observore_tz_offset_of("GMT0BST,M3.5.0/1,M10.5.0") ==
+              OBSERVORE_TZ_NOT_FIXED, "nor does this one");
+    CHECK(observore_tz_offset_of("UTC-5junk") == OBSERVORE_TZ_NOT_FIXED,
+          "trailing rubbish is not a fixed offset");
+
+    if (keep[0]) {
+        setenv("TZ", keep, 1);
+    } else {
+        unsetenv("TZ");
+    }
+    tzset();
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -5527,6 +5641,7 @@ int main(void)
     test_digest();
     test_cert_fingerprint();
     test_watchcfg();
+    test_timezone();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
