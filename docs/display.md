@@ -48,6 +48,89 @@ just at the one it happened to be drawn at on the bench. Checking only that
 the ring stays on the glass would have passed a dial that never paid for the
 walk at all — it would still have fitted, by one pixel, sitting on the bezel.
 
+## The settings page
+
+A preference compiled into the firmware is a preference nobody can have.
+Changing it would mean a toolchain, and the people this is for flash a release
+from a browser — so what the face looks like is stored on the device and
+changed with a tap.
+
+Tap the leftmost button to cycle pages until the header reads
+`OBSERVORE settings`:
+
+```
+  OBSERVORE  settings
+ tap a row to change it
+ light     auto (bright)
+ digital   off
+ clock     24-hour  (digital off)
+ numerals  none
+```
+
+Tap a row to change that row. `numerals` steps none → `12 3 6 9` → all twelve
+→ none; `digital` adds a time line above the hands, mirroring the date below
+them; `clock` switches that line between 24-hour and 12-hour. The defaults are
+the dial exactly as it shipped, so nothing changes until it is asked for.
+
+`clock` is shown whatever `digital` is set to, with a note when the line is
+off, rather than appearing and disappearing. A row that comes and goes as you
+change the row above it makes the rows below it move, and on a touch panel a
+row that moves under your finger is a row you mis-tap.
+
+Only that one line changes with `clock`. The dial is twelve-hour because it is
+a dial, and the system page keeps ISO 8601 because that is a timestamp rather
+than a clock.
+
+The twelve-hour form drops the leading zero and lowercases the meridiem —
+`3:04 pm`, not `03:04 PM` — because the padded form is not what a clock face
+shows.
+
+**Everything the face formats uses `strftime` or a table, never `snprintf`.**
+The drawing task runs on a 3 KB stack that has been measured with around 700
+bytes spare, and formatting one line with `snprintf` costs about a kilobyte on
+this chip. The hour labels are a twelve-entry table; the time and date lines
+use `strftime`, which the face already called twice. The headroom figure is
+logged on each new low, so a future addition that eats the rest says so.
+
+**Numerals sit inside the hour marks**, at `r - 44`. The quarter marks reach
+`r - 34`, and a numeral outside that would end up under the ring, or off the
+glass entirely once the dial takes one of its anti-burn-in walk steps.
+
+**A change forces the face to redraw.** The face is drawn from a cached minute
+and otherwise only redraws when the minute turns, so without that a tap would
+appear to do nothing for up to sixty seconds — which reads as a broken button
+rather than a slow one.
+
+**The row a tap means is recorded while drawing**, not worked out again when
+the tap arrives. Every row here is conditional on something — touch, a watch
+face — and two places that both know the layout is how a tap starts changing
+the wrong setting.
+
+### What moved, and what that fixed
+
+Brightness used to be a read-only row on the system page, changed only by a
+button. It is a preference, so it lives here now and can be changed where it is
+shown.
+
+That had a second effect worth recording. The system page used **exactly 15 of
+the 15 rows** a 2.8" panel has — measured on the board, not counted — so the
+console certificate's fingerprint was a sixteenth row and the bounds check in
+`line()` dropped it ([#199]). Moving brightness off freed exactly the row it
+needed. Measured again afterwards, with the certificate row present: 15 of 15,
+and no dropped row.
+
+### Not here yet
+
+**Timezone.** The plumbing exists — `CONFIG_OBSERVORE_TZ` is applied with
+`setenv` and `tzset` — but it is a build-time string, and making it a runtime
+preference is not only a settings row. The census counts days with
+`localtime_r`, and [ignoring.md](ignoring.md) already records that a timezone
+change must not rewrite history. Changing it at runtime shifts day boundaries
+underneath a sixteen-day membership window, so the rule — new days only, never
+retroactive — wants settling before the row exists.
+
+[#199]: https://github.com/Forged-in-Feathers-Technology/observore/issues/199
+
 ## Brightness that follows the room
 
 The Cheap Yellow Displays carry a photoresistor, and on the 3.5" board it is
