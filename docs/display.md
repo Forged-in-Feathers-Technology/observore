@@ -62,6 +62,7 @@ Tap the leftmost button to cycle pages until the header reads
   OBSERVORE  settings
  tap a row to change it
  light     auto (bright)
+ zone      EST5EDT,M3.2.0,M11.1.0
  digital   off
  clock     24-hour  (digital off)
  numerals  none
@@ -71,6 +72,13 @@ Tap a row to change that row. `numerals` steps none → `12 3 6 9` → all twelv
 → none; `digital` adds a time line above the hands, mirroring the date below
 them; `clock` switches that line between 24-hour and 12-hour. The defaults are
 the dial exactly as it shipped, so nothing changes until it is asked for.
+
+`zone` steps a fixed UTC offset by an hour a tap — the left of the row takes
+an hour off, the right adds one — and shows it the way people write a
+timezone, east of UTC positive, which is the opposite sign to the POSIX string
+the device stores. A zone carrying daylight-saving rules shows its string with
+no arrows, because there is nothing for one tap to step it to; tapping it says
+`daylight zone: set it at the console`. See [time.md](time.md) for why.
 
 `clock` is shown whatever `digital` is set to, with a note when the line is
 off, rather than appearing and disappearing. A row that comes and goes as you
