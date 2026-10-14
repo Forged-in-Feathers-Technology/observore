@@ -1,11 +1,23 @@
 # Waveshare ESP32-S3-Touch-LCD-1.85 -- a round 1.85" 360x360 IPS LCD on an S3
 # with 16 MB flash and 8 MB PSRAM.
 #
-# Radio first: this profile makes the board a detector. The screen and the
-# touch panel are not driven yet, which is the order the 1.43 shipped in and
-# for the same reason -- the parts that can be verified go first, and a panel
-# that needs a new controller driver and a reset line behind an I2C expander
-# is not one of them.
+# The radio and the screen both work. Touch does not yet: its CST816 is on the
+# second I2C bus and wants a driver this project does not carry.
+#
+# The panel took five things being right at once, and any one of them wrong
+# leaves the glass black with no error anywhere:
+#
+#   reset      expander chip bit 1. Waveshare call it EXIO2 and their own
+#              code shifts by (Pin - 1), so their 2 is the chip's 1.
+#   sequence   Waveshare's 184-command table, not the driver's own. The
+#              stock one resets this panel cleanly and never lights it.
+#   variant    register 0x04 answers 00 02 7F 7F, which is the second of the
+#              two panels that ship behind this part number.
+#   clock      that read is done at 5 MHz. At 40 it answers 00 03 3F BF,
+#              which is no variant at all -- it is the same read corrupted.
+#   inversion  on. Their table ends with 0x21, and this project calls
+#              esp_lcd_panel_invert_color() afterwards, which sent 0x20 and
+#              undid it. That alone turns white into black.
 #
 # What is here was read off the board, not out of the wiki. The wiki has
 # already been wrong about this vendor's touch pins, panel power and battery
@@ -76,9 +88,49 @@ CONFIG_OBSERVORE_RTC_I2C_ADDR=0x51
 CONFIG_OBSERVORE_MOTION=y
 CONFIG_OBSERVORE_MOTION_I2C_ADDR=0x6B
 
-# No screen yet, so no watch face and no touch.
-CONFIG_OBSERVORE_DISPLAY=n
+# The screen: an ST77916 over QSPI, four data lines and no D/C pin, the same
+# bus shape as the 1.43's AMOLED.
+#
+# 360x360 and round, so the text grid is the square that fits inside the
+# circle -- 254 of the 360 pixels each way, which is 31 columns by 15 rows.
+# Narrower than every other board here, and the pages truncate accordingly
+# rather than wrapping.
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_ST77916=y
+CONFIG_OBSERVORE_DISPLAY_WIDTH=360
+CONFIG_OBSERVORE_DISPLAY_HEIGHT=360
+CONFIG_OBSERVORE_DISPLAY_INSET_X=53
+CONFIG_OBSERVORE_DISPLAY_INSET_Y=53
+CONFIG_OBSERVORE_DISPLAY_SCLK=40
+CONFIG_OBSERVORE_DISPLAY_CS=21
+CONFIG_OBSERVORE_DISPLAY_QSPI_D0=46
+CONFIG_OBSERVORE_DISPLAY_QSPI_D1=45
+CONFIG_OBSERVORE_DISPLAY_QSPI_D2=42
+CONFIG_OBSERVORE_DISPLAY_QSPI_D3=41
+CONFIG_OBSERVORE_DISPLAY_MHZ=40
+
+# Inversion ON, because Waveshare's initialisation table ends with 0x21 and
+# this project calls esp_lcd_panel_invert_color() after panel_init(). Left at
+# the default, that call sends 0x20 straight after the table sent 0x21 and
+# undoes it -- which turns white into black and is indistinguishable from a
+# panel that was never driven.
+CONFIG_OBSERVORE_DISPLAY_INVERT=y
+
+# A real backlight on a pin, unlike the AMOLED which dims by panel command.
+CONFIG_OBSERVORE_DISPLAY_BL=5
+CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
+
+# No reset pin: it is on the expander. Which line is the thing the wiki does
+# not say, so this is a chip bit number settled by trying it.
+CONFIG_OBSERVORE_DISPLAY_RST=-1
+CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT=1
+
+# Touch is next, not now: CST816 at 0x15 on the auxiliary bus, with its reset
+# on expander bit 0 by the same (Pin - 1) rule.
 CONFIG_OBSERVORE_TOUCH=n
+
+# And the watch face after that. It wants touch to be worth having, and the
+# grid here is 31x15 against the 1.43's 41x20.
 CONFIG_OBSERVORE_WATCHFACE=n
 
 # No LED on this board's pin list -- every pin that might have been one is a

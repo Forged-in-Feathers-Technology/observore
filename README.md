@@ -833,7 +833,7 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x10000 ota_data_initial-waveshare-s3-amoled-143.bin \
     0x20000 observore-waveshare-s3-amoled-143.bin
 
-# Waveshare ESP32-S3-Touch-LCD-1.85 (round) -- a detector, not yet a screen
+# Waveshare ESP32-S3-Touch-LCD-1.85 (round, 360x360) -- no touch yet
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x0     bootloader-waveshare-s3-lcd-185.bin \
     0x8000  partition-table-waveshare-s3-lcd-185.bin \
@@ -895,19 +895,20 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | `boards/cyd-3248s035r-st7796` | GPIO16, plain (green of the RGB) | GPIO0 | the 3.5" CYD, 480x320 with touch; resistive **R** model only |
 | `boards/nm-cyd-c5` | GPIO27, WS2812 | GPIO28 | the 2.8" CYD on a **C5**: 8 MB PSRAM, dual-band, with touch. The only display board that sees 5 GHz |
 | `boards/waveshare-s3-amoled-143` | none — the panel is the indicator | GPIO0 | round 466x466 AMOLED, capacitive touch, clock and **accelerometer** |
-| `boards/waveshare-s3-lcd-185` | none | GPIO0 | round 1.85" 360x360 LCD. **The screen is not driven yet** — a detector with a clock and an accelerometer. See below |
+| `boards/waveshare-s3-lcd-185` | none | GPIO0 | round 1.85" 360x360 LCD, clock and **accelerometer**. 31 columns, the narrowest here. **No touch yet** |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
 dark rather than obviously broken.
 
-The 1.85 is the honest one: it is a display board whose display does nothing
-yet. It detects, it keeps time across a power cut, it knows when it has been
-picked up, and it will show you none of that on its own glass — read it from
-the console or a notifier until the panel is driven. The panel needs an
-ST77916 driver this project does not yet carry, and its reset line sits behind
-an I2C expander rather than on a pin, so it is a piece of work rather than a
-line in a profile. Everything that could be verified without it went first.
+The 1.85 is the narrow one: 360x360 and round, so the text grid is the square
+that fits inside the circle and comes to 31 columns against the 40 every other
+board has. Pages truncate rather than wrap. Its touch panel is not driven yet,
+so it reads but cannot be tapped — the button bar is there and does nothing.
+
+Its reset line is not on a pin at all but behind an I2C expander, which makes
+bringing up a bus a precondition for bringing up a screen. See
+[the display notes](docs/display.md) for what that cost.
 
 The XIAO profiles are **compile-tested only**. Neither board has been run.
 [docs/xiao-verification.md](docs/xiao-verification.md) lists what is unverified

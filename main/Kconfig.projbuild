@@ -411,6 +411,19 @@ config OBSERVORE_DISPLAY_ILI9341
         are the values every other project uses for it, and each is a build
         option in case they are wrong.
 
+config OBSERVORE_DISPLAY_ST77916
+    bool "ST77916 round LCD over QSPI"
+    help
+        The 360x360 round panel on the Waveshare ESP32-S3-Touch-LCD-1.85.
+
+        Four data lines and no D/C pin, like the AMOLED, but a backlit LCD
+        rather than an emissive panel -- so it has a real backlight on a pin
+        and dims through LEDC rather than through a panel command.
+
+        Its reset line is not on a GPIO at all: it is behind the I2C
+        expander, which makes bringing the bus up a prerequisite for bringing
+        the screen up.
+
 config OBSERVORE_DISPLAY_QSPI_AMOLED
     bool "SH8601 / CO5300 AMOLED over QSPI"
     help
@@ -442,6 +455,29 @@ config OBSERVORE_DISPLAY_PANEL_DETECT
         which revision arrived in the post, and a blank screen tells them
         nothing.
 
+config OBSERVORE_DISPLAY_RST_IOEXP_BIT
+    int "Expander line the panel reset is on, or -1 for a real GPIO"
+    depends on OBSERVORE_DISPLAY
+    default -1
+    help
+        The Waveshare 1.85 has no pin left for the panel's reset and puts it
+        on the I2C expander instead, which is why the expander has to be up
+        before the screen can be.
+
+        Waveshare's wiki numbers these lines EXIO1 upward and does not say
+        whether EXIO1 is the chip's P0 or its P1, so this is a chip bit
+        number and it was settled by trying it rather than by reading it.
+
+config OBSERVORE_DISPLAY_QSPI
+    bool
+    default y if OBSERVORE_DISPLAY_QSPI_AMOLED || OBSERVORE_DISPLAY_ST77916
+    help
+        Not a choice: set by whichever panel was picked. It exists because the
+        bus shape -- four data lines, no D/C pin, the command travelling in
+        the address phase -- is a property of the wiring and not of the
+        controller, and gating that on "is an AMOLED" meant the second QSPI
+        panel could not reuse any of it.
+
 config OBSERVORE_DISPLAY_CO5300
     bool "Assume a CO5300 rather than an SH8601"
     depends on OBSERVORE_DISPLAY_QSPI_AMOLED
@@ -465,22 +501,22 @@ config OBSERVORE_DISPLAY_HEIGHT
 
 config OBSERVORE_DISPLAY_QSPI_D0
     int "QSPI data line 0"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 11
 
 config OBSERVORE_DISPLAY_QSPI_D1
     int "QSPI data line 1"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 12
 
 config OBSERVORE_DISPLAY_QSPI_D2
     int "QSPI data line 2"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 13
 
 config OBSERVORE_DISPLAY_QSPI_D3
     int "QSPI data line 3"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 14
 
 config OBSERVORE_DISPLAY_X_OFFSET

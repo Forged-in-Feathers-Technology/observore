@@ -18,7 +18,8 @@ static const char *TAG = "observore.ioexp";
 #define REG_CONFIG  0x03
 
 static i2c_master_dev_handle_t s_dev;
-static uint8_t                 s_shadow;   /* what we last drove */
+static uint8_t                 s_shadow;    /* what we last drove */
+static uint8_t                 s_outputs;   /* which lines we have claimed */
 
 bool observore_ioexp_present(void)
 {
@@ -39,13 +40,21 @@ void observore_ioexp_init(void)
         return;
     }
 
-    /* Everything low before anything becomes an output, so no line glitches
-     * high on its way to being driven -- one of those lines is a panel reset.
-     */
+    /* Every line left an INPUT, and only driven when something asks for it.
+     *
+     * The first version made all eight outputs at once, which is wrong on
+     * this board: two of them are the accelerometer's interrupt lines, and
+     * the accelerometer drives those. Configuring them as outputs puts two
+     * chips on one wire -- it did no visible harm on the bench, which is
+     * exactly how that kind of mistake survives.
+     *
+     * So: inputs until asked. A reset line spends its idle life undriven and
+     * held by its pull-up, which is what it would have on a GPIO anyway. */
     s_shadow = 0x00;
+    s_outputs = 0x00;
     bool ok = observore_i2c_write(s_dev, REG_POLARITY, 0x00) &&
               observore_i2c_write(s_dev, REG_OUTPUT, s_shadow) &&
-              observore_i2c_write(s_dev, REG_CONFIG, 0x00);
+              observore_i2c_write(s_dev, REG_CONFIG, 0xFF);
     if (!ok) {
         ESP_LOGW(TAG, "expander at 0x%02X did not take its configuration",
                  CONFIG_OBSERVORE_IOEXP_I2C_ADDR);
@@ -56,14 +65,14 @@ void observore_ioexp_init(void)
     /* Read back rather than trust the write. The chip answers a probe whether
      * or not it accepted anything, and a reset line that silently stayed an
      * input is a panel that never comes up for a reason nothing reports. */
-    uint8_t cfg = 0xFF;
-    if (observore_i2c_read(s_dev, REG_CONFIG, &cfg, 1) && cfg != 0x00) {
-        ESP_LOGW(TAG, "expander kept config 0x%02X rather than 0x00; its "
-                      "lines are not outputs", cfg);
+    uint8_t cfg = 0x00;
+    if (observore_i2c_read(s_dev, REG_CONFIG, &cfg, 1) && cfg != 0xFF) {
+        ESP_LOGW(TAG, "expander kept config 0x%02X rather than 0xFF; it did "
+                      "not take its configuration", cfg);
         s_dev = NULL;
         return;
     }
-    ESP_LOGI(TAG, "expander at 0x%02X, eight lines driving low",
+    ESP_LOGI(TAG, "expander at 0x%02X, eight lines idle as inputs",
              CONFIG_OBSERVORE_IOEXP_I2C_ADDR);
 }
 
@@ -74,8 +83,18 @@ bool observore_ioexp_set(uint8_t bit, bool high)
     }
     uint8_t next = high ? (uint8_t)(s_shadow | (1u << bit))
                         : (uint8_t)(s_shadow & ~(1u << bit));
+    /* The level first, then the direction, so a line claimed for the first
+     * time does not drive the opposite of what was asked for the instant it
+     * becomes an output. */
     if (!observore_i2c_write(s_dev, REG_OUTPUT, next)) {
         return false;
+    }
+    if (!(s_outputs & (1u << bit))) {
+        uint8_t cfg = (uint8_t)~(s_outputs | (1u << bit));
+        if (!observore_i2c_write(s_dev, REG_CONFIG, cfg)) {
+            return false;
+        }
+        s_outputs = (uint8_t)(s_outputs | (1u << bit));
     }
     /* Kept only after the write succeeded, so a failed write does not leave
      * this believing it drove something it did not. */

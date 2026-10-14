@@ -1,4 +1,5 @@
 #include "observore_heapwatch.h"
+#include "observore_ioexp.h"
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
 #include "observore_tz.h"
@@ -24,6 +25,11 @@
 #include "esp_lcd_st7796.h"
 #define PANEL_NAME "ST7796"
 #define new_panel  esp_lcd_new_panel_st7796
+#elif CONFIG_OBSERVORE_DISPLAY_ST77916
+#include "esp_lcd_st77916.h"
+#include "observore_st77916_init.h"
+#define PANEL_NAME "ST77916"
+#define new_panel  esp_lcd_new_panel_st77916
 #elif CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
 #include "esp_lcd_sh8601.h"
 #if CONFIG_OBSERVORE_DISPLAY_CO5300
@@ -183,6 +189,19 @@ static bool blit_done(esp_lcd_panel_io_handle_t io,
 }
 #endif
 /* What is on the glass, so a redraw sends only the lines that changed. */
+/* How much room a line is formatted into, which is deliberately not how wide
+ * the panel is.
+ *
+ * These were all COLS + 1. That is the right size for what reaches the glass
+ * and the wrong size for building it: line() already pads and clips to COLS,
+ * so a formatter only has to produce the text and let the panel take what it
+ * can show. Tying the two together meant a narrower panel turned every status
+ * line into a compile error -- the 1.85 is 31 columns against the 40 every
+ * other board here has, and the compiler could prove the strings no longer
+ * fit. Shortening them to suit the smallest glass would have made every
+ * other board's pages worse. */
+#define TEXTBUF 72
+
 static char     s_shown[ROWS][COLS + 1];
 static uint16_t s_shown_bg[ROWS];
 static bool     s_ready;
@@ -903,9 +922,15 @@ void observore_display_init(void)
              co5300 ? "CO5300" : "SH8601");
 #endif
     s_x_off = co5300 ? 6 : 0;
+#endif  /* QSPI_AMOLED */
 
+#if CONFIG_OBSERVORE_DISPLAY_QSPI
     /* Four data lines and no D/C pin: the command travels in the address
-     * phase instead, which is what the QSPI flag below selects. */
+     * phase instead, which is what the QSPI flag below selects.
+     *
+     * Gated on the bus being QSPI rather than on the panel being an AMOLED,
+     * because this describes the wiring. The ST77916 is wired the same way
+     * and shares all of it. */
     spi_bus_config_t bus = {
         .sclk_io_num = CONFIG_OBSERVORE_DISPLAY_SCLK,
         .data0_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D0,
@@ -937,7 +962,7 @@ void observore_display_init(void)
     }
 
     esp_lcd_panel_io_handle_t io = NULL;
-#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#if CONFIG_OBSERVORE_DISPLAY_QSPI
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .cs_gpio_num = CONFIG_OBSERVORE_DISPLAY_CS,
         .dc_gpio_num = -1,
@@ -962,6 +987,18 @@ void observore_display_init(void)
         .lcd_param_bits = 8,
     };
 #endif
+#if CONFIG_OBSERVORE_DISPLAY_ST77916
+    /* The identifying read happens on a slow bus, then the bus is rebuilt at
+     * the speed the panel is actually driven at.
+     *
+     * This is Waveshare's own shape and the reason is measurable: at 40 MHz
+     * the read returns 00 03 3F BF, which is no documented variant and is
+     * just the right answer corrupted; at 5 MHz it returns 00 02 7F 7F every
+     * time. A read has a bus turnaround in the middle of it and is the most
+     * timing-sensitive thing this panel is asked to do -- pixel writes are
+     * one-way and run happily at the full rate. */
+    io_cfg.pclk_hz = 5 * 1000 * 1000;
+#endif
     err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &io_cfg, &io);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "panel IO: %s", esp_err_to_name(err));
@@ -975,6 +1012,16 @@ void observore_display_init(void)
                                  : sizeof(SH8601_INIT) / sizeof(SH8601_INIT[0]),
         .flags = { .use_qspi_interface = 1 },
     };
+#elif CONFIG_OBSERVORE_DISPLAY_ST77916
+    /* Waveshare's sequence, not the driver's. The driver ships one and it
+     * leaves this glass dark -- see observore_st77916_init.h for how that
+     * was established and what differs. */
+    st77916_vendor_config_t vendor = {
+        .init_cmds = OBSERVORE_ST77916_INIT,
+        .init_cmds_size = sizeof(OBSERVORE_ST77916_INIT) /
+                          sizeof(OBSERVORE_ST77916_INIT[0]),
+        .flags = { .use_qspi_interface = 1 },
+    };
 #endif
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = CONFIG_OBSERVORE_DISPLAY_RST,
@@ -982,31 +1029,101 @@ void observore_display_init(void)
                                                       : LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
-#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#if CONFIG_OBSERVORE_DISPLAY_QSPI
         .vendor_config = &vendor,
 #endif
     };
+#if CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT >= 0
+    /* The reset this panel has instead of a pin.
+     *
+     * Done here, before the driver is handed the panel, because the driver
+     * was given reset_gpio_num = -1 and will only issue a software reset --
+     * which a controller that has never been hardware reset may not answer.
+     * The expander is on the sensor bus, so this is also the point where
+     * bringing up a screen depends on an I2C bus being alive. */
+    if (!observore_ioexp_reset_pulse(CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT,
+                                     20, 120)) {
+        ESP_LOGW(TAG, "could not pulse the panel reset on expander line %d; "
+                      "the panel may not answer",
+                 CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT);
+    }
+#endif
+#if CONFIG_OBSERVORE_DISPLAY_ST77916
+    /* Which of the two panels is behind this glass, asked rather than
+     * assumed -- the same situation as the 1.43, where two controllers ship
+     * under one part number and need different sequences.
+     *
+     * Register 0x04 over the QSPI read opcode. Waveshare's own code reads it
+     * at 5 MHz before raising the clock, and the reason is worth keeping: at
+     * 40 MHz this board answered 00 03 3F BF, which is neither documented
+     * pattern and is simply this read corrupted. At 5 MHz it answers
+     * 00 02 7F 7F, every time.
+     *
+     * Reported rather than acted on, because only one of the two variants is
+     * on this bench. A board that answers differently says so in the log
+     * instead of drawing nothing and leaving somebody to guess why. */
+    {
+        int cmd = (0x03 << 24) | (0x04 << 8);
+        uint8_t id[4] = {0};
+        if (esp_lcd_panel_io_rx_param(io, cmd, id, sizeof(id)) == ESP_OK) {
+            if (id[0] == 0x00 && id[1] == 0x02 &&
+                id[2] == 0x7F && id[3] == 0x7F) {
+                ESP_LOGI(TAG, "panel answered %02X %02X %02X %02X",
+                         id[0], id[1], id[2], id[3]);
+            } else {
+                ESP_LOGW(TAG, "panel answered %02X %02X %02X %02X, which is "
+                         "not the variant this build carries a sequence for "
+                         "(expected 00 02 7F 7F) -- the screen may stay dark",
+                         id[0], id[1], id[2], id[3]);
+            }
+        }
+    }
+
+    /* Back up to the configured rate for everything that follows. */
+    esp_lcd_panel_io_del(io);
+    io = NULL;
+    io_cfg.pclk_hz = CONFIG_OBSERVORE_DISPLAY_MHZ * 1000 * 1000;
+    err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST,
+                                   &io_cfg, &io);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "panel IO at %d MHz: %s", CONFIG_OBSERVORE_DISPLAY_MHZ,
+                 esp_err_to_name(err));
+        return;
+    }
+#endif
     s_io = io;
     err = new_panel(io, &panel_cfg, &s_panel);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, PANEL_NAME ": %s", esp_err_to_name(err));
         return;
     }
-    esp_lcd_panel_reset(s_panel);
-    esp_lcd_panel_init(s_panel);
+    {
+        esp_err_t r1 = esp_lcd_panel_reset(s_panel);
+        esp_err_t r2 = esp_lcd_panel_init(s_panel);
+        if (r1 != ESP_OK || r2 != ESP_OK) {
+            ESP_LOGE(TAG, "panel reset %s, init %s", esp_err_to_name(r1),
+                     esp_err_to_name(r2));
+        }
+    }
     /* The ST7789 revision of this board is widely reported to need inversion
      * and on the bench did not; the ILI9341 one is not expected to. It is a
      * build setting either way, because the failure looks like a negative and
      * is obvious the moment the screen is looked at. */
     esp_lcd_panel_invert_color(s_panel, CONFIG_OBSERVORE_DISPLAY_INVERT);
-#if !CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#if !CONFIG_OBSERVORE_DISPLAY_QSPI
     /* The rectangular panels are portrait parts used in landscape. The round
-     * one is square and arrives the right way up. */
+     * ones are square and arrive the right way up. */
     esp_lcd_panel_swap_xy(s_panel, true);
     esp_lcd_panel_mirror(s_panel, CONFIG_OBSERVORE_DISPLAY_MIRROR_X,
                          CONFIG_OBSERVORE_DISPLAY_MIRROR_Y);
 #endif
-    esp_lcd_panel_disp_on_off(s_panel, true);
+    {
+        esp_err_t r3 = esp_lcd_panel_disp_on_off(s_panel, true);
+        if (r3 != ESP_OK) {
+            ESP_LOGE(TAG, "panel would not switch on: %s",
+                     esp_err_to_name(r3));
+        }
+    }
 
     /* Before anything draws, while the internal heap is still unfragmented
      * and the radios have not taken their share -- and before the first
@@ -1061,7 +1178,7 @@ static void draw_watch(const observore_status_t *st,
                        const observore_event_t *top, size_t n,
                        int64_t now_us)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
 
     /* The band: two rows in the level's colour, level word and score. */
     uint16_t band = st->level == OBSERVORE_LEVEL_ALERT   ? C_RED
@@ -1204,7 +1321,7 @@ static void draw_watch(const observore_status_t *st,
         if (row == s_armed_row && now_us < s_armed_until_us) {
             /* The row keeps showing what it is about, cut to whatever the
              * question leaves: forty columns on the 2.8" boards is not much. */
-            char ask[COLS + 1];
+            char ask[TEXTBUF];
             /* A fixed slice of the row, not the whole of it: the buffer is
              * the screen's width and forty columns does not stretch. */
             snprintf(ask, sizeof(ask), " ignore? tap again  %.17s", text);
@@ -1507,7 +1624,7 @@ static void draw_clockface(const observore_status_t *st)
 
 static void draw_calibrate(void)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
     for (int r = 0; r < ROWS; r++) {
         line(r, "", C_WHITE, C_BLACK);
     }
@@ -1522,7 +1639,7 @@ static void draw_calibrate(void)
      * and which is unambiguous about where to press. */
     int col = s_cal_step == 0 ? CAL_INSET_COLS : COLS - 1 - CAL_INSET_COLS;
     int row = s_cal_step == 0 ? CAL_INSET_ROWS : ROWS - 1 - CAL_INSET_ROWS;
-    char marker[COLS + 1];
+    char marker[TEXTBUF];
     memset(marker, ' ', COLS);
     marker[COLS] = '\0';
     marker[col] = '+';
@@ -1598,7 +1715,7 @@ static void calibrate_poll(void)
 
 static void draw_system(const observore_status_t *st, int64_t now_us)
 {
-    char text[COLS + 1], up[16];
+    char text[TEXTBUF], up[16];
     const esp_app_desc_t *app = esp_app_get_description();
 
     /* A running row rather than numbered lines. The page grew a line for the
@@ -1973,7 +2090,7 @@ static uint8_t s_settings_row[ROWS];
 
 static void draw_settings(void)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
     memset(s_settings_row, SET_NONE, sizeof(s_settings_row));
 
     int r = 0;
@@ -2126,7 +2243,7 @@ static void settings_tap(int x, int y)
 
 static void draw_buttons(void)
 {
-    char text[COLS + 2];
+    char text[TEXTBUF];
     int w = COLS / BUTTONS;
     int pos = 0;
     for (int b = 0; b < BUTTONS; b++) {
@@ -2155,7 +2272,7 @@ static void draw_buttons(void)
 /* The network page. Three states, drawn above the button bar. */
 static void draw_wifi(void)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
     char ssid[OBSERVORE_SSID_LEN] = {0};
     observore_netcfg_ssid(ssid, sizeof(ssid));
 
@@ -2194,7 +2311,7 @@ static void draw_wifi(void)
     snprintf(text, sizeof(text), " %.20s", s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "?");
     line(1, text, C_WHITE, C_BLACK);
 
-    char shown[COLS + 1];
+    char shown[TEXTBUF];
     bool reveal = s_reveal && esp_timer_get_time() < s_reveal_until_us;
     if (reveal) {
         snprintf(shown, sizeof(shown), "%.29s", s_pass);
@@ -2394,7 +2511,7 @@ static void draw_current(void)
     draw_buttons();
 #else
     {
-        char text[COLS + 1], up[16];
+        char text[TEXTBUF], up[16];
         const esp_app_desc_t *app = esp_app_get_description();
         /* Truncation of the version is fine and deliberate: "v0.7.0-1-gb59a6d4"
          * cut short still identifies the build, and the row has forty columns. */
@@ -2770,7 +2887,14 @@ bool observore_display_take_baseline_request(void)
 
 uint32_t observore_display_taps(void)
 {
+#if CONFIG_OBSERVORE_TOUCH
     return s_taps;
+#else
+    /* A screen with no touch panel counts no taps. The counter itself lives
+     * behind the touch guard, and this accessor did not -- a combination no
+     * board had until one arrived with a display and no digitiser. */
+    return 0;
+#endif
 }
 
 void observore_display_notice(const char *text, int seconds)
