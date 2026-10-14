@@ -42,6 +42,21 @@ config OBSERVORE_LED_MONO
         One monochrome LED driven directly.  Threat level is a blink rhythm,
         because there is no colour to carry it.
 
+config OBSERVORE_LED_NONE
+    bool "No user LED on this board"
+    help
+        Some boards have no LED to spare. The Waveshare 1.85 is the first
+        here: its pin list has none, and every pin that might have been one
+        is a panel data line.
+
+        This exists because setting the GPIO to -1 did not work and did not
+        say so. The single-colour backend built a pin mask from it, which is
+        undefined behaviour for a negative shift, and then called
+        gpio_set_level(-1) -- which the driver reported, every heartbeat, as
+        "GPIO_PIN mask error" and "gpio_set_level(247): GPIO output gpio_num
+        error". A board with no LED should be a thing the build knows about,
+        not a pin number nobody validates.
+
 config OBSERVORE_LED_ADDRESSABLE
     bool "Addressable RGB pixel (WS2812)"
     help
@@ -239,6 +254,42 @@ config OBSERVORE_I2C_SCL
     int "I2C SCL GPIO"
     depends on OBSERVORE_I2C
     default 48
+
+config OBSERVORE_I2C_AUX_SDA
+    int "Second I2C bus SDA GPIO, or -1 for none"
+    depends on OBSERVORE_I2C
+    default -1
+    help
+        Most boards put everything on one bus and leave this alone. The
+        Waveshare 1.85 does not: its touch panel has its own pair of pins and
+        the expander, clock and accelerometer share the other.
+
+        The sensors stay on the main bus, so nothing that already reads them
+        has to know a second one exists.
+
+config OBSERVORE_I2C_AUX_SCL
+    int "Second I2C bus SCL GPIO, or -1 for none"
+    depends on OBSERVORE_I2C
+    default -1
+
+config OBSERVORE_IOEXP
+    bool "A TCA9554 I/O expander sits between the chip and some resets"
+    depends on OBSERVORE_I2C
+    default n
+    help
+        Some boards run out of pins and put the panel's reset, the touch
+        panel's reset and a chip select behind an I2C expander. The Waveshare
+        1.85 is one: its LCD cannot be reset at all until the expander has
+        been talked to, which makes the bus an ordering constraint on bringing
+        up the screen rather than an afterthought.
+
+config OBSERVORE_IOEXP_I2C_ADDR
+    hex "Expander I2C address"
+    depends on OBSERVORE_IOEXP
+    default 0x20
+    help
+        0x20 with all three address pins low, which is what a scan of the
+        1.85's sensor bus reported.
 
 config OBSERVORE_WATCHFACE
     bool "A watch face page"

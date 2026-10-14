@@ -1,0 +1,91 @@
+# Waveshare ESP32-S3-Touch-LCD-1.85 -- a round 1.85" 360x360 IPS LCD on an S3
+# with 16 MB flash and 8 MB PSRAM.
+#
+# Radio first: this profile makes the board a detector. The screen and the
+# touch panel are not driven yet, which is the order the 1.43 shipped in and
+# for the same reason -- the parts that can be verified go first, and a panel
+# that needs a new controller driver and a reset line behind an I2C expander
+# is not one of them.
+#
+# What is here was read off the board, not out of the wiki. The wiki has
+# already been wrong about this vendor's touch pins, panel power and battery
+# sense, so an I2C scan was run on the two candidate bus pairs and this is
+# what answered:
+#
+#   SDA 1  / SCL 3    0x15              CST816 touch
+#   SDA 11 / SCL 10   0x20  0x51  0x6B  TCA9554 expander, PCF85063 clock,
+#                                       QMI8658 accelerometer
+#
+# Two things that scan settled which the wiki did not say. The expander is on
+# the sensor bus rather than the touch bus -- so the screen's reset line is
+# downstream of the bus the clock is on, which makes bus order a constraint on
+# bringing the panel up. And the accelerometer is at 0x6B, not the 0x6A its
+# datasheet leads with, exactly as on the 1.43.
+#
+# Still to establish, and deliberately not guessed at here: which expander bit
+# is the panel reset and which is the touch reset (the wiki numbers them EXIO1
+# upward without saying whether EXIO1 is the chip's P0 or P1), and whether
+# there is a battery sense at all.
+#
+# The console is the chip's own USB-Serial/JTAG; there is no UART bridge, so
+# it enumerates as ttyACM.
+
+CONFIG_OBSERVORE_BOARD="waveshare-s3-lcd-185"
+
+# 16 MB, against the 4 MB the partition table is sized for -- the harmless
+# direction, as on the 1.43.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# 8 MB octal PSRAM, the same as the 1.43.
+#
+# This said quad on the first attempt, on the reasoning that the 1.43 was the
+# unusual one. The board disagreed immediately and in the loudest possible
+# way -- "PSRAM chip is not connected, or wrong PSRAM line mode", then a boot
+# loop. The R8 in ESP32-S3R8 is eight megabytes of octal; R2 is the quad part.
+#
+# Named explicitly rather than left to a default, because getting it wrong
+# does not degrade, it refuses to boot.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Two buses. The sensors are on the main one so that nothing which already
+# reads a clock or an accelerometer has to know the second exists; the touch
+# panel gets the auxiliary pins when it is driven.
+CONFIG_OBSERVORE_I2C=y
+CONFIG_OBSERVORE_I2C_SDA=11
+CONFIG_OBSERVORE_I2C_SCL=10
+CONFIG_OBSERVORE_I2C_AUX_SDA=1
+CONFIG_OBSERVORE_I2C_AUX_SCL=3
+
+# The expander, which nothing needs yet and which the panel will.
+CONFIG_OBSERVORE_IOEXP=y
+CONFIG_OBSERVORE_IOEXP_I2C_ADDR=0x20
+
+# The clock chip, which is the same part as the 1.43's and at the same
+# address. Worth having on day one: it is the only board besides the 1.43 that
+# knows what time it is across a power cut.
+CONFIG_OBSERVORE_RTC=y
+CONFIG_OBSERVORE_RTC_I2C_ADDR=0x51
+
+# The accelerometer, at the address the board reported rather than the one the
+# datasheet leads with.
+CONFIG_OBSERVORE_MOTION=y
+CONFIG_OBSERVORE_MOTION_I2C_ADDR=0x6B
+
+# No screen yet, so no watch face and no touch.
+CONFIG_OBSERVORE_DISPLAY=n
+CONFIG_OBSERVORE_TOUCH=n
+CONFIG_OBSERVORE_WATCHFACE=n
+
+# No LED on this board's pin list -- every pin that might have been one is a
+# panel data line. Said as a backend rather than as a pin of -1, because -1
+# was tried first and produced "gpio_set_level(247): GPIO output gpio_num
+# error" on every heartbeat: no board here had ever had no LED, so nothing
+# handled it.
+CONFIG_OBSERVORE_LED_NONE=y
+# The BOOT button, the strapping pin every S3 has.
+CONFIG_OBSERVORE_BUTTON_GPIO=0

@@ -104,6 +104,15 @@ jobs:
           - board: waveshare-s3-amoled-143
             target: esp32s3
             profile: boards/waveshare-s3-amoled-143.defaults
+          # The 1.85" round LCD. A detector, not yet a screen: its ST77916
+          # panel needs a driver this project does not carry, and its reset
+          # line is behind an I2C expander rather than on a pin. Built and
+          # shipped as a radio now -- the same order the 1.43 arrived in --
+          # so the profile is under CI from the day it exists rather than
+          # rotting until the panel works.
+          - board: waveshare-s3-lcd-185
+            target: esp32s3
+            profile: boards/waveshare-s3-lcd-185.defaults
           # Built but not shipped yet: one unit, and its touch calibration
           # is still the default rather than a measurement from its panel.
           - board: nm-cyd-c5

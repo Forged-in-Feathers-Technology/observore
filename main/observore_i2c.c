@@ -12,35 +12,71 @@ static const char *TAG = "observore.i2c";
 
 #define I2C_TIMEOUT_MS 200
 
-static i2c_master_bus_handle_t s_bus;
-static bool s_tried;
+/* One entry per bus, brought up on first use. A board with one bus never
+ * touches the second slot, and asking for a bus a profile gave no pins to
+ * returns NULL rather than inventing one. */
+static struct {
+    i2c_master_bus_handle_t handle;
+    bool                    tried;
+} s_buses[2];
 
-i2c_master_bus_handle_t observore_i2c_bus(void)
+static void bus_pins(observore_i2c_bus_id_t id, int *sda, int *scl)
 {
-    if (s_bus || s_tried) {
-        return s_bus;
+    if (id == OBSERVORE_I2C_AUX) {
+        *sda = CONFIG_OBSERVORE_I2C_AUX_SDA;
+        *scl = CONFIG_OBSERVORE_I2C_AUX_SCL;
+    } else {
+        *sda = CONFIG_OBSERVORE_I2C_SDA;
+        *scl = CONFIG_OBSERVORE_I2C_SCL;
     }
-    s_tried = true;
+}
+
+i2c_master_bus_handle_t observore_i2c_bus_of(observore_i2c_bus_id_t id)
+{
+    if (id > OBSERVORE_I2C_AUX) {
+        return NULL;
+    }
+    if (s_buses[id].handle || s_buses[id].tried) {
+        return s_buses[id].handle;
+    }
+    s_buses[id].tried = true;
+
+    int sda, scl;
+    bus_pins(id, &sda, &scl);
+    if (sda < 0 || scl < 0) {
+        /* Not a fault: a board with one bus leaves the second unconfigured,
+         * and the caller that wanted it has somewhere sensible to go. */
+        return NULL;
+    }
     i2c_master_bus_config_t cfg = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = CONFIG_OBSERVORE_I2C_SDA,
-        .scl_io_num = CONFIG_OBSERVORE_I2C_SCL,
+        /* -1 lets the driver pick a free port, so two buses cannot be given
+         * the same one by a profile that forgot. */
+        .i2c_port = -1,
+        .sda_io_num = sda,
+        .scl_io_num = scl,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
-    esp_err_t err = i2c_new_master_bus(&cfg, &s_bus);
+    esp_err_t err = i2c_new_master_bus(&cfg, &s_buses[id].handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "bus on sda %d / scl %d: %s", CONFIG_OBSERVORE_I2C_SDA,
-                 CONFIG_OBSERVORE_I2C_SCL, esp_err_to_name(err));
-        s_bus = NULL;
+        ESP_LOGE(TAG, "%s bus on sda %d / scl %d: %s",
+                 id == OBSERVORE_I2C_AUX ? "aux" : "main", sda, scl,
+                 esp_err_to_name(err));
+        s_buses[id].handle = NULL;
     }
-    return s_bus;
+    return s_buses[id].handle;
 }
 
-i2c_master_dev_handle_t observore_i2c_device(uint8_t addr, uint32_t hz)
+i2c_master_bus_handle_t observore_i2c_bus(void)
 {
-    i2c_master_bus_handle_t bus = observore_i2c_bus();
+    return observore_i2c_bus_of(OBSERVORE_I2C_MAIN);
+}
+
+i2c_master_dev_handle_t observore_i2c_device_on(observore_i2c_bus_id_t id,
+                                                uint8_t addr, uint32_t hz)
+{
+    i2c_master_bus_handle_t bus = observore_i2c_bus_of(id);
     if (!bus) {
         return NULL;
     }
@@ -55,6 +91,11 @@ i2c_master_dev_handle_t observore_i2c_device(uint8_t addr, uint32_t hz)
         return NULL;
     }
     return dev;
+}
+
+i2c_master_dev_handle_t observore_i2c_device(uint8_t addr, uint32_t hz)
+{
+    return observore_i2c_device_on(OBSERVORE_I2C_MAIN, addr, hz);
 }
 
 bool observore_i2c_read(i2c_master_dev_handle_t dev, uint8_t reg,

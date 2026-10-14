@@ -14,6 +14,7 @@
 #include "observore_httpscert.h"
 #include "observore_tz.h"
 #include "observore_gps.h"
+#include "observore_ioexp.h"
 #include "observore_ble.h"
 #include <limits.h>
 
@@ -558,6 +559,12 @@ void app_main(void)
     /* Before the clock, like the zone: it is a clock source, and the sooner it
      * starts the sooner it has something to say. */
     observore_gps_init();
+#endif
+#if CONFIG_OBSERVORE_IOEXP
+    /* Before anything that needs a reset line, and after NVS because the bus
+     * it sits on is shared with the clock. On the 1.85 the panel cannot be
+     * reset until this has been written to. */
+    observore_ioexp_init();
 #endif
     observore_tz_init();
     /* Before the clock, deliberately: the table is read from flash here, and

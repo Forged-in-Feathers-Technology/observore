@@ -62,10 +62,25 @@ fi
 mac=$(esptool.py --port "$PORT" read_mac 2>/dev/null |
       grep -oE "^MAC: [0-9a-f:]+" | head -1 | cut -d' ' -f2) || true
 if [[ -n "$mac" && -f "$KNOWN" ]]; then
-    want=$(grep -i "^$mac " "$KNOWN" | awk '{print $2}' | head -1)
+    # `|| true` because grep exits 1 when the address is not in the file, and
+    # under `set -e` with `pipefail` that status becomes the assignment's and
+    # kills the script -- silently, before anything has been printed.
+    #
+    # That is the same failure the note below describes, one line later and
+    # left behind when it was fixed there. It meant the case this file's own
+    # header promises -- "with no entry for a MAC the flash proceeds and the
+    # address is printed, so the file can be built up by pasting what it
+    # reports" -- had never once worked: every genuinely new board, which is
+    # exactly when you need that line printed, exited 1 with no output at all.
+    # Found by plugging in a board the file had never seen.
+    want=$(grep -i "^$mac " "$KNOWN" | awk '{print $2}' | head -1 || true)
     if [[ -n "$want" && "$want" != "$BOARD" ]]; then
         echo "REFUSING to flash: $PORT is $mac, which is $want, not $BOARD" >&2
         exit 1
+    fi
+    if [[ -z "$want" ]]; then
+        echo "  $PORT is $mac, which $KNOWN does not list" >&2
+        echo "  once this board is seen working, add:  $mac $BOARD" >&2
     fi
 fi
 # An `if` rather than `[[ ... ]] && echo`, which under `set -e` is a silent

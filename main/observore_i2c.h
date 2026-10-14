@@ -14,10 +14,25 @@
  * gets the same handle back. NULL means it could not be brought up, which
  * every caller is expected to survive: a board with no motion sensor is a
  * board that cannot say it is moving, not a board that stops working. */
+/* Which bus. Most boards have one and everything hangs off it; the Waveshare
+ * 1.85 has two, with the touch panel on its own pins and the expander, clock
+ * and accelerometer sharing the other.
+ *
+ * MAIN is the one the sensors are on, so every existing caller keeps working
+ * without knowing this enum exists. AUX is absent unless a board profile gives
+ * it pins. */
+typedef enum {
+    OBSERVORE_I2C_MAIN = 0,
+    OBSERVORE_I2C_AUX,
+} observore_i2c_bus_id_t;
+
 i2c_master_bus_handle_t observore_i2c_bus(void);
+i2c_master_bus_handle_t observore_i2c_bus_of(observore_i2c_bus_id_t id);
 
 /* Add a device to the shared bus, or NULL. */
 i2c_master_dev_handle_t observore_i2c_device(uint8_t addr, uint32_t hz);
+i2c_master_dev_handle_t observore_i2c_device_on(observore_i2c_bus_id_t id,
+                                                uint8_t addr, uint32_t hz);
 
 /* Read `len` bytes starting at `reg`.
  *
