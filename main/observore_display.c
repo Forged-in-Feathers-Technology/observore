@@ -2070,10 +2070,17 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         snprintf(right, sizeof(right), roomy ? " clear %u ignores"
                                              : " clear %u", (unsigned)muted);
     }
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
-    /* A fourth action where the panel is resistive, because those are the
-     * ones whose sheet differs from the bench unit the bounds were measured
-     * on. A capacitive controller reports pixels and has nothing to teach. */
+#if CONFIG_OBSERVORE_TOUCH
+    /* A fourth action wherever there is a touch panel at all.
+     *
+     * It used to be offered only on the resistive boards, because "a
+     * capacitive controller reports pixels and has nothing to teach". A
+     * CST816 reports in whatever range its firmware was configured for, which
+     * on a round panel is not reliably the panel's own -- and this was the
+     * third of three places that assumption was written down, the other two
+     * being the mapping and the raw accessor the calibration reads. With all
+     * three agreeing, a capacitive panel that landed a finger in the wrong
+     * place had no way of being told otherwise. */
     char cal[COLS];
     snprintf(cal, sizeof(cal), observore_touch_calibrated() ? " recalibrate"
                                                             : " calibrate");

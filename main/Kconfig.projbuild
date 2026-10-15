@@ -778,28 +778,42 @@ config OBSERVORE_TOUCH_Z_MIN
 
 config OBSERVORE_TOUCH_RAW_MIN_X
     int "Raw X at the low edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default 0 if OBSERVORE_TOUCH_CAPACITIVE
     default 200
 config OBSERVORE_TOUCH_RAW_MAX_X
     int "Raw X at the high edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default OBSERVORE_DISPLAY_WIDTH if OBSERVORE_TOUCH_CAPACITIVE
     default 3900
 config OBSERVORE_TOUCH_RAW_MIN_Y
     int "Raw Y at the low edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default 0 if OBSERVORE_TOUCH_CAPACITIVE
     default 200
 config OBSERVORE_TOUCH_RAW_MAX_Y
     int "Raw Y at the high edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default OBSERVORE_DISPLAY_HEIGHT if OBSERVORE_TOUCH_CAPACITIVE
     default 3900
     help
         The four bounds are a property of one piece of glass, not of the
         product: boards off the same reel differ by tens of counts. Build with
         OBSERVORE_TOUCH_LOG_RAW, touch each corner, and read them off the log.
 
+        On a resistive panel these are ADC counts. On a capacitive one they
+        are whatever range the controller's firmware was configured to report,
+        which defaults here to the panel's own size -- the identity mapping,
+        correct whenever the controller was configured for the panel it is
+        bonded to, and wrong in proportion to the distance from the top-left
+        corner whenever it was not.
+
+        Easier than either: run the calibration from the settings page, which
+        measures this device's own glass.
+
 config OBSERVORE_TOUCH_SWAP_XY
     bool "Touch axes are crossed relative to the display"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
     default n
     help
         Wrong sends the finger along the wrong edge: dragging across the
@@ -807,11 +821,11 @@ config OBSERVORE_TOUCH_SWAP_XY
 
 config OBSERVORE_TOUCH_FLIP_X
     bool "Flip touch X"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
     default n
 config OBSERVORE_TOUCH_FLIP_Y
     bool "Flip touch Y"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
     default n
     help
         Wrong flips are unmistakable: the cursor goes the other way from the
