@@ -205,7 +205,11 @@ static bool blit_done(esp_lcd_panel_io_handle_t io,
 static char     s_shown[ROWS][COLS + 1];
 static uint16_t s_shown_bg[ROWS];
 static bool     s_ready;
-static char     s_notice[COLS + 1];
+/* The notice is built here and clipped by line(), so it is sized for the
+ * message rather than for the glass -- same reason as TEXTBUF above. On a
+ * 31-column panel the daylight-zone notice is 37 characters and would not
+ * otherwise compile. */
+static char     s_notice[TEXTBUF];
 static int64_t  s_notice_until_us;
 
 /* A whole 320x240 framebuffer is 150 KB, which this board does not have, so
@@ -1377,6 +1381,36 @@ static int64_t s_face_awake_until_us;
 #define FACE_MARGIN   4
 #define FACE_RING_W   5
 
+/* The dial's proportions, as fractions of its radius rather than as pixel
+ * offsets from it.
+ *
+ * They were tuned on the 1.43's 466-pixel glass and written as "r minus a
+ * constant", which does not survive a smaller panel. On the 1.85's 360 the
+ * same numbers give an hour hand 24% of the radius where the 1.43 has 42%,
+ * and a counterweight 20% where it has 15% -- the same watch face, visibly
+ * stubbier, and nothing in the code saying why.
+ *
+ * The percentages below are what the 1.43 already drew, measured off it, so
+ * that board is unchanged to the pixel within rounding and every other size
+ * now gets the same watch rather than a differently proportioned one. */
+#define FACE_PCT(r, pct)  ((r) * (pct) / 100)
+#define FACE_AT_LEAST(v, n) ((v) > (n) ? (v) : (n))
+
+#define FACE_HOUR_PCT     42   /* hand lengths, from the centre */
+#define FACE_MIN_PCT      69
+#define FACE_SEC_PCT      82
+#define FACE_NUMERAL_PCT  80   /* where the numerals sit */
+#define FACE_MARK_PCT     96   /* where the hour marks start */
+#define FACE_MARK_LONG    12   /* and how long they are, at the quarters */
+#define FACE_MARK_SHORT    6
+#define FACE_TAIL_H_PCT   12   /* how far each hand reaches past the centre */
+#define FACE_TAIL_M_PCT   13
+#define FACE_TAIL_S_PCT   15
+#define FACE_HUB_H_PCT     6   /* hand widths, at the hub and at the tip */
+#define FACE_HUB_M_PCT     4
+#define FACE_TIP_H_PCT     2
+#define FACE_CAP_PCT       4   /* the disc over the pivot */
+
 void observore_display_wake_face(void)
 {
     s_face_awake_until_us = esp_timer_get_time() + 15 * 1000000;
@@ -1473,9 +1507,10 @@ static void draw_clockface(const observore_status_t *st)
      * turn into a grey band. */
     for (int h = 0; h < 12; h++) {
         int x0, y0, x1, y1;
-        int len = (h % 3 == 0) ? 26 : 14;
-        observore_watch_hand_end(cx, cy, r - 8, h, 12, &x0, &y0);
-        observore_watch_hand_end(cx, cy, r - 8 - len, h, 12, &x1, &y1);
+        int from = FACE_PCT(r, FACE_MARK_PCT);
+        int len  = FACE_PCT(r, (h % 3 == 0) ? FACE_MARK_LONG : FACE_MARK_SHORT);
+        observore_watch_hand_end(cx, cy, from, h, 12, &x0, &y0);
+        observore_watch_hand_end(cx, cy, from - len, h, 12, &x1, &y1);
         observore_watch_line(&c, x0, y0, x1, y1, (h % 3 == 0) ? 7 : 3, mark);
     }
 
@@ -1504,7 +1539,8 @@ static void draw_clockface(const observore_status_t *st)
         };
         for (int h = 0; h < 12; h += step) {
             int nx, ny;
-            observore_watch_hand_end(cx, cy, r - 44, h, 12, &nx, &ny);
+            observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_NUMERAL_PCT),
+                                     h, 12, &nx, &ny);
             observore_watch_text(&c, nx, ny - OBSERVORE_FONT_H * scale / 2,
                                  HOURS[h], scale, px(C_SILVER));
         }
@@ -1549,19 +1585,31 @@ static void draw_clockface(const observore_status_t *st)
     /* Hands. The hour hand moves with the minutes, as a real one does, which
      * is 720 positions round the dial rather than twelve. */
     int hx, hy, mx, my, sx, sy;
-    observore_watch_hand_end(cx, cy, r - 130, lt.tm_hour % 12 * 60 + lt.tm_min,
-                             720, &hx, &hy);
-    observore_watch_hand_end(cx, cy, r - 70, lt.tm_min * 60 + lt.tm_sec,
-                             3600, &mx, &my);
-    observore_watch_hand_end(cx, cy, r - 40, lt.tm_sec, 60, &sx, &sy);
+    observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_HOUR_PCT),
+                             lt.tm_hour % 12 * 60 + lt.tm_min, 720, &hx, &hy);
+    observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_MIN_PCT),
+                             lt.tm_min * 60 + lt.tm_sec, 3600, &mx, &my);
+    observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_SEC_PCT),
+                             lt.tm_sec, 60, &sx, &sy);
 
-    observore_watch_hand(&c, cx, cy, hx, hy, 26, 13, 5, px(C_WHITE));
-    observore_watch_hand(&c, cx, cy, mx, my, 30, 9,  3, px(C_WHITE));
+    /* A width of at least two pixels, whatever the arithmetic says: a hand
+     * rounded down to one pixel on a small panel is a scratch, not a hand. */
+    int hub_h = FACE_AT_LEAST(FACE_PCT(r, FACE_HUB_H_PCT), 3);
+    int hub_m = FACE_AT_LEAST(FACE_PCT(r, FACE_HUB_M_PCT), 3);
+    int tip_h = FACE_AT_LEAST(FACE_PCT(r, FACE_TIP_H_PCT), 2);
+    observore_watch_hand(&c, cx, cy, hx, hy, FACE_PCT(r, FACE_TAIL_H_PCT),
+                         hub_h, tip_h, px(C_WHITE));
+    observore_watch_hand(&c, cx, cy, mx, my, FACE_PCT(r, FACE_TAIL_M_PCT),
+                         hub_m, FACE_AT_LEAST(tip_h - 1, 2), px(C_WHITE));
     if (awake) {
-        observore_watch_hand(&c, cx, cy, sx, sy, 34, 3, 3, mark);
+        observore_watch_hand(&c, cx, cy, sx, sy, FACE_PCT(r, FACE_TAIL_S_PCT),
+                             2, 2, mark);
     }
-    observore_watch_disc(&c, cx, cy, 10, px(C_WHITE));
-    observore_watch_disc(&c, cx, cy, 5,  px(C_BLACK));
+    observore_watch_disc(&c, cx, cy, FACE_AT_LEAST(FACE_PCT(r, FACE_CAP_PCT), 4),
+                         px(C_WHITE));
+    observore_watch_disc(&c, cx, cy,
+                         FACE_AT_LEAST(FACE_PCT(r, FACE_CAP_PCT) / 2, 2),
+                         px(C_BLACK));
 
     /* No time yet is said rather than drawn as midnight, which is what an
      * unset clock would otherwise claim with total confidence. */

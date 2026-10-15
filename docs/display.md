@@ -111,6 +111,35 @@ pages worse to suit the smallest glass. The buffers are now a fixed `TEXTBUF`
 instead: `line()` already pads and clips to `COLS`, so a formatter only has to
 produce the text and let the panel take what it can show.
 
+### Touch, which was the easy half
+
+A CST816 at `0x15`, and almost all of it already existed. It agrees with the
+1.43's FT3168 on the register layout — fingers down at `0x02`, then twelve
+bits each of X and Y from `0x03`, high nibble first — so one capacitive
+backend reads both, selected by a shared `OBSERVORE_TOUCH_CAPACITIVE` symbol
+rather than duplicated.
+
+What differs is where it lives, not how it is read:
+
+- **its own I2C bus**, so the clock and the accelerometer stay where every
+  other board has them and nothing that reads them had to change
+- **its reset on the expander**, line 0 — Waveshare call it EXIO1 and their
+  driver shifts by `(Pin - 1)`, the same offset that puts the panel's reset
+  on line 1
+
+It announces itself rather than being assumed present, because a panel that
+answers its address while still held in reset reports no touches, and that is
+indistinguishable from nobody touching it:
+
+```
+touch I2C on sda 1 / scl 3 answered: 0x15
+CST816 at 0x15, chip 0xB5 proj 0x71 fw 0x04
+```
+
+Being capacitive, it reports position in panel pixels, so none of the
+resistive path applies — no pressure threshold, no median filter, and no
+calibration ritual to get wrong.
+
 ### A diagnostic that measured itself
 
 Several rounds of this were spent reading a black screen that proved nothing.

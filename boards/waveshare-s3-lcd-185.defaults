@@ -1,8 +1,8 @@
 # Waveshare ESP32-S3-Touch-LCD-1.85 -- a round 1.85" 360x360 IPS LCD on an S3
 # with 16 MB flash and 8 MB PSRAM.
 #
-# The radio and the screen both work. Touch does not yet: its CST816 is on the
-# second I2C bus and wants a driver this project does not carry.
+# Radio, screen and touch all work. The watch face is the one thing left off,
+# deliberately: see the note at the bottom.
 #
 # The panel took five things being right at once, and any one of them wrong
 # leaves the glass black with no error anywhere:
@@ -125,13 +125,27 @@ CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
 CONFIG_OBSERVORE_DISPLAY_RST=-1
 CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT=1
 
-# Touch is next, not now: CST816 at 0x15 on the auxiliary bus, with its reset
-# on expander bit 0 by the same (Pin - 1) rule.
-CONFIG_OBSERVORE_TOUCH=n
+# Touch: a CST816 at 0x15, on the auxiliary bus rather than the sensors' one,
+# with its reset on expander bit 0 -- Waveshare call that line EXIO1 and their
+# driver shifts by (Pin - 1), the same offset that puts the panel reset on
+# bit 1.
+CONFIG_OBSERVORE_TOUCH=y
+CONFIG_OBSERVORE_TOUCH_CST816=y
+CONFIG_OBSERVORE_TOUCH_ON_AUX_BUS=y
+CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x15
+CONFIG_OBSERVORE_TOUCH_SDA=1
+CONFIG_OBSERVORE_TOUCH_SCL=3
+CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT=0
+CONFIG_OBSERVORE_TOUCH_IRQ=4
 
-# And the watch face after that. It wants touch to be worth having, and the
-# grid here is 31x15 against the 1.43's 41x20.
-CONFIG_OBSERVORE_WATCHFACE=n
+# The watch face. It needed the dial's proportions expressed as fractions of
+# its radius first: they were tuned on the 1.43's 466 pixels and written as
+# "r minus a constant", which at 360 gave an hour hand 24% of the radius
+# where that board has 42%. The 1.43 is unchanged to within a pixel.
+#
+# The frame buffer is 360x360x2, a quarter of a megabyte, and comes from the
+# PSRAM this board has eight of.
+CONFIG_OBSERVORE_WATCHFACE=y
 
 # No LED on this board's pin list -- every pin that might have been one is a
 # panel data line. Said as a backend rather than as a pin of -1, because -1

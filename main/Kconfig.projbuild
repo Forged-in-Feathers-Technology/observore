@@ -293,13 +293,25 @@ config OBSERVORE_IOEXP_I2C_ADDR
 
 config OBSERVORE_WATCHFACE
     bool "A watch face page"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY
     default n
     help
-        An analogue dial with hands, on the round panel.  It is a disguise as
+        An analogue dial with hands, on a round panel.  It is a disguise as
         much as a clock: a device carried in a pocket and glanced at is far
         less conspicuous showing the time than showing a list of everybody's
         Bluetooth addresses.
+
+        This used to depend on OBSERVORE_DISPLAY_QSPI_AMOLED, which was not
+        what it meant -- it meant "a square panel with a frame buffer's worth
+        of PSRAM", and the only board with one happened to be an AMOLED. When
+        a second round panel arrived the profile asked for a watch face and
+        was silently given none, because a board profile setting a symbol
+        whose dependencies are unmet is simply ignored.
+
+        What it actually needs is stated rather than implied: the dial is
+        drawn into a buffer of width * height * 2 bytes, so the panel wants
+        PSRAM to spare, and the face assumes the panel is square. A profile
+        that turns this on for a rectangular screen will get an oval.
 
         The threat level still reaches the wearer, as the colour of the hour
         markers -- legible to somebody who knows what they mean and nothing at
@@ -654,21 +666,59 @@ config OBSERVORE_TOUCH_FT3168
         pixels, so there is no pressure threshold, no median filtering and
         no calibration to get wrong.
 
+config OBSERVORE_TOUCH_CST816
+    bool "CST816, capacitive, over I2C"
+    select OBSERVORE_I2C
+    help
+        The controller on the Waveshare 1.85. Capacitive, and close enough
+        to the FT3168 to share a backend: fingers down at register 0x02 and
+        twelve bits each of X and Y from 0x03, high nibble first.
+
+        What differs is where it lives rather than how it is read. It is on
+        the board's second I2C bus, not the one the clock and the
+        accelerometer share, and its reset is on the expander rather than a
+        pin.
+
 endchoice
+
+config OBSERVORE_TOUCH_CAPACITIVE
+    bool
+    default y if OBSERVORE_TOUCH_FT3168 || OBSERVORE_TOUCH_CST816
+    help
+        Not a choice: set by whichever controller was picked. The two share
+        a register layout, so they share the code that reads it.
+
+config OBSERVORE_TOUCH_ON_AUX_BUS
+    bool "The touch controller is on the second I2C bus"
+    depends on OBSERVORE_TOUCH_CAPACITIVE
+    default n
+    help
+        Most boards hang everything off one bus. The 1.85 gives its touch
+        panel a pair of pins of its own, so the sensors can stay where every
+        other board has them.
+
+config OBSERVORE_TOUCH_RST_IOEXP_BIT
+    int "Expander line the touch reset is on, or -1 for none"
+    depends on OBSERVORE_TOUCH_CAPACITIVE
+    default -1
+    help
+        A chip bit number. Waveshare call this line EXIO1 and their driver
+        shifts by (Pin - 1), so their 1 is the chip's 0 -- the same offset
+        that makes their EXIO2 the panel reset on bit 1.
 
 config OBSERVORE_TOUCH_SDA
     int "Touch I2C SDA GPIO"
-    depends on OBSERVORE_TOUCH_FT3168
+    depends on OBSERVORE_TOUCH_CAPACITIVE
     default 47
 
 config OBSERVORE_TOUCH_SCL
     int "Touch I2C SCL GPIO"
-    depends on OBSERVORE_TOUCH_FT3168
+    depends on OBSERVORE_TOUCH_CAPACITIVE
     default 48
 
 config OBSERVORE_TOUCH_I2C_ADDR
     hex "Touch I2C address"
-    depends on OBSERVORE_TOUCH_FT3168
+    depends on OBSERVORE_TOUCH_CAPACITIVE
     default 0x38
 
 config OBSERVORE_TOUCH_SHARED_BUS

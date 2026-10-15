@@ -115,9 +115,23 @@ fi
 
 # set-target first, because it writes an sdkconfig; then remove it, so the
 # profile below is actually read.  Order matters and is the whole point.
-idf.py set-target "$TARGET" >/dev/null 2>&1
-rm -f sdkconfig
-idf.py -DSDKCONFIG_DEFAULTS="$DEFAULTS" build >/dev/null 2>&1
+# Quiet while it works, loud when it does not.
+#
+# These used to send both streams to /dev/null unconditionally, so a build
+# that failed exited this script through `set -e` with no output at all --
+# three separate times during the 1.85 bring-up it looked like the guard
+# refusing rather than the compiler objecting. A build log nobody can see is
+# a build log that costs somebody twenty minutes.
+build_log=$(mktemp)
+trap 'rm -f "$build_log"' EXIT
+if ! { idf.py set-target "$TARGET" &&
+       rm -f sdkconfig &&
+       idf.py -DSDKCONFIG_DEFAULTS="$DEFAULTS" build; } >"$build_log" 2>&1; then
+    echo "build failed for $BOARD:" >&2
+    grep -E "error:|Error|FAILED|CMake Error" "$build_log" | head -20 >&2 ||
+        tail -20 "$build_log" >&2
+    exit 1
+fi
 
 if ! grep -qxF "CONFIG_OBSERVORE_BOARD=\"$BOARD\"" sdkconfig; then
     echo "REFUSING to flash: sdkconfig says $(grep '^CONFIG_OBSERVORE_BOARD=' sdkconfig), not $BOARD" >&2

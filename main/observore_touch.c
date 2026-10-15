@@ -10,8 +10,9 @@
 #include <stdlib.h>
 
 #include "driver/gpio.h"
-#if CONFIG_OBSERVORE_TOUCH_FT3168
+#if CONFIG_OBSERVORE_TOUCH_CAPACITIVE
 #include "observore_i2c.h"
+#include "observore_ioexp.h"
 #else
 #include "driver/spi_master.h"
 #endif
@@ -460,7 +461,7 @@ static bool sample(int *x, int *y)
     return true;
 }
 
-#else  /* CONFIG_OBSERVORE_TOUCH_FT3168 */
+#else  /* CONFIG_OBSERVORE_TOUCH_CAPACITIVE */
 
 /* The capacitive half.
  *
@@ -471,11 +472,22 @@ static bool sample(int *x, int *y)
  * two days and a wrongly accused ribbon cable on the Cheap Yellow Displays
  * does not exist here. */
 
-/* Registers, from Waveshare's own driver rather than from a datasheet nobody
- * has: 0x02 holds the number of fingers down, and 0x03 begins four bytes of
- * position -- twelve bits of X then twelve of Y, high nibble first. */
+/* Registers, from Waveshare's own drivers rather than from a datasheet
+ * nobody has: 0x02 holds the number of fingers down, and 0x03 begins four
+ * bytes of position -- twelve bits of X then twelve of Y, high nibble first.
+ *
+ * The FT3168 on the 1.43 and the CST816 on the 1.85 agree on all of that,
+ * which is why one backend reads both. Where they differ is where they live:
+ * the CST816 is on a bus of its own and its reset is on the I/O expander
+ * rather than a pin. */
 #define FT_REG_TOUCHES 0x02
 #define FT_REG_XY      0x03
+
+#if CONFIG_OBSERVORE_TOUCH_ON_AUX_BUS
+#define TOUCH_BUS OBSERVORE_I2C_AUX
+#else
+#define TOUCH_BUS OBSERVORE_I2C_MAIN
+#endif
 
 static i2c_master_dev_handle_t s_touch;
 
@@ -486,29 +498,59 @@ static bool ft_read(uint8_t reg, uint8_t *buf, size_t len)
 
 static bool backend_init(void)
 {
-    if (!observore_i2c_bus()) {
+    if (!observore_i2c_bus_of(TOUCH_BUS)) {
+        ESP_LOGW(TAG, "no I2C bus for the touch panel");
         return false;
     }
 
-    /* Three chips share these two wires -- this controller, a motion sensor
-     * and a clock -- and which of them answered is said out loud, because
-     * "the panel is not answering" and "the panel is not there" look
-     * identical in a log mentioning neither. */
+#if CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT >= 0
+    /* Held in reset until something lets go of it. The expander has to be up
+     * first, which it is: it comes up with the clock's bus, well before any
+     * of this. Ten milliseconds low and fifty to settle, which is what the
+     * vendor's own driver waits. */
+    if (!observore_ioexp_reset_pulse(CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT,
+                                     10, 50)) {
+        ESP_LOGW(TAG, "could not pulse the touch reset on expander line %d",
+                 CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT);
+    }
+#endif
+
+    /* Which chips answered, said out loud: "the panel is not answering" and
+     * "the panel is not there" look identical in a log mentioning neither.
+     * On the 1.43 three chips share these wires; on the 1.85 the touch
+     * controller has them to itself and the others are on the main bus. */
     char found[64];
-    observore_i2c_scan(found, sizeof(found));
-    ESP_LOGI(TAG, "I2C on sda %d / scl %d answered:%s",
-             CONFIG_OBSERVORE_I2C_SDA, CONFIG_OBSERVORE_I2C_SCL,
+    observore_i2c_scan_on(TOUCH_BUS, found, sizeof(found));
+    ESP_LOGI(TAG, "touch I2C on sda %d / scl %d answered:%s",
+             CONFIG_OBSERVORE_TOUCH_SDA, CONFIG_OBSERVORE_TOUCH_SCL,
              found[0] ? found : " nothing");
 
-    s_touch = observore_i2c_device(CONFIG_OBSERVORE_TOUCH_I2C_ADDR, 300 * 1000);
+    s_touch = observore_i2c_device_on(TOUCH_BUS,
+                                      CONFIG_OBSERVORE_TOUCH_I2C_ADDR,
+                                      300 * 1000);
     if (!s_touch) {
         return false;
     }
 
-    /* Out of whatever low-power mode it woke in, the way the vendor does it. */
+#if CONFIG_OBSERVORE_TOUCH_FT3168
+    /* Out of whatever low-power mode it woke in, the way the vendor does it.
+     * Only the FT3168: on the CST816 register 0x00 is not a mode register
+     * and writing to it is not something its vendor driver does. */
     observore_i2c_write(s_touch, 0x00, 0x00);
-
     ESP_LOGI(TAG, "FT3168 at 0x%02X", CONFIG_OBSERVORE_TOUCH_I2C_ADDR);
+#else
+    /* The chip says what it is, which is worth asking once: a panel that
+     * answers its address but reports a chip id of zero is a panel still in
+     * reset, and that reads identically to one nobody is touching. */
+    uint8_t id[3] = {0};
+    if (observore_i2c_read(s_touch, 0xA7, id, sizeof(id))) {
+        ESP_LOGI(TAG, "CST816 at 0x%02X, chip 0x%02X proj 0x%02X fw 0x%02X",
+                 CONFIG_OBSERVORE_TOUCH_I2C_ADDR, id[0], id[1], id[2]);
+    } else {
+        ESP_LOGW(TAG, "CST816 at 0x%02X would not say what it is",
+                 CONFIG_OBSERVORE_TOUCH_I2C_ADDR);
+    }
+#endif
     return true;
 }
 

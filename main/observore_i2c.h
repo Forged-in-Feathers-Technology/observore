@@ -61,5 +61,6 @@ bool observore_i2c_write_bytes(i2c_master_dev_handle_t dev,
  * perfectly well. A scan that lies about an empty bus is worse than no scan:
  * it sends you to look at the wiring. */
 void observore_i2c_scan(char *out, size_t len);
+void observore_i2c_scan_on(observore_i2c_bus_id_t id, char *out, size_t len);
 
 #endif

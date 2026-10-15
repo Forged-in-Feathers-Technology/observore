@@ -128,12 +128,13 @@ bool observore_i2c_write_bytes(i2c_master_dev_handle_t dev,
                                pdMS_TO_TICKS(I2C_TIMEOUT_MS)) == ESP_OK;
 }
 
-void observore_i2c_scan(char *out, size_t len)
+void observore_i2c_scan_on(observore_i2c_bus_id_t id, char *out, size_t len)
 {
     size_t n = 0;
     out[0] = '\0';
     for (uint8_t addr = 0x08; addr < 0x78 && n + 6 < len; addr++) {
-        i2c_master_dev_handle_t dev = observore_i2c_device(addr, 300 * 1000);
+        i2c_master_dev_handle_t dev =
+            observore_i2c_device_on(id, addr, 300 * 1000);
         if (!dev) {
             continue;
         }
@@ -143,6 +144,11 @@ void observore_i2c_scan(char *out, size_t len)
         }
         i2c_master_bus_rm_device(dev);
     }
+}
+
+void observore_i2c_scan(char *out, size_t len)
+{
+    observore_i2c_scan_on(OBSERVORE_I2C_MAIN, out, len);
 }
 
 #endif
