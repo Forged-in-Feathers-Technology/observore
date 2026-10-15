@@ -593,21 +593,20 @@ static int64_t s_install_armed_until_us;
  * in it. Blind entry is the same rule applied to typing. */
 typedef enum { WIFI_LIST = 0, WIFI_TYPING, WIFI_SAVED } wifi_step_t;
 
-#define KEY_ROWS 4
-#define KEY_COLS 13
-/* Four layers, each thirteen keys by four rows; a blank is a gap. Lower and
- * upper are the same letters because a Wi-Fi password is case-sensitive and a
- * person needs to be able to type either without hunting. */
-static const char *const KEYS[2][KEY_ROWS] = {
-    {"1234567890   ",
-     "qwertyuiop   ",
-     "asdfghjkl    ",
-     "zxcvbnm      "},
-    {"!@#$%^&*()_-+",
-     "QWERTYUIOP{}",
-     "ASDFGHJKL:;'",
-     "ZXCVBNM,.?/  "},
-};
+/* Included here rather than at the top of the file: it carries the layout
+ * table, and a board with no touch screen would get only an unused one. */
+#include "observore_keyboard.h"
+
+/* The layout and its arithmetic are in observore_keyboard.h, where the host
+ * suite can measure them. */
+#define KEY_ROWS OBSERVORE_KB_ROWS
+
+/* How many keys a row of the current layer carries. Ragged by design: the
+ * fewer a row has, the wider they are drawn. */
+static int key_count(int layer, int kr)
+{
+    return (int)strlen(OBSERVORE_KB[layer][kr]);
+}
 
 /* Which finding each screen row is showing, for tap-to-ignore. */
 static int s_row_finding[ROWS];
@@ -618,7 +617,9 @@ static size_t s_ap_count;
 static int    s_ap_chosen = -1;
 static char   s_pass[OBSERVORE_PASSWORD_LEN];
 static size_t s_pass_len;
-static bool   s_shift;
+/* Lower, upper or symbols. Two keys reach all three: shift swaps the letter
+ * case, and the symbol key goes there and back. */
+static int    s_layer;
 /* Reveal is deliberate, momentary and off by default. Blind entry is the rule
  * -- a screen faces a room -- but a resistive panel and a fingertip make a
  * wrong key easy and invisible, and a person who cannot check what they typed
@@ -648,8 +649,7 @@ static char   s_wifi_msg[41];
 #define ACTION_TOP  (ROWS - BAR_TOUCH_ROWS - ACTION_GAP - ACTION_ROWS)
 #define ACTION_ROW  (ACTION_TOP + ACTION_ROWS - 1)   /* where the labels sit */
 #define KB_TOP      (ACTION_TOP - KEY_ROWS * KB_HEIGHT)
-/* Keys share the width: three columns each at forty, four at sixty. */
-#define KEY_W      (COLS / KEY_COLS)
+#define ACTIONS     5
 #endif
 
 /* Backlight, as a duty cycle rather than on/off. A 2.8" panel at full
@@ -2371,30 +2371,54 @@ static void draw_wifi(void)
     snprintf(text, sizeof(text), " pass %-29.29s", shown);
     line(2, text, C_BLACK, reveal ? C_AMBER : C_GREEN);
 
-    /* The keyboard: each key three columns wide and two rows tall, which is
-     * about seven millimetres -- the smallest a fingertip finds reliably. */
+    /* The keyboard. Each key is two rows tall and as wide as its share of the
+     * row, so the narrow rows get the wide keys.
+     *
+     * The upper of the two rows is a ruler: a faint bar at every key's left
+     * edge. Without it the letters float on an unbroken dark band and there
+     * is nothing on the screen that says where one key stops -- which matters
+     * most on exactly the panels where the keys are smallest. It costs no
+     * width, because it sits on the row above the glyphs rather than between
+     * them. */
     for (int kr = 0; kr < KEY_ROWS; kr++) {
-        const char *row_keys = KEYS[s_shift ? 1 : 0][kr];
+        const char *row_keys = OBSERVORE_KB[s_layer][kr];
+        int n = key_count(s_layer, kr);
         char top[COLS + 1], bot[COLS + 1];
-        int pos = 0;
-        for (int kc = 0; kc < KEY_COLS; kc++) {
-            char ch = row_keys[kc] ? row_keys[kc] : ' ';
-            /* The glyph in the middle of its key, whatever the key's width. */
-            pos += snprintf(bot + pos, sizeof(bot) - pos, "%*c%*s",
-                            KEY_W / 2 + 1, ch, KEY_W - KEY_W / 2 - 1, "");
+        memset(top, ' ', COLS); top[COLS] = '\0';
+        memset(bot, ' ', COLS); bot[COLS] = '\0';
+        for (int kc = 0; kc < n; kc++) {
+            int x0 = observore_kb_start(kc, n, COLS);
+            int w  = observore_kb_width(kc, n, COLS);
+            char ch = row_keys[kc];
+            /* A space is a key here, not a gap, and needs something to show
+             * for itself. */
+            bot[x0 + w / 2] = ch == ' ' ? '_' : ch;
+            top[x0] = '|';
         }
-        bot[pos] = '\0';
-        memset(top, ' ', (size_t)pos); top[pos] = '\0';
-        line(KB_TOP + kr * KB_HEIGHT,     top, C_WHITE, C_DARK);
+        line(KB_TOP + kr * KB_HEIGHT,     top, C_GREY,  C_DARK);
         line(KB_TOP + kr * KB_HEIGHT + 1, bot, C_WHITE, C_DARK);
     }
 
-    /* Four actions across the width, ten columns each. */
-    const int aw = COLS / 4;
-    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s%-*.*s",
-             aw, aw, s_shift ? "   abc" : "   ABC#",
-             aw, aw, reveal ? "   hide" : "   show",
-             aw, aw, "   del", COLS - 3 * aw, COLS - 3 * aw, "   join");
+    /* Five actions sharing the width, the same arithmetic as the keys.
+     *
+     * It was four. The symbol layer needs a key to reach it, and the labels
+     * now name the layer they would take you to rather than the one you are
+     * in, so none of the three states shows a label that is a lie. */
+    const char *labels[ACTIONS] = {
+        s_layer == 1 ? "abc" : "ABC",
+        s_layer == 2 ? "abc" : "#+=",
+        reveal ? "hide" : "show",
+        "del",
+        "join",
+    };
+    memset(text, ' ', COLS); text[COLS] = '\0';
+    for (int i = 0; i < ACTIONS; i++) {
+        int x0  = observore_kb_start(i, ACTIONS, COLS);
+        int w   = observore_kb_width(i, ACTIONS, COLS);
+        int len = (int)strlen(labels[i]);
+        if (len > w) len = w;
+        memcpy(text + x0 + (w - len) / 2, labels[i], (size_t)len);
+    }
     for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
         line(r, "", C_BLACK, C_GREY);      /* part of the same target */
     }
@@ -2420,7 +2444,7 @@ static void wifi_tap(int x, int y)
             s_ap_chosen = (int)i;
             s_pass_len  = 0;
             s_pass[0]   = '\0';
-            s_shift     = false;
+            s_layer     = 0;
             s_reveal    = false;
             s_wifi_step = s_aps[i].secure ? WIFI_TYPING : WIFI_SAVED;
             if (!s_aps[i].secure) {
@@ -2439,10 +2463,13 @@ static void wifi_tap(int x, int y)
     /* Typing. */
     if (row >= KB_TOP && row < KB_TOP + KEY_ROWS * KB_HEIGHT) {
         int kr = (row - KB_TOP) / KB_HEIGHT;
-        int kc = (x / OBSERVORE_FONT_W) / KEY_W;
-        if (kr < KEY_ROWS && kc < KEY_COLS) {
-            char ch = KEYS[s_shift ? 1 : 0][kr][kc];
-            if (ch && ch != ' ' && s_pass_len + 1 < sizeof(s_pass)) {
+        if (kr >= 0 && kr < KEY_ROWS) {
+            int n  = key_count(s_layer, kr);
+            int kc = observore_kb_at(x / OBSERVORE_FONT_W, n, COLS);
+            /* Every position is a key now, a space included, so there is no
+             * character to reject here. */
+            char ch = OBSERVORE_KB[s_layer][kr][kc];
+            if (ch && s_pass_len + 1 < sizeof(s_pass)) {
                 s_pass[s_pass_len++] = ch;
                 s_pass[s_pass_len]   = '\0';
             }
@@ -2450,16 +2477,17 @@ static void wifi_tap(int x, int y)
         return;
     }
     if (row >= ACTION_TOP && row <= ACTION_ROW) {
-        int which = (x / OBSERVORE_FONT_W) / (COLS / 4);
-        if (which > 3) which = 3;
+        int which = observore_kb_at(x / OBSERVORE_FONT_W, ACTIONS, COLS);
         if (which == 0) {
-            s_shift = !s_shift;
+            s_layer = (s_layer == 1) ? 0 : 1;
         } else if (which == 1) {
+            s_layer = (s_layer == 2) ? 0 : 2;
+        } else if (which == 2) {
             s_reveal = !s_reveal;
             /* Times out on its own: a password left legible on a screen in a
              * room is the thing this page is careful about. */
             s_reveal_until_us = esp_timer_get_time() + 15 * 1000000;
-        } else if (which == 2) {
+        } else if (which == 3) {
             if (s_pass_len) {
                 s_pass[--s_pass_len] = '\0';
             }

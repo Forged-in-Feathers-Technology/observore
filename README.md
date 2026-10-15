@@ -1192,6 +1192,23 @@ abandoned.
 An open network needs no keyboard at all, and joining takes effect at the next
 uplink window.
 
+Three layers reach every character a passphrase may contain — lower case,
+upper case, and all thirty-two punctuation marks of printable ASCII, including
+the space, which earlier versions could not type at all.
+
+Keys share the width of the row rather than sitting on a fixed grid, so the
+`zxcvbnm` row gets wider keys than `qwertyuiop`, and a faint ruler above each
+row marks where one key ends. This matters more than it sounds: a fingertip
+covers six to eight millimetres, and on the round panels a key is a third of
+that. The 1.43" fits 466 pixels across 36 millimetres of glass, nearly three
+times the density of the 2.8" boards — so the same layout that is comfortable
+on one is unusable on the other, and the layout has to give the smallest
+panels every column it can rather than rounding them away.
+
+If the keyboard is still too small for the board in front of you, the console
+is the easier path: bring up the SoftAP, join it from a phone, and type the
+passphrase on a real keyboard.
+
 ### Acting on what the screen shows
 
 Two actions at the foot of the system page: **check for updates**, which asks

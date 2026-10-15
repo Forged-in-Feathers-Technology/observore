@@ -32,6 +32,7 @@
 #include "observore_peer.h"
 #include "observore_touchcal.h"
 #include "observore_tap.h"
+#include "observore_keyboard.h"
 #include "observore_watch.h"
 #include <limits.h>
 #include "observore_surroundings.h"
@@ -5729,6 +5730,119 @@ static void test_gps(void)
     CHECK(!j.time_valid, "and none of that left a time behind");
 }
 
+/* ---------------------------------------------------------------- */
+
+/* The on-screen keyboard, which is arithmetic and so can be checked here.
+ *
+ * What this is really pinning down is the size of a key in millimetres on
+ * each panel that has one, because that is the number a finger meets and it
+ * was never measured -- the code asserted seven and delivered two. */
+static void test_keyboard(void)
+{
+    banner("on-screen keyboard");
+
+    /* Every board with CONFIG_OBSERVORE_TOUCH=y, its text columns, and the
+     * width of its glass in millimetres. The widths are the panels' active
+     * areas from the vendors' own specifications; they are here because
+     * nothing else in the firmware knows how big a pixel is. */
+    static const struct { const char *board; int cols; int px; double mm; } PANELS[] = {
+        { "cyd-2432s028r", 40, 320, 56.9 },
+        { "nm-cyd-c5",     40, 320, 56.9 },
+        { "cyd-3248s035r", 60, 480, 73.2 },
+        { "amoled-143",    41, 466, 36.3 },
+        { "lcd-185",       31, 360, 46.9 },
+    };
+
+    for (size_t p = 0; p < sizeof(PANELS) / sizeof(PANELS[0]); p++) {
+        int cols = PANELS[p].cols;
+        double px_per_mm = PANELS[p].px / PANELS[p].mm;
+        int narrowest = cols;
+
+        for (int layer = 0; layer < OBSERVORE_KB_LAYERS; layer++) {
+            for (int kr = 0; kr < OBSERVORE_KB_ROWS; kr++) {
+                int n = (int)strlen(OBSERVORE_KB[layer][kr]);
+                CHECK(n > 0 && n <= cols,
+                      "%s layer %d row %d: %d keys will not fit %d columns",
+                      PANELS[p].board, layer, kr, n, cols);
+
+                int covered = 0;
+                for (int k = 0; k < n; k++) {
+                    int x0 = observore_kb_start(k, n, cols);
+                    int w  = observore_kb_width(k, n, cols);
+
+                    /* No key is empty, however the remainder falls. */
+                    CHECK(w >= 1, "%s layer %d row %d key %d is %d wide",
+                          PANELS[p].board, layer, kr, k, w);
+                    if (w < narrowest) narrowest = w;
+
+                    /* The keys tile the row: each starts where the last
+                     * ended, and together they reach the right-hand edge.
+                     * The old layout left a sixth of the 1.85\" unused. */
+                    CHECK(x0 == covered,
+                          "%s layer %d row %d key %d starts at %d, not %d",
+                          PANELS[p].board, layer, kr, k, x0, covered);
+                    covered += w;
+
+                    /* And every column of a key maps back to that key, which
+                     * is what makes a press land where it looks like it did. */
+                    for (int c = x0; c < x0 + w; c++) {
+                        CHECK(observore_kb_at(c, n, cols) == k,
+                              "%s layer %d row %d: column %d answers key %d, "
+                              "not %d", PANELS[p].board, layer, kr, c,
+                              observore_kb_at(c, n, cols), k);
+                    }
+                }
+                CHECK(covered == cols, "%s layer %d row %d covers %d of %d "
+                      "columns", PANELS[p].board, layer, kr, covered, cols);
+
+                /* Neighbouring keys differ by at most one column, so the
+                 * spread remainder cannot pile onto a single key. */
+                for (int k = 1; k < n; k++) {
+                    int a = observore_kb_width(k - 1, n, cols);
+                    int b = observore_kb_width(k, n, cols);
+                    CHECK(a - b <= 1 && b - a <= 1,
+                          "%s layer %d row %d: keys %d and %d are %d and %d "
+                          "wide", PANELS[p].board, layer, kr, k - 1, k, a, b);
+                }
+            }
+        }
+
+        /* The number that matters. Three millimetres is not generous -- a
+         * fingertip covers six to eight -- but it is what the glass on the
+         * 1.43\" round panel allows with ten keys across, and it is half as
+         * much again as the worst case before. Measured, not asserted: if a
+         * layer ever grows a row wide enough to drop below it, this says so
+         * here rather than on somebody's screen. */
+        double mm = narrowest * 8 / px_per_mm;
+        CHECK(mm >= 2.4, "%s: narrowest key is %.1f mm (%d columns)",
+              PANELS[p].board, mm, narrowest);
+        printf("   %-16s %2d cols, narrowest key %d cols = %.1f mm\n",
+               PANELS[p].board, cols, narrowest, mm);
+
+        /* A touch at or past the right-hand edge belongs to the last key
+         * rather than to one that does not exist. Both panel drivers have
+         * reported a coordinate equal to the width. */
+        CHECK(observore_kb_at(cols, 10, cols) == 9, "%s: edge touch", PANELS[p].board);
+        CHECK(observore_kb_at(cols + 4, 10, cols) == 9, "%s: past the edge", PANELS[p].board);
+        CHECK(observore_kb_at(-1, 10, cols) == 0, "%s: left of the edge", PANELS[p].board);
+    }
+
+    /* The layers between them reach every character a passphrase may contain:
+     * printable ASCII, 0x20 to 0x7E. The old two-layer table could not type a
+     * space at all, and a WPA passphrase is allowed one. */
+    int seen[128] = { 0 };
+    for (int layer = 0; layer < OBSERVORE_KB_LAYERS; layer++) {
+        for (int kr = 0; kr < OBSERVORE_KB_ROWS; kr++) {
+            for (const char *k = OBSERVORE_KB[layer][kr]; *k; k++) {
+                seen[(unsigned char)*k] = 1;
+            }
+        }
+    }
+    for (int c = 0x20; c <= 0x7E; c++) {
+        CHECK(seen[c], "no key types '%c' (0x%02x)", c, c);
+    }
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -5797,6 +5911,7 @@ int main(void)
     test_watchcfg();
     test_timezone();
     test_gps();
+    test_keyboard();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
