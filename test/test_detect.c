@@ -32,6 +32,7 @@
 #include "observore_peer.h"
 #include "observore_touchcal.h"
 #include "observore_tap.h"
+#include "observore_cells.h"
 #include "observore_keyboard.h"
 #include "observore_watch.h"
 #include <limits.h>
@@ -5767,8 +5768,8 @@ static void test_keyboard(void)
 
                 int covered = 0;
                 for (int k = 0; k < n; k++) {
-                    int x0 = observore_kb_start(k, n, cols);
-                    int w  = observore_kb_width(k, n, cols);
+                    int x0 = observore_cell_start(k, n, cols);
+                    int w  = observore_cell_width(k, n, cols);
 
                     /* No key is empty, however the remainder falls. */
                     CHECK(w >= 1, "%s layer %d row %d key %d is %d wide",
@@ -5786,10 +5787,10 @@ static void test_keyboard(void)
                     /* And every column of a key maps back to that key, which
                      * is what makes a press land where it looks like it did. */
                     for (int c = x0; c < x0 + w; c++) {
-                        CHECK(observore_kb_at(c, n, cols) == k,
+                        CHECK(observore_cell_at(c, n, cols) == k,
                               "%s layer %d row %d: column %d answers key %d, "
                               "not %d", PANELS[p].board, layer, kr, c,
-                              observore_kb_at(c, n, cols), k);
+                              observore_cell_at(c, n, cols), k);
                     }
                 }
                 CHECK(covered == cols, "%s layer %d row %d covers %d of %d "
@@ -5798,8 +5799,8 @@ static void test_keyboard(void)
                 /* Neighbouring keys differ by at most one column, so the
                  * spread remainder cannot pile onto a single key. */
                 for (int k = 1; k < n; k++) {
-                    int a = observore_kb_width(k - 1, n, cols);
-                    int b = observore_kb_width(k, n, cols);
+                    int a = observore_cell_width(k - 1, n, cols);
+                    int b = observore_cell_width(k, n, cols);
                     CHECK(a - b <= 1 && b - a <= 1,
                           "%s layer %d row %d: keys %d and %d are %d and %d "
                           "wide", PANELS[p].board, layer, kr, k - 1, k, a, b);
@@ -5819,12 +5820,46 @@ static void test_keyboard(void)
         printf("   %-16s %2d cols, narrowest key %d cols = %.1f mm\n",
                PANELS[p].board, cols, narrowest, mm);
 
+        /* The settings page's action strip, which shares the width the same
+         * way and got it wrong the same way.
+         *
+         * Four targets where there is a touch panel. The old code gave the
+         * last one COLS - 3 * (COLS / 4) columns, which is one at 31 columns
+         * and two at 41 -- a calibrate button a single character wide -- and
+         * hit-tested with col / (COLS / 3), a different divisor from a
+         * different count, which could never return 3. So the button could
+         * not be read and could not be pressed. */
+        for (int nact = 3; nact <= 4; nact++) {
+            int covered = 0, narrow = cols;
+            for (int i = 0; i < nact; i++) {
+                int x0 = observore_cell_start(i, nact, cols);
+                int w  = observore_cell_width(i, nact, cols);
+                CHECK(x0 == covered, "%s: action %d of %d starts at %d, not %d",
+                      PANELS[p].board, i, nact, x0, covered);
+                covered += w;
+                if (w < narrow) narrow = w;
+                for (int c = x0; c < x0 + w; c++) {
+                    CHECK(observore_cell_at(c, nact, cols) == i,
+                          "%s: action column %d of %d answers %d, not %d",
+                          PANELS[p].board, c, nact, 
+                          observore_cell_at(c, nact, cols), i);
+                }
+            }
+            CHECK(covered == cols, "%s: %d actions cover %d of %d columns",
+                  PANELS[p].board, nact, covered, cols);
+            /* The old arithmetic's failure, stated as a bound: no action may
+             * be narrower than the label tier assumes it can be. Four columns
+             * holds " cal"; one holds nothing. */
+            CHECK(narrow >= 4, "%s: narrowest of %d actions is %d columns",
+                  PANELS[p].board, nact, narrow);
+        }
+
         /* A touch at or past the right-hand edge belongs to the last key
          * rather than to one that does not exist. Both panel drivers have
          * reported a coordinate equal to the width. */
-        CHECK(observore_kb_at(cols, 10, cols) == 9, "%s: edge touch", PANELS[p].board);
-        CHECK(observore_kb_at(cols + 4, 10, cols) == 9, "%s: past the edge", PANELS[p].board);
-        CHECK(observore_kb_at(-1, 10, cols) == 0, "%s: left of the edge", PANELS[p].board);
+        CHECK(observore_cell_at(cols, 10, cols) == 9, "%s: edge touch", PANELS[p].board);
+        CHECK(observore_cell_at(cols + 4, 10, cols) == 9, "%s: past the edge", PANELS[p].board);
+        CHECK(observore_cell_at(-1, 10, cols) == 0, "%s: left of the edge", PANELS[p].board);
     }
 
     /* The layers between them reach every character a passphrase may contain:

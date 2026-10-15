@@ -40,6 +40,8 @@
 #ifndef OBSERVORE_KEYBOARD_H
 #define OBSERVORE_KEYBOARD_H
 
+#include "observore_cells.h"
+
 #define OBSERVORE_KB_ROWS   4
 #define OBSERVORE_KB_LAYERS 3
 
@@ -66,48 +68,5 @@ static const char *const OBSERVORE_KB[OBSERVORE_KB_LAYERS][OBSERVORE_KB_ROWS] = 
     { "1234567890", "QWERTYUIOP", "ASDFGHJKL",  "ZXCVBNM " },
     { "!@#$%^&*",   "()-_=+[]",   "{}|\\:;'\"", ",.<>?/`~" },
 };
-
-/* Where key `k` of `n` starts, in character columns across a row of `cols`.
- *
- * Rounded rather than truncated, so the row ends exactly at the right-hand
- * edge and the remainder is spread over the keys a column at a time instead
- * of being left as a dead strip. */
-static inline int observore_kb_start(int k, int n, int cols)
-{
-    return k * cols / n;
-}
-
-/* Its width, which is why the two above are separate functions: with the
- * remainder spread, neighbouring keys differ by a column. */
-static inline int observore_kb_width(int k, int n, int cols)
-{
-    return observore_kb_start(k + 1, n, cols) - observore_kb_start(k, n, cols);
-}
-
-/* And the inverse: which key a column belongs to.
- *
- * Not col * n / cols, which is the obvious guess and is wrong. That is the
- * inverse of a key boundary at k * cols / n only when n divides cols; once
- * the remainder is spread the two disagree, and a press lands on the key to
- * the left of the one drawn under the finger. At forty columns and nine keys
- * -- the "asdfghjkl" row on both 2.8" boards -- it was wrong for eight of
- * the nine keys.
- *
- * The right answer is the largest k whose start is still at or before col,
- * which solves to ceil((col + 1) * n / cols) - 1.
- *
- * The clamp is for a touch reported at or past the right-hand edge, which
- * both panel drivers can do. */
-static inline int observore_kb_at(int col, int n, int cols)
-{
-    if (col < 0) {
-        return 0;
-    }
-    int k = ((col + 1) * n + cols - 1) / cols - 1;
-    if (k < 0) {
-        return 0;
-    }
-    return k >= n ? n - 1 : k;
-}
 
 #endif /* OBSERVORE_KEYBOARD_H */
