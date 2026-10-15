@@ -271,15 +271,59 @@ report the offset the way people write it — east of UTC is positive — while
 storing the POSIX form, because putting `UTC-5` on the glass for a zone five
 hours east would be accurate and completely misleading.
 
-### Why a POSIX string and not a zone name
+### Zone names, and the table behind them
 
 ESP-IDF ships no zone database, so `America/Toronto` means nothing to newlib.
+The console therefore offers a list of zone names and carries the POSIX string
+for each one, picking the browser's own zone where it is in the list.
 
-A full POSIX string carries daylight-saving rules —
-`EST5EDT,M3.2.0,M11.1.0` — and anyone who knows their zone's rules can set
-exactly that through the console. What a screen can offer is a whole-hour
+Those strings encode daylight-saving rules **by hand**, and a hand-written rule
+is a rule nobody has checked. So `tools/check_tz_table.py` checks all 64 of
+them against the IANA database every five days across two years, with the POSIX
+side evaluated by the C library rather than reinterpreted in Python — reading
+the table back in the language that wrote it would only prove it can be read.
+CI runs it, so a tzdata update that changes a rule fails the build instead of
+quietly leaving the table wrong.
+
+It earned its place on the first run. Written from memory the table had:
+
+```
+America/Vancouver  PST8PDT,M3.2.0,M11.1.0
+America/Edmonton   MST7MDT,M3.2.0,M11.1.0
+```
+
+Both correct today and wrong from **1 November 2026**. tzdata 2026c has British
+Columbia and Alberta adopting permanent daylight saving, modelled as a change
+of standard zone:
+
+```
+America/Vancouver  Sun Nov 1 09:00:00 2026 UT = ... MST isdst=0 gmtoff=-25200
+```
+
+**A POSIX string has no year qualifiers.** It cannot express a rule that
+changes on a date, so those two zones are not representable as one string
+across that boundary at all — `PST8PDT` is right for three more weeks and
+wrong forever after, `MST7` the reverse. They are deliberately absent from the
+table, and the fixed-offset fallback covers anybody in them.
+
+Anyone who knows their own zone's rules can still set exactly that through the
+console. What a screen can offer is a whole-hour
 offset, correct all year in zones that do not shift and wrong by an hour for
 half the year in zones that do.
+
+Where the browser's zone is not in the table, the console offers that
+computer's **current** offset with no daylight saving, and says so in the
+option itself rather than letting it be discovered an hour out in six months.
+
+A detail worth recording because the two conventions meet in one feature:
+JavaScript's `getTimezoneOffset()` counts minutes **west** of UTC, and so does
+a POSIX string, so that sign passes straight through. `observore_tz_from_offset()`
+takes minutes **east**, and inverts. Each says which it uses.
+
+No board profile sets a timezone any more. The round AMOLED's did — one
+bench's zone shipped to everybody who flashed that board — and the only reason
+it was baked in was that there was no other way to set one. The build default
+is `UTC0` everywhere, which is honest rather than somebody else's guess.
 
 So the settings page steps a fixed offset by an hour a tap, and a zone that
 carries rules shows its string with no arrows: there is nothing for one tap to

@@ -266,3 +266,33 @@ jobs:
           python-version: '3.x'
       - name: Check the NVS registry
         run: python3 tools/check_nvs_registry.py
+
+  # The console offers zone names, and carries a POSIX string for each because
+  # ESP-IDF ships no zone database. Those strings encode daylight-saving rules
+  # by hand. Written from memory the table had Vancouver and Edmonton wrong
+  # from 1 November 2026, when both adopt permanent daylight saving -- correct
+  # today, wrong in three weeks, and nothing would have said so.
+  tz-table:
+    name: Timezone table matches tzdata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: Check the zone table
+        run: python3 tools/check_tz_table.py
+
+      # The page IS the console, so one syntax error in it takes away every
+      # control at once -- and it is served from flash, so the first sign
+      # would be a blank panel on a device somebody had already flashed.
+      - name: The console page's script parses
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/console.js
+          import re
+          s = open("main/www/index.html", encoding="utf-8").read()
+          print("\n".join(re.findall(r"<script[^>]*>(.*?)</script>", s, re.S)))
+          PY
+          node --check /tmp/console.js
+          echo "ok: the console page's script parses"

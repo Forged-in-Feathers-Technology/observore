@@ -123,6 +123,11 @@
   <button id="setclock" hidden
     title="hand this device the time from this browser: the only clock available to a board with no RTC chip and no reachable NTP server">set
     the clock from this browser</button>
+  <span class="sub" id="tznow"></span>
+  <select id="tzpick" hidden
+    title="the zone decides where a day begins, which is what the household census counts in"></select>
+  <button id="settz" hidden title="store this zone on the device">set the
+    timezone</button>
   <span class="sub" id="runs" title="how long the previous runs lasted and how each ended -- on battery, that is the battery"></span>
   <span class="sub" id="heap" title="internal RAM: free now, and the lowest it has been since boot"></span>
 </header>
@@ -920,6 +925,23 @@ async function refreshConfig() {
   renderNet(await getJSON('/api/netcfg', { configured: false, ssid: '', ip: '' }));
   renderMutes(await getJSON('/api/mutes', { rules: [], suppressed: 0 }));
   renderMonitors(await getJSON('/api/monitors', { off: 0, monitors: [] }));
+  renderTz(await getJSON('/api/tz', { tz: '', fixed: false }));
+}
+
+// The zone the device is keeping time in, and a way to change it. Shown with
+// the offset where there is one to show: a POSIX string is exact and is not
+// what most people recognise.
+function renderTz(t) {
+  const el = $('tznow');
+  if (!t.tz) { el.textContent = ''; return; }
+  el.textContent = 'zone ' + t.tz +
+    (t.fixed ? ' (' + (t.offset_minutes >= 0 ? '+' : '-') +
+       Math.floor(Math.abs(t.offset_minutes) / 60) +
+       ':' + String(Math.abs(t.offset_minutes) % 60).padStart(2, '0') +
+       ' from UTC)' : '');
+  buildTzPicker();
+  $('tzpick').hidden = false;
+  $('settz').hidden = false;
 }
 
 // ---- actions ------------------------------------------------------------
@@ -930,6 +952,134 @@ async function refreshConfig() {
 $('setclock').onclick = () =>
   post('/api/time?epoch=' + Math.floor(Date.now() / 1000),
        'clock set from this browser');
+
+/* TZ TABLE BEGIN -- checked by tools/check_tz_table.py, do not edit by hand
+ *
+ * ESP-IDF ships no zone database, so "America/Toronto" means nothing to
+ * newlib and the page has to carry the POSIX string for every name it offers.
+ * Those strings encode daylight-saving rules, and a hand-written rule is a
+ * rule nobody has checked -- so every pair here is verified against the IANA
+ * database every five days across two years, with the POSIX side evaluated by
+ * the C library rather than reinterpreted.
+ *
+ * America/Vancouver and America/Edmonton are deliberately absent. tzdata
+ * 2026c has British Columbia and Alberta adopting permanent daylight saving
+ * on 1 November 2026, modelled as a change of standard zone. A POSIX string
+ * has no year qualifiers and cannot express a rule that changes on a date, so
+ * those zones are not representable across that boundary at all. The
+ * fixed-offset fallback below covers them.
+ */
+const TZ_ZONES = {
+  'UTC': 'UTC0',
+  'America/St_Johns': 'NST3:30NDT,M3.2.0,M11.1.0',
+  'America/Halifax': 'AST4ADT,M3.2.0,M11.1.0',
+  'America/Toronto': 'EST5EDT,M3.2.0,M11.1.0',
+  'America/New_York': 'EST5EDT,M3.2.0,M11.1.0',
+  'America/Chicago': 'CST6CDT,M3.2.0,M11.1.0',
+  'America/Winnipeg': 'CST6CDT,M3.2.0,M11.1.0',
+  'America/Denver': 'MST7MDT,M3.2.0,M11.1.0',
+  'America/Phoenix': 'MST7',
+  'America/Los_Angeles': 'PST8PDT,M3.2.0,M11.1.0',
+  'America/Anchorage': 'AKST9AKDT,M3.2.0,M11.1.0',
+  'Pacific/Honolulu': 'HST10',
+  'America/Mexico_City': 'CST6',
+  'America/Bogota': '<-05>5',
+  'America/Lima': '<-05>5',
+  'America/Sao_Paulo': '<-03>3',
+  'America/Argentina/Buenos_Aires': '<-03>3',
+  'Europe/London': 'GMT0BST,M3.5.0/1,M10.5.0',
+  'Europe/Dublin': 'GMT0BST,M3.5.0/1,M10.5.0',
+  'Europe/Lisbon': 'WET0WEST,M3.5.0/1,M10.5.0',
+  'Europe/Paris': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Berlin': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Madrid': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Rome': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Amsterdam': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Brussels': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Vienna': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Zurich': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Stockholm': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Oslo': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Copenhagen': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Prague': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Warsaw': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Budapest': 'CET-1CEST,M3.5.0,M10.5.0/3',
+  'Europe/Athens': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+  'Europe/Helsinki': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+  'Europe/Bucharest': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+  'Europe/Kyiv': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+  'Europe/Riga': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+  'Europe/Moscow': 'MSK-3',
+  'Africa/Lagos': 'WAT-1',
+  'Africa/Johannesburg': 'SAST-2',
+  'Africa/Nairobi': 'EAT-3',
+  'Africa/Cairo': 'EET-2EEST,M4.5.5/0,M10.5.4/24',
+  'Asia/Jerusalem': 'IST-2IDT,M3.4.4/26,M10.5.0',
+  'Asia/Dubai': '<+04>-4',
+  'Asia/Karachi': 'PKT-5',
+  'Asia/Kolkata': 'IST-5:30',
+  'Asia/Dhaka': '<+06>-6',
+  'Asia/Bangkok': '<+07>-7',
+  'Asia/Jakarta': 'WIB-7',
+  'Asia/Shanghai': 'CST-8',
+  'Asia/Hong_Kong': 'HKT-8',
+  'Asia/Singapore': '<+08>-8',
+  'Asia/Taipei': 'CST-8',
+  'Asia/Manila': 'PST-8',
+  'Asia/Seoul': 'KST-9',
+  'Asia/Tokyo': 'JST-9',
+  'Australia/Perth': 'AWST-8',
+  'Australia/Brisbane': 'AEST-10',
+  'Australia/Adelaide': 'ACST-9:30ACDT,M10.1.0,M4.1.0/3',
+  'Australia/Sydney': 'AEST-10AEDT,M10.1.0,M4.1.0/3',
+  'Australia/Melbourne': 'AEST-10AEDT,M10.1.0,M4.1.0/3',
+  'Pacific/Auckland': 'NZST-12NZDT,M9.5.0,M4.1.0/3',
+};
+/* TZ TABLE END */
+
+/* The browser's own zone, if it is one we carry a rule for.
+ *
+ * Where it is not, the fallback is this computer's CURRENT offset with no
+ * daylight saving, which is right now and an hour out for part of the year --
+ * said in the option itself rather than discovered later.
+ *
+ * getTimezoneOffset() counts minutes WEST of UTC, and so does a POSIX string,
+ * so this sign passes straight through. That is the opposite of
+ * observore_tz_from_offset(), which takes minutes east; the two conventions
+ * meeting in one feature is why each says which it uses. */
+function fixedOffsetTz() {
+  const off = new Date().getTimezoneOffset();
+  const sign = off < 0 ? '-' : '+';
+  const mag = Math.abs(off), h = Math.floor(mag / 60), m = mag % 60;
+  return 'UTC' + sign + h + (m ? ':' + String(m).padStart(2, '0') : '');
+}
+
+function buildTzPicker() {
+  const sel = $('tzpick');
+  if (sel.options.length) return;
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const names = Object.keys(TZ_ZONES).sort();
+  for (const n of names) {
+    const o = document.createElement('option');
+    o.value = TZ_ZONES[n];
+    o.textContent = n;
+    if (n === here) o.selected = true;
+    sel.appendChild(o);
+  }
+  if (!names.includes(here)) {
+    const o = document.createElement('option');
+    o.value = fixedOffsetTz();
+    o.textContent = (here || 'this computer') + ' -- fixed ' + fixedOffsetTz() +
+                    ', no daylight saving';
+    o.selected = true;
+    sel.insertBefore(o, sel.firstChild);
+  }
+}
+
+$('settz').onclick = () =>
+  post('/api/tz?tz=' + encodeURIComponent($('tzpick').value),
+       'timezone stored; days already counted keep the boundary they had');
+
 
 async function post(query, okMsg, noteEl) {
   try {

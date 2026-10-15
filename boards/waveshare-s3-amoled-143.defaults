@@ -94,7 +94,13 @@ CONFIG_OBSERVORE_WATCHFACE=y
 
 # The zone the watch face reads in. Everything stored stays UTC -- a
 # timestamp that depends on where the reader was is one nobody can compare.
-CONFIG_OBSERVORE_TZ="EST5EDT,M3.2.0,M11.1.0"
+# No timezone here any more. This profile describes hardware, and a zone is
+# not hardware -- it was one bench's zone shipped to everybody who flashed
+# this board, and the only reason it was baked in was that there was no other
+# way to set one. There is now: the console offers a verified list of zone
+# names and the settings page steps a fixed offset, both stored in NVS. The
+# build default is UTC0 for every board, which is honest rather than someone
+# else's guess.
 
 # The clock, on the same two wires. Without it the time comes only from the
 # network, so a board restarted away from home has none -- and its findings
