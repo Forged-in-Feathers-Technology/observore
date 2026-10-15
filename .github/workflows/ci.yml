@@ -104,12 +104,12 @@ jobs:
           - board: waveshare-s3-amoled-143
             target: esp32s3
             profile: boards/waveshare-s3-amoled-143.defaults
-          # The 1.85" round LCD. A detector, not yet a screen: its ST77916
-          # panel needs a driver this project does not carry, and its reset
-          # line is behind an I2C expander rather than on a pin. Built and
-          # shipped as a radio now -- the same order the 1.43 arrived in --
-          # so the profile is under CI from the day it exists rather than
-          # rotting until the panel works.
+          # The 1.85" round LCD, now a screen as well as a detector: the
+          # ST77916 is driven at 40 MHz over QSPI, the CST816 answers, and the
+          # watch face draws. Both the panel's reset and the touch
+          # controller's are behind a TCA9554 expander rather than on pins,
+          # which is the part of this board that is unlike every other one
+          # here.
           - board: waveshare-s3-lcd-185
             target: esp32s3
             profile: boards/waveshare-s3-lcd-185.defaults
