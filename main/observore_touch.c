@@ -10,8 +10,9 @@
 #include <stdlib.h>
 
 #include "driver/gpio.h"
-#if CONFIG_OBSERVORE_TOUCH_FT3168
+#if CONFIG_OBSERVORE_TOUCH_CAPACITIVE
 #include "observore_i2c.h"
+#include "observore_ioexp.h"
 #else
 #include "driver/spi_master.h"
 #endif
@@ -129,112 +130,24 @@ static int     s_tap_x, s_tap_y;
 
 static void touch_task(void *arg);
 
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
-
-static int read_channel(uint8_t cmd)
-{
-    uint8_t tx[3] = {cmd, 0x00, 0x00};
-    uint8_t rx[3] = {0};
-    spi_transaction_t t = {
-        .length    = sizeof(tx) * 8,
-        .tx_buffer = tx,
-        .rx_buffer = rx,
-    };
-    if (spi_device_polling_transmit(s_dev, &t) != ESP_OK) {
-        return -1;
-    }
-    /* The conversion straddles the second and third bytes, left-aligned: the
-     * top bit of the 16-bit window is the controller's busy bit. */
-    return (int)(((uint16_t)rx[1] << 8 | rx[2]) >> 3) & 0x0FFF;
-}
-
-static int cmp_int(const void *a, const void *b)
-{
-    return *(const int *)a - *(const int *)b;
-}
-
-static int median_channel(uint8_t cmd)
-{
-    int v[SAMPLES];
-    for (int i = 0; i < SAMPLES; i++) {
-        v[i] = read_channel(cmd);
-        if (v[i] < 0) {
-            return -1;
-        }
-    }
-    qsort(v, SAMPLES, sizeof(v[0]), cmp_int);
-    return v[SAMPLES / 2];
-}
-
-/* How hard the glass is being pressed. See Z_THRESHOLD above for why both
- * channels are read rather than just the first. */
-static int pressure(void)
-{
-    int z1 = median_channel(CMD_Z1);
-    int z2 = median_channel(CMD_Z2);
-    if (z1 < 0 || z2 < 0) {
-        return -1;
-    }
-    return z1 + 4095 - z2;
-}
-
-static bool backend_init(void)
-{
-#if !CONFIG_OBSERVORE_TOUCH_POLLED
-    /* PENIRQ: low while the panel is touched. Polling this costs one register
-     * read, so the SPI bus stays idle until there is something to read. */
-    gpio_config_t irq = {
-        .pin_bit_mask = 1ULL << CONFIG_OBSERVORE_TOUCH_IRQ,
-        .mode         = GPIO_MODE_INPUT,
-    };
-    gpio_config(&irq);
-#endif
-
-    /* Some boards give the controller its own pins and some hang it off the
-     * panel's bus with a second chip select. Sharing is not merely allowed --
-     * the driver serialises devices on one bus, so a measurement can never
-     * land in the middle of a screen update. */
-    const spi_host_device_t host = TOUCH_HOST;
-    esp_err_t err;
-#if !CONFIG_OBSERVORE_TOUCH_SHARED_BUS
-    spi_bus_config_t bus = {
-        .mosi_io_num     = CONFIG_OBSERVORE_TOUCH_MOSI,
-        .miso_io_num     = CONFIG_OBSERVORE_TOUCH_MISO,
-        .sclk_io_num     = CONFIG_OBSERVORE_TOUCH_SCLK,
-        .quadwp_io_num   = -1,
-        .quadhd_io_num   = -1,
-        .max_transfer_sz = 32,
-    };
-    err = spi_bus_initialize(host, &bus, SPI_DMA_DISABLED);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SPI bus: %s", esp_err_to_name(err));
-        return false;
-    }
-#endif
-
-    spi_device_interface_config_t dev = {
-        .clock_speed_hz = TOUCH_HZ,
-        .mode           = 0,
-        .spics_io_num   = CONFIG_OBSERVORE_TOUCH_CS,
-        .queue_size     = 1,
-    };
-    err = spi_bus_add_device(host, &dev, &s_dev);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SPI device: %s", esp_err_to_name(err));
-        return false;
-    }
-#if CONFIG_OBSERVORE_TOUCH_POLLED
-    ESP_LOGI(TAG, "XPT2046 on SPI%d (polled, no irq line)%s", TOUCH_HOST + 1,
-             CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
-#else
-    ESP_LOGI(TAG, "XPT2046 on SPI%d (irq %d)%s", TOUCH_HOST + 1,
-             CONFIG_OBSERVORE_TOUCH_IRQ,
-             CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
-#endif
-    return true;
-}
-
-
+/* ---- Shared by both backends: the raw-to-screen mapping and its
+ * calibration.
+ *
+ * This used to sit inside the resistive half, on the strength of a comment
+ * saying a capacitive controller reports "in panel pixels, so there is no
+ * calibration to get wrong". That is a claim about one chip's factory
+ * configuration, not a property of the interface: the CST816 family is
+ * fitted to round panels of several sizes and reports in whatever range it
+ * was configured for. Where that is not the panel's own, every reading is
+ * scaled -- right at the top-left corner and progressively wrong towards
+ * the bottom-right, which is the one shape of error the assumption made
+ * impossible to express and impossible to correct.
+ *
+ * So both backends map through the same arithmetic now, and both can be
+ * calibrated on the glass. For a controller that really does report panel
+ * pixels the bounds are the panel's size and the mapping is the identity,
+ * so nothing changes for the 1.43" where touch already lands where pressed.
+ */
 /* Raw ADC counts to screen pixels.
  *
  * Three transforms, all build options, because all three are properties of one
@@ -398,6 +311,113 @@ static void to_screen(int raw_x, int raw_y, int *x, int *y)
     *y = sy;
 }
 
+#if CONFIG_OBSERVORE_TOUCH_XPT2046
+
+static int read_channel(uint8_t cmd)
+{
+    uint8_t tx[3] = {cmd, 0x00, 0x00};
+    uint8_t rx[3] = {0};
+    spi_transaction_t t = {
+        .length    = sizeof(tx) * 8,
+        .tx_buffer = tx,
+        .rx_buffer = rx,
+    };
+    if (spi_device_polling_transmit(s_dev, &t) != ESP_OK) {
+        return -1;
+    }
+    /* The conversion straddles the second and third bytes, left-aligned: the
+     * top bit of the 16-bit window is the controller's busy bit. */
+    return (int)(((uint16_t)rx[1] << 8 | rx[2]) >> 3) & 0x0FFF;
+}
+
+static int cmp_int(const void *a, const void *b)
+{
+    return *(const int *)a - *(const int *)b;
+}
+
+static int median_channel(uint8_t cmd)
+{
+    int v[SAMPLES];
+    for (int i = 0; i < SAMPLES; i++) {
+        v[i] = read_channel(cmd);
+        if (v[i] < 0) {
+            return -1;
+        }
+    }
+    qsort(v, SAMPLES, sizeof(v[0]), cmp_int);
+    return v[SAMPLES / 2];
+}
+
+/* How hard the glass is being pressed. See Z_THRESHOLD above for why both
+ * channels are read rather than just the first. */
+static int pressure(void)
+{
+    int z1 = median_channel(CMD_Z1);
+    int z2 = median_channel(CMD_Z2);
+    if (z1 < 0 || z2 < 0) {
+        return -1;
+    }
+    return z1 + 4095 - z2;
+}
+
+static bool backend_init(void)
+{
+#if !CONFIG_OBSERVORE_TOUCH_POLLED
+    /* PENIRQ: low while the panel is touched. Polling this costs one register
+     * read, so the SPI bus stays idle until there is something to read. */
+    gpio_config_t irq = {
+        .pin_bit_mask = 1ULL << CONFIG_OBSERVORE_TOUCH_IRQ,
+        .mode         = GPIO_MODE_INPUT,
+    };
+    gpio_config(&irq);
+#endif
+
+    /* Some boards give the controller its own pins and some hang it off the
+     * panel's bus with a second chip select. Sharing is not merely allowed --
+     * the driver serialises devices on one bus, so a measurement can never
+     * land in the middle of a screen update. */
+    const spi_host_device_t host = TOUCH_HOST;
+    esp_err_t err;
+#if !CONFIG_OBSERVORE_TOUCH_SHARED_BUS
+    spi_bus_config_t bus = {
+        .mosi_io_num     = CONFIG_OBSERVORE_TOUCH_MOSI,
+        .miso_io_num     = CONFIG_OBSERVORE_TOUCH_MISO,
+        .sclk_io_num     = CONFIG_OBSERVORE_TOUCH_SCLK,
+        .quadwp_io_num   = -1,
+        .quadhd_io_num   = -1,
+        .max_transfer_sz = 32,
+    };
+    err = spi_bus_initialize(host, &bus, SPI_DMA_DISABLED);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus: %s", esp_err_to_name(err));
+        return false;
+    }
+#endif
+
+    spi_device_interface_config_t dev = {
+        .clock_speed_hz = TOUCH_HZ,
+        .mode           = 0,
+        .spics_io_num   = CONFIG_OBSERVORE_TOUCH_CS,
+        .queue_size     = 1,
+    };
+    err = spi_bus_add_device(host, &dev, &s_dev);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SPI device: %s", esp_err_to_name(err));
+        return false;
+    }
+#if CONFIG_OBSERVORE_TOUCH_POLLED
+    ESP_LOGI(TAG, "XPT2046 on SPI%d (polled, no irq line)%s", TOUCH_HOST + 1,
+             CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
+#else
+    ESP_LOGI(TAG, "XPT2046 on SPI%d (irq %d)%s", TOUCH_HOST + 1,
+             CONFIG_OBSERVORE_TOUCH_IRQ,
+             CONFIG_OBSERVORE_TOUCH_SHARED_BUS ? ", sharing the panel's bus" : "");
+#endif
+    return true;
+}
+
+
+
 /* One sampled position, straight off the controller. Only the poll task calls
  * this: two tasks sharing one SPI device would interleave a command with the
  * other's reply. */
@@ -460,22 +480,40 @@ static bool sample(int *x, int *y)
     return true;
 }
 
-#else  /* CONFIG_OBSERVORE_TOUCH_FT3168 */
+#else  /* CONFIG_OBSERVORE_TOUCH_CAPACITIVE */
 
 /* The capacitive half.
  *
- * Almost nothing above applies: the controller does the work a resistive
- * panel leaves to the host. It reports how many fingers are down and where
- * each one is, in panel pixels, so there is no pressure to threshold, no
- * median to take and no calibration to get wrong -- the arithmetic that took
- * two days and a wrongly accused ribbon cable on the Cheap Yellow Displays
- * does not exist here. */
+ * Most of what the resistive half does is unnecessary here: the controller
+ * reports how many fingers are down and where each one is, so there is no
+ * pressure to threshold and no median to take.
+ *
+ * What it does NOT remove is the mapping. This comment used to go on to say
+ * there was "no calibration to get wrong -- the arithmetic that took two days
+ * and a wrongly accused ribbon cable on the Cheap Yellow Displays does not
+ * exist here", and that was wrong in the way a confident comment is worst:
+ * it discouraged looking. A capacitive controller reports in the range its
+ * firmware was configured for, which is usually the panel it shipped against
+ * and is not guaranteed to be this one. So the reading goes through the same
+ * to_screen() as the resistive panels, with bounds that can be measured on
+ * the glass rather than assumed. */
 
-/* Registers, from Waveshare's own driver rather than from a datasheet nobody
- * has: 0x02 holds the number of fingers down, and 0x03 begins four bytes of
- * position -- twelve bits of X then twelve of Y, high nibble first. */
+/* Registers, from Waveshare's own drivers rather than from a datasheet
+ * nobody has: 0x02 holds the number of fingers down, and 0x03 begins four
+ * bytes of position -- twelve bits of X then twelve of Y, high nibble first.
+ *
+ * The FT3168 on the 1.43 and the CST816 on the 1.85 agree on all of that,
+ * which is why one backend reads both. Where they differ is where they live:
+ * the CST816 is on a bus of its own and its reset is on the I/O expander
+ * rather than a pin. */
 #define FT_REG_TOUCHES 0x02
 #define FT_REG_XY      0x03
+
+#if CONFIG_OBSERVORE_TOUCH_ON_AUX_BUS
+#define TOUCH_BUS OBSERVORE_I2C_AUX
+#else
+#define TOUCH_BUS OBSERVORE_I2C_MAIN
+#endif
 
 static i2c_master_dev_handle_t s_touch;
 
@@ -486,36 +524,92 @@ static bool ft_read(uint8_t reg, uint8_t *buf, size_t len)
 
 static bool backend_init(void)
 {
-    if (!observore_i2c_bus()) {
+    if (!observore_i2c_bus_of(TOUCH_BUS)) {
+        ESP_LOGW(TAG, "no I2C bus for the touch panel");
         return false;
     }
 
-    /* Three chips share these two wires -- this controller, a motion sensor
-     * and a clock -- and which of them answered is said out loud, because
-     * "the panel is not answering" and "the panel is not there" look
-     * identical in a log mentioning neither. */
+#if CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT >= 0
+    /* Held in reset until something lets go of it. The expander has to be up
+     * first, which it is: it comes up with the clock's bus, well before any
+     * of this. Ten milliseconds low and fifty to settle, which is what the
+     * vendor's own driver waits. */
+    if (!observore_ioexp_reset_pulse(CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT,
+                                     10, 50)) {
+        ESP_LOGW(TAG, "could not pulse the touch reset on expander line %d",
+                 CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT);
+    }
+#endif
+
+    /* Which chips answered, said out loud: "the panel is not answering" and
+     * "the panel is not there" look identical in a log mentioning neither.
+     * On the 1.43 three chips share these wires; on the 1.85 the touch
+     * controller has them to itself and the others are on the main bus. */
     char found[64];
-    observore_i2c_scan(found, sizeof(found));
-    ESP_LOGI(TAG, "I2C on sda %d / scl %d answered:%s",
-             CONFIG_OBSERVORE_I2C_SDA, CONFIG_OBSERVORE_I2C_SCL,
+    observore_i2c_scan_on(TOUCH_BUS, found, sizeof(found));
+    ESP_LOGI(TAG, "touch I2C on sda %d / scl %d answered:%s",
+             CONFIG_OBSERVORE_TOUCH_SDA, CONFIG_OBSERVORE_TOUCH_SCL,
              found[0] ? found : " nothing");
 
-    s_touch = observore_i2c_device(CONFIG_OBSERVORE_TOUCH_I2C_ADDR, 300 * 1000);
+    s_touch = observore_i2c_device_on(TOUCH_BUS,
+                                      CONFIG_OBSERVORE_TOUCH_I2C_ADDR,
+                                      300 * 1000);
     if (!s_touch) {
         return false;
     }
 
-    /* Out of whatever low-power mode it woke in, the way the vendor does it. */
+#if CONFIG_OBSERVORE_TOUCH_FT3168
+    /* Out of whatever low-power mode it woke in, the way the vendor does it.
+     * Only the FT3168: on the CST816 register 0x00 is not a mode register
+     * and writing to it is not something its vendor driver does. */
     observore_i2c_write(s_touch, 0x00, 0x00);
-
     ESP_LOGI(TAG, "FT3168 at 0x%02X", CONFIG_OBSERVORE_TOUCH_I2C_ADDR);
+#else
+    /* The chip says what it is, which is worth asking once: a panel that
+     * answers its address but reports a chip id of zero is a panel still in
+     * reset, and that reads identically to one nobody is touching. */
+    uint8_t id[3] = {0};
+    if (observore_i2c_read(s_touch, 0xA7, id, sizeof(id))) {
+        ESP_LOGI(TAG, "CST816 at 0x%02X, chip 0x%02X proj 0x%02X fw 0x%02X",
+                 CONFIG_OBSERVORE_TOUCH_I2C_ADDR, id[0], id[1], id[2]);
+    } else {
+        ESP_LOGW(TAG, "CST816 at 0x%02X would not say what it is",
+                 CONFIG_OBSERVORE_TOUCH_I2C_ADDR);
+    }
+
+    /* Two registers the vendor's own driver writes and this code did not.
+     *
+     * 0xFA enables the motion interrupts, which is how the chip is meant to
+     * be told that somebody will be reading it.
+     *
+     * 0xFE disables auto-sleep, and it is why two polls in three were refused
+     * on an idle panel here. The chip powers its sensing down between touches
+     * and declines I2C while it is down; the reads that failed were not a
+     * wiring fault, a clock-speed fault or a pull-up fault, which is where
+     * this would otherwise have been looked for. It costs a little current to
+     * keep it awake, and this board is the one with eight megabytes of PSRAM
+     * and a battery gauge rather than the one counting microamps. */
+    observore_i2c_write(s_touch, 0xFA, 0x70);
+    observore_i2c_write(s_touch, 0xFE, 0x01);
+#endif
     return true;
 }
 
-static bool sample(int *x, int *y)
+static bool sample_raw(int *x, int *y)
 {
-    uint8_t touches = 0;
-    bool got = ft_read(FT_REG_TOUCHES, &touches, 1);
+    /* Registers 0x00 to 0x06 in one transaction, rather than reading the
+     * finger count and then the position separately.
+     *
+     * Two reasons, and the second is the one that bites. A second transaction
+     * is a second chance to be refused by a chip that sleeps between polls --
+     * and measured on the 1.85 while idle, two reads in three were refused.
+     * And the count and the coordinates came from different moments: the
+     * finger moves, and the pair could disagree about whether it was even
+     * still down. One read is one snapshot. It is also what the reference
+     * driver for this chip does. */
+    uint8_t reg[7] = {0};
+    bool got = ft_read(0x00, reg, sizeof(reg));
+    uint8_t touches = got ? (uint8_t)(reg[FT_REG_TOUCHES] & 0x03) : 0;
 #if CONFIG_OBSERVORE_TOUCH_LOG_RAW
     /* Bring-up: "nobody is touching it" and "the read failed" are the same
      * silence otherwise, and telling them apart is most of the work.
@@ -534,22 +628,47 @@ static bool sample(int *x, int *y)
     if (!got || touches == 0) {
         return false;
     }
-    uint8_t buf[4];
-    if (!ft_read(FT_REG_XY, buf, sizeof(buf))) {
-        return false;
-    }
-    int px = ((buf[0] & 0x0F) << 8) | buf[1];
-    int py = ((buf[2] & 0x0F) << 8) | buf[3];
-    /* Already in panel pixels. A reading off the end of the glass is a read
-     * that collided with something, not a finger beyond the edge. */
-    if (px >= OBSERVORE_DISPLAY_W || py >= OBSERVORE_DISPLAY_H) {
-        return false;
-    }
+    const uint8_t *buf = &reg[FT_REG_XY];
+    int raw_x = ((buf[0] & 0x0F) << 8) | buf[1];
+    int raw_y = ((buf[2] & 0x0F) << 8) | buf[3];
+
+    /* Checked against what the register can hold, not against the size of the
+     * panel.
+     *
+     * It used to reject anything at or past OBSERVORE_DISPLAY_W, on the
+     * assumption that a reading is a panel pixel. For a controller configured
+     * for a *larger* range than its panel that silently kills the far edges:
+     * the bottom and right of the glass report numbers above the panel size,
+     * every one of them is discarded, and the symptom is a strip of screen
+     * where nothing responds -- with no log line, because the discard came
+     * before the logging. Twelve bits is what these registers are. */
+    bool over = raw_x > RAW_MAX || raw_y > RAW_MAX;
 #if CONFIG_OBSERVORE_TOUCH_LOG_RAW
-    ESP_LOGI(TAG, "touch n=%u x=%3d y=%3d", touches, px, py);
+    /* Logged before the check rather than after it, which is the whole point:
+     * a range wider than expected shows up as readings that are *dropped*,
+     * and a log of accepted readings only is blind to exactly that. */
+    ESP_LOGI(TAG, "touch n=%u raw x=%4d y=%4d%s", touches, raw_x, raw_y,
+             over ? "  DROPPED (not a 12-bit reading)" : "");
 #endif
-    *x = px;
-    *y = py;
+    if (over) {
+        return false;
+    }
+    *x = raw_x;
+    *y = raw_y;
+    return true;
+}
+
+/* And the same reading mapped to the screen, which is what the poll task
+ * wants. Split from the above so the calibration can see the controller's own
+ * numbers: calibrating from already-mapped values would solve for the bounds
+ * the mapping is currently using and report success having changed nothing. */
+static bool sample(int *x, int *y)
+{
+    int raw_x = 0, raw_y = 0;
+    if (!sample_raw(&raw_x, &raw_y)) {
+        return false;
+    }
+    to_screen(raw_x, raw_y, x, y);
     return true;
 }
 
@@ -654,10 +773,27 @@ bool observore_touch_raw(int *x, int *y)
     if (y) { *y = ry; }
     return true;
 #else
-    /* A capacitive controller reports panel pixels, so there is nothing to
-     * calibrate and nothing raw to report. */
-    (void)x; (void)y;
-    return false;
+    /* The capacitive controller's own numbers, unmapped.
+     *
+     * This used to return false with a comment saying "a capacitive
+     * controller reports panel pixels, so there is nothing to calibrate and
+     * nothing raw to report". That assumption appeared in three places --
+     * here, the mapping, and the settings page that offers the calibration --
+     * and all three had to be wrong together for the round panels to have no
+     * way of being corrected. */
+    if (!s_ready) {
+        return false;
+    }
+    observore_display_backlight_hold();
+    int rx = 0, ry = 0;
+    bool got = sample_raw(&rx, &ry);
+    observore_display_backlight_release();
+    if (!got) {
+        return false;
+    }
+    if (x) { *x = rx; }
+    if (y) { *y = ry; }
+    return true;
 #endif
 }
 

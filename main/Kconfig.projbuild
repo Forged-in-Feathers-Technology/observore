@@ -42,6 +42,21 @@ config OBSERVORE_LED_MONO
         One monochrome LED driven directly.  Threat level is a blink rhythm,
         because there is no colour to carry it.
 
+config OBSERVORE_LED_NONE
+    bool "No user LED on this board"
+    help
+        Some boards have no LED to spare. The Waveshare 1.85 is the first
+        here: its pin list has none, and every pin that might have been one
+        is a panel data line.
+
+        This exists because setting the GPIO to -1 did not work and did not
+        say so. The single-colour backend built a pin mask from it, which is
+        undefined behaviour for a negative shift, and then called
+        gpio_set_level(-1) -- which the driver reported, every heartbeat, as
+        "GPIO_PIN mask error" and "gpio_set_level(247): GPIO output gpio_num
+        error". A board with no LED should be a thing the build knows about,
+        not a pin number nobody validates.
+
 config OBSERVORE_LED_ADDRESSABLE
     bool "Addressable RGB pixel (WS2812)"
     help
@@ -240,15 +255,63 @@ config OBSERVORE_I2C_SCL
     depends on OBSERVORE_I2C
     default 48
 
-config OBSERVORE_WATCHFACE
-    bool "A watch face page"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+config OBSERVORE_I2C_AUX_SDA
+    int "Second I2C bus SDA GPIO, or -1 for none"
+    depends on OBSERVORE_I2C
+    default -1
+    help
+        Most boards put everything on one bus and leave this alone. The
+        Waveshare 1.85 does not: its touch panel has its own pair of pins and
+        the expander, clock and accelerometer share the other.
+
+        The sensors stay on the main bus, so nothing that already reads them
+        has to know a second one exists.
+
+config OBSERVORE_I2C_AUX_SCL
+    int "Second I2C bus SCL GPIO, or -1 for none"
+    depends on OBSERVORE_I2C
+    default -1
+
+config OBSERVORE_IOEXP
+    bool "A TCA9554 I/O expander sits between the chip and some resets"
+    depends on OBSERVORE_I2C
     default n
     help
-        An analogue dial with hands, on the round panel.  It is a disguise as
+        Some boards run out of pins and put the panel's reset, the touch
+        panel's reset and a chip select behind an I2C expander. The Waveshare
+        1.85 is one: its LCD cannot be reset at all until the expander has
+        been talked to, which makes the bus an ordering constraint on bringing
+        up the screen rather than an afterthought.
+
+config OBSERVORE_IOEXP_I2C_ADDR
+    hex "Expander I2C address"
+    depends on OBSERVORE_IOEXP
+    default 0x20
+    help
+        0x20 with all three address pins low, which is what a scan of the
+        1.85's sensor bus reported.
+
+config OBSERVORE_WATCHFACE
+    bool "A watch face page"
+    depends on OBSERVORE_DISPLAY
+    default n
+    help
+        An analogue dial with hands, on a round panel.  It is a disguise as
         much as a clock: a device carried in a pocket and glanced at is far
         less conspicuous showing the time than showing a list of everybody's
         Bluetooth addresses.
+
+        This used to depend on OBSERVORE_DISPLAY_QSPI_AMOLED, which was not
+        what it meant -- it meant "a square panel with a frame buffer's worth
+        of PSRAM", and the only board with one happened to be an AMOLED. When
+        a second round panel arrived the profile asked for a watch face and
+        was silently given none, because a board profile setting a symbol
+        whose dependencies are unmet is simply ignored.
+
+        What it actually needs is stated rather than implied: the dial is
+        drawn into a buffer of width * height * 2 bytes, so the panel wants
+        PSRAM to spare, and the face assumes the panel is square. A profile
+        that turns this on for a rectangular screen will get an oval.
 
         The threat level still reaches the wearer, as the colour of the hour
         markers -- legible to somebody who knows what they mean and nothing at
@@ -360,6 +423,19 @@ config OBSERVORE_DISPLAY_ILI9341
         are the values every other project uses for it, and each is a build
         option in case they are wrong.
 
+config OBSERVORE_DISPLAY_ST77916
+    bool "ST77916 round LCD over QSPI"
+    help
+        The 360x360 round panel on the Waveshare ESP32-S3-Touch-LCD-1.85.
+
+        Four data lines and no D/C pin, like the AMOLED, but a backlit LCD
+        rather than an emissive panel -- so it has a real backlight on a pin
+        and dims through LEDC rather than through a panel command.
+
+        Its reset line is not on a GPIO at all: it is behind the I2C
+        expander, which makes bringing the bus up a prerequisite for bringing
+        the screen up.
+
 config OBSERVORE_DISPLAY_QSPI_AMOLED
     bool "SH8601 / CO5300 AMOLED over QSPI"
     help
@@ -391,6 +467,29 @@ config OBSERVORE_DISPLAY_PANEL_DETECT
         which revision arrived in the post, and a blank screen tells them
         nothing.
 
+config OBSERVORE_DISPLAY_RST_IOEXP_BIT
+    int "Expander line the panel reset is on, or -1 for a real GPIO"
+    depends on OBSERVORE_DISPLAY
+    default -1
+    help
+        The Waveshare 1.85 has no pin left for the panel's reset and puts it
+        on the I2C expander instead, which is why the expander has to be up
+        before the screen can be.
+
+        Waveshare's wiki numbers these lines EXIO1 upward and does not say
+        whether EXIO1 is the chip's P0 or its P1, so this is a chip bit
+        number and it was settled by trying it rather than by reading it.
+
+config OBSERVORE_DISPLAY_QSPI
+    bool
+    default y if OBSERVORE_DISPLAY_QSPI_AMOLED || OBSERVORE_DISPLAY_ST77916
+    help
+        Not a choice: set by whichever panel was picked. It exists because the
+        bus shape -- four data lines, no D/C pin, the command travelling in
+        the address phase -- is a property of the wiring and not of the
+        controller, and gating that on "is an AMOLED" meant the second QSPI
+        panel could not reuse any of it.
+
 config OBSERVORE_DISPLAY_CO5300
     bool "Assume a CO5300 rather than an SH8601"
     depends on OBSERVORE_DISPLAY_QSPI_AMOLED
@@ -414,22 +513,22 @@ config OBSERVORE_DISPLAY_HEIGHT
 
 config OBSERVORE_DISPLAY_QSPI_D0
     int "QSPI data line 0"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 11
 
 config OBSERVORE_DISPLAY_QSPI_D1
     int "QSPI data line 1"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 12
 
 config OBSERVORE_DISPLAY_QSPI_D2
     int "QSPI data line 2"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 13
 
 config OBSERVORE_DISPLAY_QSPI_D3
     int "QSPI data line 3"
-    depends on OBSERVORE_DISPLAY_QSPI_AMOLED
+    depends on OBSERVORE_DISPLAY_QSPI
     default 14
 
 config OBSERVORE_DISPLAY_X_OFFSET
@@ -567,21 +666,59 @@ config OBSERVORE_TOUCH_FT3168
         pixels, so there is no pressure threshold, no median filtering and
         no calibration to get wrong.
 
+config OBSERVORE_TOUCH_CST816
+    bool "CST816, capacitive, over I2C"
+    select OBSERVORE_I2C
+    help
+        The controller on the Waveshare 1.85. Capacitive, and close enough
+        to the FT3168 to share a backend: fingers down at register 0x02 and
+        twelve bits each of X and Y from 0x03, high nibble first.
+
+        What differs is where it lives rather than how it is read. It is on
+        the board's second I2C bus, not the one the clock and the
+        accelerometer share, and its reset is on the expander rather than a
+        pin.
+
 endchoice
+
+config OBSERVORE_TOUCH_CAPACITIVE
+    bool
+    default y if OBSERVORE_TOUCH_FT3168 || OBSERVORE_TOUCH_CST816
+    help
+        Not a choice: set by whichever controller was picked. The two share
+        a register layout, so they share the code that reads it.
+
+config OBSERVORE_TOUCH_ON_AUX_BUS
+    bool "The touch controller is on the second I2C bus"
+    depends on OBSERVORE_TOUCH_CAPACITIVE
+    default n
+    help
+        Most boards hang everything off one bus. The 1.85 gives its touch
+        panel a pair of pins of its own, so the sensors can stay where every
+        other board has them.
+
+config OBSERVORE_TOUCH_RST_IOEXP_BIT
+    int "Expander line the touch reset is on, or -1 for none"
+    depends on OBSERVORE_TOUCH_CAPACITIVE
+    default -1
+    help
+        A chip bit number. Waveshare call this line EXIO1 and their driver
+        shifts by (Pin - 1), so their 1 is the chip's 0 -- the same offset
+        that makes their EXIO2 the panel reset on bit 1.
 
 config OBSERVORE_TOUCH_SDA
     int "Touch I2C SDA GPIO"
-    depends on OBSERVORE_TOUCH_FT3168
+    depends on OBSERVORE_TOUCH_CAPACITIVE
     default 47
 
 config OBSERVORE_TOUCH_SCL
     int "Touch I2C SCL GPIO"
-    depends on OBSERVORE_TOUCH_FT3168
+    depends on OBSERVORE_TOUCH_CAPACITIVE
     default 48
 
 config OBSERVORE_TOUCH_I2C_ADDR
     hex "Touch I2C address"
-    depends on OBSERVORE_TOUCH_FT3168
+    depends on OBSERVORE_TOUCH_CAPACITIVE
     default 0x38
 
 config OBSERVORE_TOUCH_SHARED_BUS
@@ -641,28 +778,42 @@ config OBSERVORE_TOUCH_Z_MIN
 
 config OBSERVORE_TOUCH_RAW_MIN_X
     int "Raw X at the low edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default 0 if OBSERVORE_TOUCH_CAPACITIVE
     default 200
 config OBSERVORE_TOUCH_RAW_MAX_X
     int "Raw X at the high edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default OBSERVORE_DISPLAY_WIDTH if OBSERVORE_TOUCH_CAPACITIVE
     default 3900
 config OBSERVORE_TOUCH_RAW_MIN_Y
     int "Raw Y at the low edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default 0 if OBSERVORE_TOUCH_CAPACITIVE
     default 200
 config OBSERVORE_TOUCH_RAW_MAX_Y
     int "Raw Y at the high edge"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
+    default OBSERVORE_DISPLAY_HEIGHT if OBSERVORE_TOUCH_CAPACITIVE
     default 3900
     help
         The four bounds are a property of one piece of glass, not of the
         product: boards off the same reel differ by tens of counts. Build with
         OBSERVORE_TOUCH_LOG_RAW, touch each corner, and read them off the log.
 
+        On a resistive panel these are ADC counts. On a capacitive one they
+        are whatever range the controller's firmware was configured to report,
+        which defaults here to the panel's own size -- the identity mapping,
+        correct whenever the controller was configured for the panel it is
+        bonded to, and wrong in proportion to the distance from the top-left
+        corner whenever it was not.
+
+        Easier than either: run the calibration from the settings page, which
+        measures this device's own glass.
+
 config OBSERVORE_TOUCH_SWAP_XY
     bool "Touch axes are crossed relative to the display"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
     default n
     help
         Wrong sends the finger along the wrong edge: dragging across the
@@ -670,11 +821,11 @@ config OBSERVORE_TOUCH_SWAP_XY
 
 config OBSERVORE_TOUCH_FLIP_X
     bool "Flip touch X"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
     default n
 config OBSERVORE_TOUCH_FLIP_Y
     bool "Flip touch Y"
-    depends on OBSERVORE_TOUCH_XPT2046
+    depends on OBSERVORE_TOUCH
     default n
     help
         Wrong flips are unmistakable: the cursor goes the other way from the

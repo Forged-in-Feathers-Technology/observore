@@ -62,6 +62,19 @@ jobs:
           - board: waveshare-s3-amoled-143
             target: esp32s3
             profile: boards/waveshare-s3-amoled-143.defaults
+          # The 1.85" round LCD, now a screen as well as a detector: the
+          # ST77916 is driven at 40 MHz over QSPI, the CST816 answers, and the
+          # watch face draws. Both the panel's reset and the touch
+          # controller's are behind a TCA9554 expander rather than on pins,
+          # which is the part of this board that is unlike every other one
+          # here.
+          #
+          # It shipped as a radio first -- the same order the 1.43 arrived in
+          # -- so the profile was under CI from the day it existed rather
+          # than rotting until the panel worked.
+          - board: waveshare-s3-lcd-185
+            target: esp32s3
+            profile: boards/waveshare-s3-lcd-185.defaults
           # Ships now that a panel can measure its own touch bounds. It was
           # held back because the bounds in its profile are defaults rather
           # than measurements -- and shipping any profile's bounds was really

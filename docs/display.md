@@ -48,6 +48,110 @@ just at the one it happened to be drawn at on the bench. Checking only that
 the ring stays on the glass would have passed a dial that never paid for the
 walk at all — it would still have fitted, by one pixel, sitting on the bezel.
 
+## Bringing up the 1.85's panel
+
+An ST77916 over QSPI, 360x360 and round. Five things had to be right at once,
+and any one of them wrong leaves the glass black with no error reported
+anywhere — every call returns `ESP_OK` throughout.
+
+| | |
+|---|---|
+| reset line | expander chip **bit 1** |
+| sequence | Waveshare's 184 commands, not the driver's |
+| variant | register `0x04` answers `00 02 7F 7F` |
+| read clock | **5 MHz**; at 40 the same read is corrupted |
+| inversion | **on** |
+
+**The reset is on an I2C expander, not a pin**, which makes bringing up a bus a
+precondition for bringing up a screen. Waveshare's wiki calls the line EXIO2,
+and their own driver shifts by `(Pin - 1)` — so their EXIO2 is the chip's bit
+1. Resetting bit 2 instead resets the SD card's chip select and leaves the
+panel untouched.
+
+**The driver's own initialisation sequence does not light this panel.** It
+resets it cleanly and leaves it dark. Waveshare replaced the stock sequence in
+their copy of the driver, and the two differ from the very first command:
+Espressif opens `0xF0` with `0x08`, Waveshare with `0x28`. Two panels ship
+behind this part number and their code picks between two tables by reading
+register `0x04`, exactly as the 1.43 picks between SH8601 and CO5300.
+
+**That read must be slow.** At 40 MHz this board answers `00 03 3F BF`, which
+is neither documented variant — it is the right answer corrupted. At 5 MHz it
+answers `00 02 7F 7F` every time. A read turns the bus around mid-transaction
+and is the most timing-sensitive thing the panel is asked to do; pixel writes
+are one-way and run happily at the full rate. So the bus is built at 5 MHz for
+the read and rebuilt at 40 for everything after, which is Waveshare's own
+shape.
+
+**Inversion had to be turned on**, because their table ends with `0x21` and
+this project calls `esp_lcd_panel_invert_color()` *after* `panel_init()`. Left
+at its default that call sends `0x20` immediately after the table sent `0x21`
+and undoes it — which turns white into black and is indistinguishable from a
+panel that was never driven at all.
+
+### What the bus shape change bought
+
+The QSPI path used to be gated on `OBSERVORE_DISPLAY_QSPI_AMOLED` throughout,
+so a second QSPI panel could reuse none of it. Four data lines, no D/C pin and
+the command travelling in the address phase describe the **wiring**, not the
+controller, so that is now a separate `OBSERVORE_DISPLAY_QSPI` symbol which
+both panels set. Only the genuinely AMOLED-specific parts — the brightness
+command, the `0xDA` detection, the vendor table — stayed behind the old one.
+
+### A narrower glass than anything before it
+
+The text grid is the square that fits inside the circle: 254 of 360 pixels
+each way, which is **31 columns by 15 rows** against the 41x20 of the 1.43 and
+the 40 columns every other board has.
+
+That turned every status line into a compile error, because the formatting
+buffers were `char text[COLS + 1]` and the compiler could prove the strings no
+longer fitted. Shortening the strings would have made every other board's
+pages worse to suit the smallest glass. The buffers are now a fixed `TEXTBUF`
+instead: `line()` already pads and clips to `COLS`, so a formatter only has to
+produce the text and let the panel take what it can show.
+
+### Touch, which was the easy half
+
+A CST816 at `0x15`, and almost all of it already existed. It agrees with the
+1.43's FT3168 on the register layout — fingers down at `0x02`, then twelve
+bits each of X and Y from `0x03`, high nibble first — so one capacitive
+backend reads both, selected by a shared `OBSERVORE_TOUCH_CAPACITIVE` symbol
+rather than duplicated.
+
+What differs is where it lives, not how it is read:
+
+- **its own I2C bus**, so the clock and the accelerometer stay where every
+  other board has them and nothing that reads them had to change
+- **its reset on the expander**, line 0 — Waveshare call it EXIO1 and their
+  driver shifts by `(Pin - 1)`, the same offset that puts the panel's reset
+  on line 1
+
+It announces itself rather than being assumed present, because a panel that
+answers its address while still held in reset reports no touches, and that is
+indistinguishable from nobody touching it:
+
+```
+touch I2C on sda 1 / scl 3 answered: 0x15
+CST816 at 0x15, chip 0xB5 proj 0x71 fw 0x04
+```
+
+Being capacitive, it reports position in panel pixels, so none of the
+resistive path applies — no pressure threshold, no median filter, and no
+calibration ritual to get wrong.
+
+### A diagnostic that measured itself
+
+Several rounds of this were spent reading a black screen that proved nothing.
+A full-screen colour-flash test had been placed in `observore_display_init()`
+*before* `bl_init()`, and it never returned — so the backlight was never
+switched on. Every result from that point was the test harness, not the panel.
+
+The lesson is narrow and worth keeping: an instrument placed inside the
+sequence it is measuring can hold that sequence open. The conclusions drawn
+from the log in that period — the panel id, the return codes — were sound,
+because they came from the log. Everything concluded from the glass was not.
+
 ## The settings page
 
 A preference compiled into the firmware is a preference nobody can have.

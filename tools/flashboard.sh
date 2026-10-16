@@ -62,10 +62,25 @@ fi
 mac=$(esptool.py --port "$PORT" read_mac 2>/dev/null |
       grep -oE "^MAC: [0-9a-f:]+" | head -1 | cut -d' ' -f2) || true
 if [[ -n "$mac" && -f "$KNOWN" ]]; then
-    want=$(grep -i "^$mac " "$KNOWN" | awk '{print $2}' | head -1)
+    # `|| true` because grep exits 1 when the address is not in the file, and
+    # under `set -e` with `pipefail` that status becomes the assignment's and
+    # kills the script -- silently, before anything has been printed.
+    #
+    # That is the same failure the note below describes, one line later and
+    # left behind when it was fixed there. It meant the case this file's own
+    # header promises -- "with no entry for a MAC the flash proceeds and the
+    # address is printed, so the file can be built up by pasting what it
+    # reports" -- had never once worked: every genuinely new board, which is
+    # exactly when you need that line printed, exited 1 with no output at all.
+    # Found by plugging in a board the file had never seen.
+    want=$(grep -i "^$mac " "$KNOWN" | awk '{print $2}' | head -1 || true)
     if [[ -n "$want" && "$want" != "$BOARD" ]]; then
         echo "REFUSING to flash: $PORT is $mac, which is $want, not $BOARD" >&2
         exit 1
+    fi
+    if [[ -z "$want" ]]; then
+        echo "  $PORT is $mac, which $KNOWN does not list" >&2
+        echo "  once this board is seen working, add:  $mac $BOARD" >&2
     fi
 fi
 # An `if` rather than `[[ ... ]] && echo`, which under `set -e` is a silent
@@ -100,9 +115,23 @@ fi
 
 # set-target first, because it writes an sdkconfig; then remove it, so the
 # profile below is actually read.  Order matters and is the whole point.
-idf.py set-target "$TARGET" >/dev/null 2>&1
-rm -f sdkconfig
-idf.py -DSDKCONFIG_DEFAULTS="$DEFAULTS" build >/dev/null 2>&1
+# Quiet while it works, loud when it does not.
+#
+# These used to send both streams to /dev/null unconditionally, so a build
+# that failed exited this script through `set -e` with no output at all --
+# three separate times during the 1.85 bring-up it looked like the guard
+# refusing rather than the compiler objecting. A build log nobody can see is
+# a build log that costs somebody twenty minutes.
+build_log=$(mktemp)
+trap 'rm -f "$build_log"' EXIT
+if ! { idf.py set-target "$TARGET" &&
+       rm -f sdkconfig &&
+       idf.py -DSDKCONFIG_DEFAULTS="$DEFAULTS" build; } >"$build_log" 2>&1; then
+    echo "build failed for $BOARD:" >&2
+    grep -E "error:|Error|FAILED|CMake Error" "$build_log" | head -20 >&2 ||
+        tail -20 "$build_log" >&2
+    exit 1
+fi
 
 if ! grep -qxF "CONFIG_OBSERVORE_BOARD=\"$BOARD\"" sdkconfig; then
     echo "REFUSING to flash: sdkconfig says $(grep '^CONFIG_OBSERVORE_BOARD=' sdkconfig), not $BOARD" >&2

@@ -832,6 +832,13 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x8000  partition-table-waveshare-s3-amoled-143.bin \
     0x10000 ota_data_initial-waveshare-s3-amoled-143.bin \
     0x20000 observore-waveshare-s3-amoled-143.bin
+
+# Waveshare ESP32-S3-Touch-LCD-1.85 (round, 360x360, capacitive)
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
+    0x0     bootloader-waveshare-s3-lcd-185.bin \
+    0x8000  partition-table-waveshare-s3-lcd-185.bin \
+    0x10000 ota_data_initial-waveshare-s3-lcd-185.bin \
+    0x20000 observore-waveshare-s3-lcd-185.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it
@@ -888,10 +895,24 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | `boards/cyd-3248s035r-st7796` | GPIO16, plain (green of the RGB) | GPIO0 | the 3.5" CYD, 480x320 with touch; resistive **R** model only |
 | `boards/nm-cyd-c5` | GPIO27, WS2812 | GPIO28 | the 2.8" CYD on a **C5**: 8 MB PSRAM, dual-band, with touch. The only display board that sees 5 GHz |
 | `boards/waveshare-s3-amoled-143` | none — the panel is the indicator | GPIO0 | round 466x466 AMOLED, capacitive touch, clock and **accelerometer** |
+| `boards/waveshare-s3-lcd-185` | none | GPIO0 | round 1.85" 360x360 LCD with capacitive touch, clock and **accelerometer**. 31 columns, the narrowest here |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
 dark rather than obviously broken.
+
+The 1.85 is the narrow one: 360x360 and round, so the text grid is the square
+that fits inside the circle and comes to 31 columns against the 40 every other
+board has. Pages truncate rather than wrap.
+
+It is also the one that needs two I2C buses and an I/O expander. Neither the
+panel nor the touch controller has a reset pin — both are behind the expander
+— which makes bringing up a bus a precondition for bringing up a screen. See
+[the display notes](docs/display.md) for what that cost.
+
+No watch face on it yet. Nothing blocks one; the dial was tuned against the
+1.43's 466 pixels and wants checking against 360 rather than assuming it
+scales.
 
 The XIAO profiles are **compile-tested only**. Neither board has been run.
 [docs/xiao-verification.md](docs/xiao-verification.md) lists what is unverified
@@ -1170,6 +1191,23 @@ abandoned.
 
 An open network needs no keyboard at all, and joining takes effect at the next
 uplink window.
+
+Three layers reach every character a passphrase may contain — lower case,
+upper case, and all thirty-two punctuation marks of printable ASCII, including
+the space, which earlier versions could not type at all.
+
+Keys share the width of the row rather than sitting on a fixed grid, so the
+`zxcvbnm` row gets wider keys than `qwertyuiop`, and a faint ruler above each
+row marks where one key ends. This matters more than it sounds: a fingertip
+covers six to eight millimetres, and on the round panels a key is a third of
+that. The 1.43" fits 466 pixels across 36 millimetres of glass, nearly three
+times the density of the 2.8" boards — so the same layout that is comfortable
+on one is unusable on the other, and the layout has to give the smallest
+panels every column it can rather than rounding them away.
+
+If the keyboard is still too small for the board in front of you, the console
+is the easier path: bring up the SoftAP, join it from a phone, and type the
+passphrase on a real keyboard.
 
 ### Acting on what the screen shows
 

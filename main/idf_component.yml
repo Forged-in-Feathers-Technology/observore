@@ -31,6 +31,15 @@ dependencies:
     version: "^1.0.0"
     rules:
       - if: "target == esp32s3"
+  # The ST77916, which is the round LCD on the Waveshare 1.85. Also QSPI, and
+  # also S3 only here for the same reason the others are scoped: a component
+  # whose manifest does not name a target fails dependency solving before a
+  # line is compiled, and locally that hides behind a cached component until
+  # CI resolves from scratch.
+  espressif/esp_lcd_st77916:
+    version: "^2.0.0"
+    rules:
+      - if: "target == esp32s3"
 
   idf:
     version: ">=5.0"

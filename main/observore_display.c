@@ -1,4 +1,5 @@
 #include "observore_heapwatch.h"
+#include "observore_ioexp.h"
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
 #include "observore_tz.h"
@@ -24,6 +25,11 @@
 #include "esp_lcd_st7796.h"
 #define PANEL_NAME "ST7796"
 #define new_panel  esp_lcd_new_panel_st7796
+#elif CONFIG_OBSERVORE_DISPLAY_ST77916
+#include "esp_lcd_st77916.h"
+#include "observore_st77916_init.h"
+#define PANEL_NAME "ST77916"
+#define new_panel  esp_lcd_new_panel_st77916
 #elif CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
 #include "esp_lcd_sh8601.h"
 #if CONFIG_OBSERVORE_DISPLAY_CO5300
@@ -47,6 +53,7 @@
 
 #include "observore_detect.h"
 #include "observore_font.h"
+#include "observore_cells.h"
 #include <limits.h>
 #include <time.h>
 
@@ -183,10 +190,36 @@ static bool blit_done(esp_lcd_panel_io_handle_t io,
 }
 #endif
 /* What is on the glass, so a redraw sends only the lines that changed. */
-static char     s_shown[ROWS][COLS + 1];
+/* How much room a line is formatted into, which is deliberately not how wide
+ * the panel is.
+ *
+ * These were all COLS + 1. That is the right size for what reaches the glass
+ * and the wrong size for building it: line() already pads and clips to COLS,
+ * so a formatter only has to produce the text and let the panel take what it
+ * can show. Tying the two together meant a narrower panel turned every status
+ * line into a compile error -- the 1.85 is 31 columns against the 40 every
+ * other board here has, and the compiler could prove the strings no longer
+ * fit. Shortening them to suit the smallest glass would have made every
+ * other board's pages worse. */
+#define TEXTBUF 72
+
+/* The widest a row can be: the whole panel, for the rows that are allowed to
+ * use it. On a rectangular panel that is COLS; on a round one the text grid is
+ * the inscribed square and the middle rows have considerably more glass either
+ * side of it than the corners do. */
+#define MAXCOLS (DISP_W / OBSERVORE_FONT_W)
+
+static char     s_shown[ROWS][MAXCOLS + 1];
 static uint16_t s_shown_bg[ROWS];
+/* How wide each row was last drawn, because they are no longer all the same
+ * width and the skip-if-unchanged check has to compare like with like. */
+static uint8_t  s_shown_cols[ROWS];
 static bool     s_ready;
-static char     s_notice[COLS + 1];
+/* The notice is built here and clipped by line(), so it is sized for the
+ * message rather than for the glass -- same reason as TEXTBUF above. On a
+ * 31-column panel the daylight-zone notice is 37 characters and would not
+ * otherwise compile. */
+static char     s_notice[TEXTBUF];
 static int64_t  s_notice_until_us;
 
 /* A whole 320x240 framebuffer is 150 KB, which this board does not have, so
@@ -367,8 +400,20 @@ static inline uint16_t px(uint16_t c) { return c; }
  *
  * There is no bezel to rest a thumb on here, so the objection that made
  * rejecting look careful does not apply to this shape. */
+/* The tap's panel coordinates, before the grid clamp.
+ *
+ * The keyboard is the one thing drawn outside the text grid, so it is the one
+ * thing that cannot be hit-tested in grid coordinates: the clamp folds every
+ * press in the left and right crescents onto the grid's edge column, which is
+ * exactly the part of the glass the wide keyboard just claimed. Kept beside
+ * the grid conversion rather than threaded through handle_tap, because only
+ * one caller wants it. */
+static int s_tap_panel_x, s_tap_panel_y;
+
 static bool to_grid_px(int *x, int *y)
 {
+    s_tap_panel_x = *x;
+    s_tap_panel_y = *y;
     int gx = *x - INSET_X;
     int gy = *y - INSET_Y;
     const int max_x = COLS * OBSERVORE_FONT_W - 1;
@@ -401,6 +446,10 @@ static void clear_panel(void)
  * question mark. That is a bug that would appear only when somebody added an
  * icon, which #132 says is coming. Taking the byte unsigned costs nothing and
  * removes the trap. */
+/* Which x the next glyph row starts at. Set by line_in() around the draw, so
+ * draw_glyph needs no new parameter and every existing caller is unaffected. */
+static int s_row_inset_x = INSET_X;
+
 static void draw_glyph(int col, int row, uint8_t c, uint16_t fg, uint16_t bg)
 {
     if (c < OBSERVORE_FONT_FIRST || c > OBSERVORE_FONT_LAST) {
@@ -413,7 +462,7 @@ static void draw_glyph(int col, int row, uint8_t c, uint16_t fg, uint16_t bg)
             cell[y * OBSERVORE_FONT_W + x] = px((g[y] >> (7 - x)) & 1 ? fg : bg);
         }
     }
-    int x0 = X_OFF + INSET_X + col * OBSERVORE_FONT_W;
+    int x0 = X_OFF + s_row_inset_x + col * OBSERVORE_FONT_W;
     int y0 = INSET_Y + row * OBSERVORE_FONT_H;
     esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x0 + OBSERVORE_FONT_W,
                               y0 + OBSERVORE_FONT_H, cell);
@@ -421,7 +470,8 @@ static void draw_glyph(int col, int row, uint8_t c, uint16_t fg, uint16_t bg)
 
 /* Write one full row, padded to the width so the previous content is covered.
  * Skipped when the row already shows exactly this. */
-static void line(int row, const char *text, uint16_t fg, uint16_t bg)
+static void line_in(int row, const char *text, uint16_t fg, uint16_t bg,
+                    int inset_x, int cols)
 {
     /* The row is checked, because this function writes into two arrays sized
      * [ROWS] and had no bound at all.
@@ -457,16 +507,29 @@ static void line(int row, const char *text, uint16_t fg, uint16_t bg)
         return;
     }
 
-    char buf[COLS + 1];
-    snprintf(buf, sizeof(buf), "%-*s", COLS, text ? text : "");
-    if (strcmp(buf, s_shown[row]) == 0 && s_shown_bg[row] == bg) {
+    char buf[MAXCOLS + 1];
+    if (cols > MAXCOLS) {
+        cols = MAXCOLS;
+    }
+    snprintf(buf, sizeof(buf), "%-*s", cols, text ? text : "");
+    if (s_shown_cols[row] == cols && s_shown_bg[row] == bg &&
+        strcmp(buf, s_shown[row]) == 0) {
         return;
     }
-    for (int col = 0; col < COLS; col++) {
+    s_row_inset_x = inset_x;
+    for (int col = 0; col < cols; col++) {
         draw_glyph(col, row, (uint8_t)buf[col], fg, bg);
     }
-    memcpy(s_shown[row], buf, sizeof(buf));
-    s_shown_bg[row] = bg;
+    s_row_inset_x = INSET_X;
+    memcpy(s_shown[row], buf, (size_t)cols + 1);
+    s_shown_bg[row]   = bg;
+    s_shown_cols[row] = (uint8_t)cols;
+}
+
+/* The ordinary row: the text grid's width, at the text grid's left edge. */
+static void line(int row, const char *text, uint16_t fg, uint16_t bg)
+{
+    line_in(row, text, fg, bg, INSET_X, COLS);
 }
 
 /* What the main loop last published, and what the drawing task renders from.
@@ -570,21 +633,30 @@ static int64_t s_install_armed_until_us;
  * in it. Blind entry is the same rule applied to typing. */
 typedef enum { WIFI_LIST = 0, WIFI_TYPING, WIFI_SAVED } wifi_step_t;
 
-#define KEY_ROWS 4
-#define KEY_COLS 13
-/* Four layers, each thirteen keys by four rows; a blank is a gap. Lower and
- * upper are the same letters because a Wi-Fi password is case-sensitive and a
- * person needs to be able to type either without hunting. */
-static const char *const KEYS[2][KEY_ROWS] = {
-    {"1234567890   ",
-     "qwertyuiop   ",
-     "asdfghjkl    ",
-     "zxcvbnm      "},
-    {"!@#$%^&*()_-+",
-     "QWERTYUIOP{}",
-     "ASDFGHJKL:;'",
-     "ZXCVBNM,.?/  "},
-};
+/* Included here rather than at the top of the file: it carries the layout
+ * table, and a board with no touch screen would get only an unused one. */
+#include "observore_keyboard.h"
+
+/* The layout and its arithmetic are in observore_keyboard.h, where the host
+ * suite can measure them. */
+#define KEY_ROWS OBSERVORE_KB_ROWS
+
+/* How many keys a row of the current layer carries. Ragged by design: the
+ * fewer a row has, the wider they are drawn. */
+static int key_count(int layer, int kr)
+{
+    return (int)strlen(OBSERVORE_KB[layer][kr]);
+}
+
+/* How many actions the settings strip carries: the calibrate button exists
+ * wherever there is a touch panel. Defined once, used by both the drawing and
+ * the hit test, which is the whole point -- they used to compute it
+ * separately and disagree. */
+#if CONFIG_OBSERVORE_TOUCH
+#define SETTINGS_ACTIONS 4
+#else
+#define SETTINGS_ACTIONS 3
+#endif
 
 /* Which finding each screen row is showing, for tap-to-ignore. */
 static int s_row_finding[ROWS];
@@ -595,7 +667,9 @@ static size_t s_ap_count;
 static int    s_ap_chosen = -1;
 static char   s_pass[OBSERVORE_PASSWORD_LEN];
 static size_t s_pass_len;
-static bool   s_shift;
+/* Lower, upper or symbols. Two keys reach all three: shift swaps the letter
+ * case, and the symbol key goes there and back. */
+static int    s_layer;
 /* Reveal is deliberate, momentary and off by default. Blind entry is the rule
  * -- a screen faces a room -- but a resistive panel and a fingertip make a
  * wrong key easy and invisible, and a person who cannot check what they typed
@@ -625,8 +699,77 @@ static char   s_wifi_msg[41];
 #define ACTION_TOP  (ROWS - BAR_TOUCH_ROWS - ACTION_GAP - ACTION_ROWS)
 #define ACTION_ROW  (ACTION_TOP + ACTION_ROWS - 1)   /* where the labels sit */
 #define KB_TOP      (ACTION_TOP - KEY_ROWS * KB_HEIGHT)
-/* Keys share the width: three columns each at forty, four at sixty. */
-#define KEY_W      (COLS / KEY_COLS)
+#define ACTIONS     5
+
+/* How wide the keyboard is allowed to be, which on a round panel is wider
+ * than the text grid.
+ *
+ * The grid is the largest square inside the circle, so its width is set by
+ * its corners -- the worst case, at the top and bottom of the screen. The
+ * keyboard does not live there. It sits in the middle band, where the circle
+ * is at its widest, and on the 1.85" that band has about seventy more pixels
+ * of glass across it than the grid uses. Drawing the keys inside the grid
+ * throws that away, and the keys are the one thing on this screen whose size
+ * is the difference between usable and not.
+ *
+ * So the keyboard rows get their own width: the chord of the circle at
+ * whichever of the band's two edges is further from the centre. Computed once
+ * at init rather than in the preprocessor, which cannot take a square root.
+ *
+ * Nothing else on the screen does this. A row that is wider than the grid is
+ * only safe because of where it is, and that is a property of the keyboard's
+ * position, not a general licence. */
+static int s_kb_cols    = COLS;
+static int s_kb_inset_x = INSET_X;
+
+static void kb_geometry(void)
+{
+    /* Rectangular panels have no crescents to reclaim; the grid is already
+     * the whole width. INSET_X is what says which kind of panel this is. */
+    if (INSET_X <= 0 || DISP_W != DISP_H) {
+        return;
+    }
+    const int r  = DISP_W / 2;
+    const int cy = DISP_H / 2;
+    /* The band runs from the top of the first key row to the BOTTOM of the
+     * action strip, not to the bottom of the keys.
+     *
+     * The action strip is drawn at this same width and sits below the keys,
+     * so a band measured over the keys alone is too generous for it. On the
+     * 1.43" that difference is 56 columns against 53: the strip would have
+     * been drawn twelve pixels past the glass at each end, off the circle
+     * entirely, with the buttons' outer edges invisible and unpressable. It
+     * costs the 1.85" nothing -- its action row is nearer the centre line
+     * than its top key row is. */
+    const int y_top = INSET_Y + KB_TOP * OBSERVORE_FONT_H;
+    const int y_bot = INSET_Y + (ACTION_ROW + 1) * OBSERVORE_FONT_H;
+
+    /* The band's worst edge: furthest from the centre line is narrowest. */
+    int dy_top = y_top > cy ? y_top - cy : cy - y_top;
+    int dy_bot = y_bot > cy ? y_bot - cy : cy - y_bot;
+    int dy = dy_top > dy_bot ? dy_top : dy_bot;
+    if (dy >= r) {
+        return;
+    }
+
+    /* Integer square root of r^2 - dy^2: the half-chord there. */
+    int want = r * r - dy * dy;
+    int half = 0;
+    while ((half + 1) * (half + 1) <= want) {
+        half++;
+    }
+
+    int cols = (2 * half) / OBSERVORE_FONT_W;
+    if (cols > MAXCOLS) cols = MAXCOLS;
+    if (cols <= COLS) {
+        return;              /* nothing to gain; keep the grid */
+    }
+    s_kb_cols    = cols;
+    s_kb_inset_x = (DISP_W - cols * OBSERVORE_FONT_W) / 2;
+    ESP_LOGI(TAG, "keyboard widened to %d columns (inset %d) from the grid's "
+             "%d: the circle is wider across its middle than at its corners",
+             s_kb_cols, s_kb_inset_x, COLS);
+}
 #endif
 
 /* Backlight, as a duty cycle rather than on/off. A 2.8" panel at full
@@ -903,9 +1046,15 @@ void observore_display_init(void)
              co5300 ? "CO5300" : "SH8601");
 #endif
     s_x_off = co5300 ? 6 : 0;
+#endif  /* QSPI_AMOLED */
 
+#if CONFIG_OBSERVORE_DISPLAY_QSPI
     /* Four data lines and no D/C pin: the command travels in the address
-     * phase instead, which is what the QSPI flag below selects. */
+     * phase instead, which is what the QSPI flag below selects.
+     *
+     * Gated on the bus being QSPI rather than on the panel being an AMOLED,
+     * because this describes the wiring. The ST77916 is wired the same way
+     * and shares all of it. */
     spi_bus_config_t bus = {
         .sclk_io_num = CONFIG_OBSERVORE_DISPLAY_SCLK,
         .data0_io_num = CONFIG_OBSERVORE_DISPLAY_QSPI_D0,
@@ -937,7 +1086,7 @@ void observore_display_init(void)
     }
 
     esp_lcd_panel_io_handle_t io = NULL;
-#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#if CONFIG_OBSERVORE_DISPLAY_QSPI
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .cs_gpio_num = CONFIG_OBSERVORE_DISPLAY_CS,
         .dc_gpio_num = -1,
@@ -962,6 +1111,18 @@ void observore_display_init(void)
         .lcd_param_bits = 8,
     };
 #endif
+#if CONFIG_OBSERVORE_DISPLAY_ST77916
+    /* The identifying read happens on a slow bus, then the bus is rebuilt at
+     * the speed the panel is actually driven at.
+     *
+     * This is Waveshare's own shape and the reason is measurable: at 40 MHz
+     * the read returns 00 03 3F BF, which is no documented variant and is
+     * just the right answer corrupted; at 5 MHz it returns 00 02 7F 7F every
+     * time. A read has a bus turnaround in the middle of it and is the most
+     * timing-sensitive thing this panel is asked to do -- pixel writes are
+     * one-way and run happily at the full rate. */
+    io_cfg.pclk_hz = 5 * 1000 * 1000;
+#endif
     err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &io_cfg, &io);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "panel IO: %s", esp_err_to_name(err));
@@ -975,6 +1136,16 @@ void observore_display_init(void)
                                  : sizeof(SH8601_INIT) / sizeof(SH8601_INIT[0]),
         .flags = { .use_qspi_interface = 1 },
     };
+#elif CONFIG_OBSERVORE_DISPLAY_ST77916
+    /* Waveshare's sequence, not the driver's. The driver ships one and it
+     * leaves this glass dark -- see observore_st77916_init.h for how that
+     * was established and what differs. */
+    st77916_vendor_config_t vendor = {
+        .init_cmds = OBSERVORE_ST77916_INIT,
+        .init_cmds_size = sizeof(OBSERVORE_ST77916_INIT) /
+                          sizeof(OBSERVORE_ST77916_INIT[0]),
+        .flags = { .use_qspi_interface = 1 },
+    };
 #endif
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = CONFIG_OBSERVORE_DISPLAY_RST,
@@ -982,31 +1153,101 @@ void observore_display_init(void)
                                                       : LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
-#if CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#if CONFIG_OBSERVORE_DISPLAY_QSPI
         .vendor_config = &vendor,
 #endif
     };
+#if CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT >= 0
+    /* The reset this panel has instead of a pin.
+     *
+     * Done here, before the driver is handed the panel, because the driver
+     * was given reset_gpio_num = -1 and will only issue a software reset --
+     * which a controller that has never been hardware reset may not answer.
+     * The expander is on the sensor bus, so this is also the point where
+     * bringing up a screen depends on an I2C bus being alive. */
+    if (!observore_ioexp_reset_pulse(CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT,
+                                     20, 120)) {
+        ESP_LOGW(TAG, "could not pulse the panel reset on expander line %d; "
+                      "the panel may not answer",
+                 CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT);
+    }
+#endif
+#if CONFIG_OBSERVORE_DISPLAY_ST77916
+    /* Which of the two panels is behind this glass, asked rather than
+     * assumed -- the same situation as the 1.43, where two controllers ship
+     * under one part number and need different sequences.
+     *
+     * Register 0x04 over the QSPI read opcode. Waveshare's own code reads it
+     * at 5 MHz before raising the clock, and the reason is worth keeping: at
+     * 40 MHz this board answered 00 03 3F BF, which is neither documented
+     * pattern and is simply this read corrupted. At 5 MHz it answers
+     * 00 02 7F 7F, every time.
+     *
+     * Reported rather than acted on, because only one of the two variants is
+     * on this bench. A board that answers differently says so in the log
+     * instead of drawing nothing and leaving somebody to guess why. */
+    {
+        int cmd = (0x03 << 24) | (0x04 << 8);
+        uint8_t id[4] = {0};
+        if (esp_lcd_panel_io_rx_param(io, cmd, id, sizeof(id)) == ESP_OK) {
+            if (id[0] == 0x00 && id[1] == 0x02 &&
+                id[2] == 0x7F && id[3] == 0x7F) {
+                ESP_LOGI(TAG, "panel answered %02X %02X %02X %02X",
+                         id[0], id[1], id[2], id[3]);
+            } else {
+                ESP_LOGW(TAG, "panel answered %02X %02X %02X %02X, which is "
+                         "not the variant this build carries a sequence for "
+                         "(expected 00 02 7F 7F) -- the screen may stay dark",
+                         id[0], id[1], id[2], id[3]);
+            }
+        }
+    }
+
+    /* Back up to the configured rate for everything that follows. */
+    esp_lcd_panel_io_del(io);
+    io = NULL;
+    io_cfg.pclk_hz = CONFIG_OBSERVORE_DISPLAY_MHZ * 1000 * 1000;
+    err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST,
+                                   &io_cfg, &io);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "panel IO at %d MHz: %s", CONFIG_OBSERVORE_DISPLAY_MHZ,
+                 esp_err_to_name(err));
+        return;
+    }
+#endif
     s_io = io;
     err = new_panel(io, &panel_cfg, &s_panel);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, PANEL_NAME ": %s", esp_err_to_name(err));
         return;
     }
-    esp_lcd_panel_reset(s_panel);
-    esp_lcd_panel_init(s_panel);
+    {
+        esp_err_t r1 = esp_lcd_panel_reset(s_panel);
+        esp_err_t r2 = esp_lcd_panel_init(s_panel);
+        if (r1 != ESP_OK || r2 != ESP_OK) {
+            ESP_LOGE(TAG, "panel reset %s, init %s", esp_err_to_name(r1),
+                     esp_err_to_name(r2));
+        }
+    }
     /* The ST7789 revision of this board is widely reported to need inversion
      * and on the bench did not; the ILI9341 one is not expected to. It is a
      * build setting either way, because the failure looks like a negative and
      * is obvious the moment the screen is looked at. */
     esp_lcd_panel_invert_color(s_panel, CONFIG_OBSERVORE_DISPLAY_INVERT);
-#if !CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
+#if !CONFIG_OBSERVORE_DISPLAY_QSPI
     /* The rectangular panels are portrait parts used in landscape. The round
-     * one is square and arrives the right way up. */
+     * ones are square and arrive the right way up. */
     esp_lcd_panel_swap_xy(s_panel, true);
     esp_lcd_panel_mirror(s_panel, CONFIG_OBSERVORE_DISPLAY_MIRROR_X,
                          CONFIG_OBSERVORE_DISPLAY_MIRROR_Y);
 #endif
-    esp_lcd_panel_disp_on_off(s_panel, true);
+    {
+        esp_err_t r3 = esp_lcd_panel_disp_on_off(s_panel, true);
+        if (r3 != ESP_OK) {
+            ESP_LOGE(TAG, "panel would not switch on: %s",
+                     esp_err_to_name(r3));
+        }
+    }
 
     /* Before anything draws, while the internal heap is still unfragmented
      * and the radios have not taken their share -- and before the first
@@ -1022,6 +1263,10 @@ void observore_display_init(void)
     s_blit_done = xSemaphoreCreateBinary();
 #endif
     memset(s_shown, 0, sizeof(s_shown));
+    memset(s_shown_cols, 0, sizeof(s_shown_cols));
+#if CONFIG_OBSERVORE_TOUCH
+    kb_geometry();
+#endif
     s_ready = true;
     for (int r = 0; r < ROWS; r++) {
         line(r, "", C_WHITE, C_BLACK);
@@ -1061,7 +1306,7 @@ static void draw_watch(const observore_status_t *st,
                        const observore_event_t *top, size_t n,
                        int64_t now_us)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
 
     /* The band: two rows in the level's colour, level word and score. */
     uint16_t band = st->level == OBSERVORE_LEVEL_ALERT   ? C_RED
@@ -1204,7 +1449,7 @@ static void draw_watch(const observore_status_t *st,
         if (row == s_armed_row && now_us < s_armed_until_us) {
             /* The row keeps showing what it is about, cut to whatever the
              * question leaves: forty columns on the 2.8" boards is not much. */
-            char ask[COLS + 1];
+            char ask[TEXTBUF];
             /* A fixed slice of the row, not the whole of it: the buffer is
              * the screen's width and forty columns does not stretch. */
             snprintf(ask, sizeof(ask), " ignore? tap again  %.17s", text);
@@ -1259,6 +1504,36 @@ static int64_t s_face_awake_until_us;
 #define FACE_SHIFT_R  3
 #define FACE_MARGIN   4
 #define FACE_RING_W   5
+
+/* The dial's proportions, as fractions of its radius rather than as pixel
+ * offsets from it.
+ *
+ * They were tuned on the 1.43's 466-pixel glass and written as "r minus a
+ * constant", which does not survive a smaller panel. On the 1.85's 360 the
+ * same numbers give an hour hand 24% of the radius where the 1.43 has 42%,
+ * and a counterweight 20% where it has 15% -- the same watch face, visibly
+ * stubbier, and nothing in the code saying why.
+ *
+ * The percentages below are what the 1.43 already drew, measured off it, so
+ * that board is unchanged to the pixel within rounding and every other size
+ * now gets the same watch rather than a differently proportioned one. */
+#define FACE_PCT(r, pct)  ((r) * (pct) / 100)
+#define FACE_AT_LEAST(v, n) ((v) > (n) ? (v) : (n))
+
+#define FACE_HOUR_PCT     42   /* hand lengths, from the centre */
+#define FACE_MIN_PCT      69
+#define FACE_SEC_PCT      82
+#define FACE_NUMERAL_PCT  80   /* where the numerals sit */
+#define FACE_MARK_PCT     96   /* where the hour marks start */
+#define FACE_MARK_LONG    12   /* and how long they are, at the quarters */
+#define FACE_MARK_SHORT    6
+#define FACE_TAIL_H_PCT   12   /* how far each hand reaches past the centre */
+#define FACE_TAIL_M_PCT   13
+#define FACE_TAIL_S_PCT   15
+#define FACE_HUB_H_PCT     6   /* hand widths, at the hub and at the tip */
+#define FACE_HUB_M_PCT     4
+#define FACE_TIP_H_PCT     2
+#define FACE_CAP_PCT       4   /* the disc over the pivot */
 
 void observore_display_wake_face(void)
 {
@@ -1356,9 +1631,10 @@ static void draw_clockface(const observore_status_t *st)
      * turn into a grey band. */
     for (int h = 0; h < 12; h++) {
         int x0, y0, x1, y1;
-        int len = (h % 3 == 0) ? 26 : 14;
-        observore_watch_hand_end(cx, cy, r - 8, h, 12, &x0, &y0);
-        observore_watch_hand_end(cx, cy, r - 8 - len, h, 12, &x1, &y1);
+        int from = FACE_PCT(r, FACE_MARK_PCT);
+        int len  = FACE_PCT(r, (h % 3 == 0) ? FACE_MARK_LONG : FACE_MARK_SHORT);
+        observore_watch_hand_end(cx, cy, from, h, 12, &x0, &y0);
+        observore_watch_hand_end(cx, cy, from - len, h, 12, &x1, &y1);
         observore_watch_line(&c, x0, y0, x1, y1, (h % 3 == 0) ? 7 : 3, mark);
     }
 
@@ -1387,7 +1663,8 @@ static void draw_clockface(const observore_status_t *st)
         };
         for (int h = 0; h < 12; h += step) {
             int nx, ny;
-            observore_watch_hand_end(cx, cy, r - 44, h, 12, &nx, &ny);
+            observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_NUMERAL_PCT),
+                                     h, 12, &nx, &ny);
             observore_watch_text(&c, nx, ny - OBSERVORE_FONT_H * scale / 2,
                                  HOURS[h], scale, px(C_SILVER));
         }
@@ -1432,19 +1709,31 @@ static void draw_clockface(const observore_status_t *st)
     /* Hands. The hour hand moves with the minutes, as a real one does, which
      * is 720 positions round the dial rather than twelve. */
     int hx, hy, mx, my, sx, sy;
-    observore_watch_hand_end(cx, cy, r - 130, lt.tm_hour % 12 * 60 + lt.tm_min,
-                             720, &hx, &hy);
-    observore_watch_hand_end(cx, cy, r - 70, lt.tm_min * 60 + lt.tm_sec,
-                             3600, &mx, &my);
-    observore_watch_hand_end(cx, cy, r - 40, lt.tm_sec, 60, &sx, &sy);
+    observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_HOUR_PCT),
+                             lt.tm_hour % 12 * 60 + lt.tm_min, 720, &hx, &hy);
+    observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_MIN_PCT),
+                             lt.tm_min * 60 + lt.tm_sec, 3600, &mx, &my);
+    observore_watch_hand_end(cx, cy, FACE_PCT(r, FACE_SEC_PCT),
+                             lt.tm_sec, 60, &sx, &sy);
 
-    observore_watch_hand(&c, cx, cy, hx, hy, 26, 13, 5, px(C_WHITE));
-    observore_watch_hand(&c, cx, cy, mx, my, 30, 9,  3, px(C_WHITE));
+    /* A width of at least two pixels, whatever the arithmetic says: a hand
+     * rounded down to one pixel on a small panel is a scratch, not a hand. */
+    int hub_h = FACE_AT_LEAST(FACE_PCT(r, FACE_HUB_H_PCT), 3);
+    int hub_m = FACE_AT_LEAST(FACE_PCT(r, FACE_HUB_M_PCT), 3);
+    int tip_h = FACE_AT_LEAST(FACE_PCT(r, FACE_TIP_H_PCT), 2);
+    observore_watch_hand(&c, cx, cy, hx, hy, FACE_PCT(r, FACE_TAIL_H_PCT),
+                         hub_h, tip_h, px(C_WHITE));
+    observore_watch_hand(&c, cx, cy, mx, my, FACE_PCT(r, FACE_TAIL_M_PCT),
+                         hub_m, FACE_AT_LEAST(tip_h - 1, 2), px(C_WHITE));
     if (awake) {
-        observore_watch_hand(&c, cx, cy, sx, sy, 34, 3, 3, mark);
+        observore_watch_hand(&c, cx, cy, sx, sy, FACE_PCT(r, FACE_TAIL_S_PCT),
+                             2, 2, mark);
     }
-    observore_watch_disc(&c, cx, cy, 10, px(C_WHITE));
-    observore_watch_disc(&c, cx, cy, 5,  px(C_BLACK));
+    observore_watch_disc(&c, cx, cy, FACE_AT_LEAST(FACE_PCT(r, FACE_CAP_PCT), 4),
+                         px(C_WHITE));
+    observore_watch_disc(&c, cx, cy,
+                         FACE_AT_LEAST(FACE_PCT(r, FACE_CAP_PCT) / 2, 2),
+                         px(C_BLACK));
 
     /* No time yet is said rather than drawn as midnight, which is what an
      * unset clock would otherwise claim with total confidence. */
@@ -1490,10 +1779,15 @@ static void draw_clockface(const observore_status_t *st)
     /* The text grid knows nothing about what just happened to the panel, so
      * every row is marked stale and will be redrawn when a page returns. */
     memset(s_shown, 0, sizeof(s_shown));
+    memset(s_shown_cols, 0, sizeof(s_shown_cols));
 }
 #endif
 
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
+/* Calibration is offered on every touch panel now, not only the resistive
+ * ones. See observore_touch.c: a capacitive controller reports in whatever
+ * range its firmware was configured for, which on a round panel need not be
+ * the panel's own. */
+#if CONFIG_OBSERVORE_TOUCH
 /* Two targets, in opposite corners, inset far enough to be pressable.
  *
  * The bezel on these boards overlaps the glass, and a press right at the
@@ -1507,7 +1801,7 @@ static void draw_clockface(const observore_status_t *st)
 
 static void draw_calibrate(void)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
     for (int r = 0; r < ROWS; r++) {
         line(r, "", C_WHITE, C_BLACK);
     }
@@ -1522,7 +1816,7 @@ static void draw_calibrate(void)
      * and which is unambiguous about where to press. */
     int col = s_cal_step == 0 ? CAL_INSET_COLS : COLS - 1 - CAL_INSET_COLS;
     int row = s_cal_step == 0 ? CAL_INSET_ROWS : ROWS - 1 - CAL_INSET_ROWS;
-    char marker[COLS + 1];
+    char marker[TEXTBUF];
     memset(marker, ' ', COLS);
     marker[COLS] = '\0';
     marker[col] = '+';
@@ -1598,7 +1892,7 @@ static void calibrate_poll(void)
 
 static void draw_system(const observore_status_t *st, int64_t now_us)
 {
-    char text[COLS + 1], up[16];
+    char text[TEXTBUF], up[16];
     const esp_app_desc_t *app = esp_app_get_description();
 
     /* A running row rather than numbered lines. The page grew a line for the
@@ -1873,23 +2167,26 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
      * board and twenty on the 3.5". Labels that fit rather than labels that
      * truncate: "check update" with the s cut off looks like a typo, and a
      * clipped confirmation looks like a fault. */
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
-    const int cols_each = COLS / 4;
-#else
-    const int cols_each = COLS / 3;
-#endif
-    const int third = cols_each;
+    /* How many actions, in one place. It used to be decided twice -- here and
+     * again in the tap handler -- from two different expressions, and on a
+     * capacitive panel the two disagreed: the strip drew four and the handler
+     * could only return three, so the fourth was undrawable and unpressable
+     * at the same time. */
+    const int third  = COLS / SETTINGS_ACTIONS;
     const bool roomy = third >= 18;
-    snprintf(left, sizeof(left), roomy ? " check for updates" : " check ver");
+    const bool tight = third < 11;
+    snprintf(left, sizeof(left),
+             roomy ? " check for updates" : tight ? " ver" : " check ver");
     if (!observore_update_available()) {
         snprintf(mid, sizeof(mid), "%s", "");
     } else if (s_install_armed && esp_timer_get_time() < s_install_armed_until_us) {
-        snprintf(mid, sizeof(mid), roomy ? " install? tap again" : " install? y");
+        snprintf(mid, sizeof(mid), roomy ? " install? tap again"
+                                         : tight ? " y?" : " install? y");
     } else if (roomy) {
         snprintf(mid, sizeof(mid), " install %.9s",
                  observore_update_latest_version());
     } else {
-        snprintf(mid, sizeof(mid), " install");
+        snprintf(mid, sizeof(mid), tight ? " inst" : " install");
     }
     /* Third action: the way out of a baseline, which until now existed only
      * in a console. The count is on the label because "clear ignores" with
@@ -1897,29 +2194,45 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
      * fifty-one rules. */
     size_t muted = observore_mute_count();
     if (muted == 0) {
-        snprintf(right, sizeof(right), " no ignores");
+        snprintf(right, sizeof(right), tight ? " none" : " no ignores");
     } else if (esp_timer_get_time() < s_clear_armed_until_us) {
         snprintf(right, sizeof(right), roomy ? " clear %u? tap again"
-                                             : " clear %u? y", (unsigned)muted);
+                                             : tight ? " %u y?" : " clear %u? y",
+                 (unsigned)muted);
     } else {
         snprintf(right, sizeof(right), roomy ? " clear %u ignores"
-                                             : " clear %u", (unsigned)muted);
+                                             : tight ? " ign %u" : " clear %u",
+                 (unsigned)muted);
     }
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
-    /* A fourth action where the panel is resistive, because those are the
-     * ones whose sheet differs from the bench unit the bounds were measured
-     * on. A capacitive controller reports pixels and has nothing to teach. */
+#if CONFIG_OBSERVORE_TOUCH
+    /* A fourth action wherever there is a touch panel at all.
+     *
+     * It used to be offered only on the resistive boards, because "a
+     * capacitive controller reports pixels and has nothing to teach". A
+     * CST816 reports in whatever range its firmware was configured for, which
+     * on a round panel is not reliably the panel's own. */
     char cal[COLS];
-    snprintf(cal, sizeof(cal), observore_touch_calibrated() ? " recalibrate"
-                                                            : " calibrate");
-    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s%-*.*s",
-             third, third, left, third, third, mid, third, third, right,
-             COLS - 3 * third, COLS - 3 * third, cal);
-#else
-    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s",
-             third, third, left, third, third, mid,
-             COLS - 2 * third, COLS - 2 * third, right);
+    snprintf(cal, sizeof(cal), observore_touch_calibrated()
+                               ? (tight ? " recal" : " recalibrate")
+                               : (tight ? " cal"   : " calibrate"));
 #endif
+    const char *acts[SETTINGS_ACTIONS] = {
+        left, mid, right,
+#if CONFIG_OBSERVORE_TOUCH
+        cal,
+#endif
+    };
+    /* Each action gets its share of the width, the remainder spread a column
+     * at a time rather than dumped on the last one. Dumping it is what left
+     * the calibrate button one column wide on the 31-column panel. */
+    memset(text, ' ', COLS); text[COLS] = '\0';
+    for (int i = 0; i < SETTINGS_ACTIONS; i++) {
+        int x0  = observore_cell_start(i, SETTINGS_ACTIONS, COLS);
+        int w   = observore_cell_width(i, SETTINGS_ACTIONS, COLS);
+        int len = (int)strlen(acts[i]);
+        if (len > w) len = w;
+        memcpy(text + x0, acts[i], (size_t)len);
+    }
     for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
         line(r, "", C_BLACK, C_GREY);
     }
@@ -1973,7 +2286,7 @@ static uint8_t s_settings_row[ROWS];
 
 static void draw_settings(void)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
     memset(s_settings_row, SET_NONE, sizeof(s_settings_row));
 
     int r = 0;
@@ -2126,7 +2439,7 @@ static void settings_tap(int x, int y)
 
 static void draw_buttons(void)
 {
-    char text[COLS + 2];
+    char text[TEXTBUF];
     int w = COLS / BUTTONS;
     int pos = 0;
     for (int b = 0; b < BUTTONS; b++) {
@@ -2155,7 +2468,7 @@ static void draw_buttons(void)
 /* The network page. Three states, drawn above the button bar. */
 static void draw_wifi(void)
 {
-    char text[COLS + 1];
+    char text[TEXTBUF];
     char ssid[OBSERVORE_SSID_LEN] = {0};
     observore_netcfg_ssid(ssid, sizeof(ssid));
 
@@ -2194,7 +2507,7 @@ static void draw_wifi(void)
     snprintf(text, sizeof(text), " %.20s", s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "?");
     line(1, text, C_WHITE, C_BLACK);
 
-    char shown[COLS + 1];
+    char shown[TEXTBUF];
     bool reveal = s_reveal && esp_timer_get_time() < s_reveal_until_us;
     if (reveal) {
         snprintf(shown, sizeof(shown), "%.29s", s_pass);
@@ -2206,37 +2519,78 @@ static void draw_wifi(void)
     snprintf(text, sizeof(text), " pass %-29.29s", shown);
     line(2, text, C_BLACK, reveal ? C_AMBER : C_GREEN);
 
-    /* The keyboard: each key three columns wide and two rows tall, which is
-     * about seven millimetres -- the smallest a fingertip finds reliably. */
+    /* The keyboard. Each key is two rows tall and as wide as its share of the
+     * row, so the narrow rows get the wide keys.
+     *
+     * The upper of the two rows is a ruler: a faint bar at every key's left
+     * edge. Without it the letters float on an unbroken dark band and there
+     * is nothing on the screen that says where one key stops -- which matters
+     * most on exactly the panels where the keys are smallest. It costs no
+     * width, because it sits on the row above the glyphs rather than between
+     * them. */
     for (int kr = 0; kr < KEY_ROWS; kr++) {
-        const char *row_keys = KEYS[s_shift ? 1 : 0][kr];
-        char top[COLS + 1], bot[COLS + 1];
-        int pos = 0;
-        for (int kc = 0; kc < KEY_COLS; kc++) {
-            char ch = row_keys[kc] ? row_keys[kc] : ' ';
-            /* The glyph in the middle of its key, whatever the key's width. */
-            pos += snprintf(bot + pos, sizeof(bot) - pos, "%*c%*s",
-                            KEY_W / 2 + 1, ch, KEY_W - KEY_W / 2 - 1, "");
+        const char *row_keys = OBSERVORE_KB[s_layer][kr];
+        int n = key_count(s_layer, kr);
+        char top[MAXCOLS + 1], bot[MAXCOLS + 1];
+        memset(top, ' ', (size_t)s_kb_cols); top[s_kb_cols] = '\0';
+        memset(bot, ' ', (size_t)s_kb_cols); bot[s_kb_cols] = '\0';
+        for (int kc = 0; kc < n; kc++) {
+            int x0 = observore_cell_start(kc, n, s_kb_cols);
+            int w  = observore_cell_width(kc, n, s_kb_cols);
+            char ch = row_keys[kc];
+            /* A space is a key here, not a gap, and needs something to show
+             * for itself. */
+            bot[x0 + w / 2] = ch == ' ' ? '_' : ch;
+            top[x0] = '|';
         }
-        bot[pos] = '\0';
-        memset(top, ' ', (size_t)pos); top[pos] = '\0';
-        line(KB_TOP + kr * KB_HEIGHT,     top, C_WHITE, C_DARK);
-        line(KB_TOP + kr * KB_HEIGHT + 1, bot, C_WHITE, C_DARK);
+        line_in(KB_TOP + kr * KB_HEIGHT,     top, C_GREY,  C_DARK,
+                s_kb_inset_x, s_kb_cols);
+        line_in(KB_TOP + kr * KB_HEIGHT + 1, bot, C_WHITE, C_DARK,
+                s_kb_inset_x, s_kb_cols);
     }
 
-    /* Four actions across the width, ten columns each. */
-    const int aw = COLS / 4;
-    snprintf(text, sizeof(text), "%-*.*s%-*.*s%-*.*s%-*.*s",
-             aw, aw, s_shift ? "   abc" : "   ABC#",
-             aw, aw, reveal ? "   hide" : "   show",
-             aw, aw, "   del", COLS - 3 * aw, COLS - 3 * aw, "   join");
-    for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
-        line(r, "", C_BLACK, C_GREY);      /* part of the same target */
+    /* Five actions sharing the width, the same arithmetic as the keys.
+     *
+     * It was four. The symbol layer needs a key to reach it, and the labels
+     * now name the layer they would take you to rather than the one you are
+     * in, so none of the three states shows a label that is a lie. */
+    const char *labels[ACTIONS] = {
+        s_layer == 1 ? "abc" : "ABC",
+        s_layer == 2 ? "abc" : "#+=",
+        reveal ? "hide" : "show",
+        "del",
+        "join",
+    };
+    memset(text, ' ', (size_t)s_kb_cols); text[s_kb_cols] = '\0';
+    for (int i = 0; i < ACTIONS; i++) {
+        int x0  = observore_cell_start(i, ACTIONS, s_kb_cols);
+        int w   = observore_cell_width(i, ACTIONS, s_kb_cols);
+        int len = (int)strlen(labels[i]);
+        if (len > w) len = w;
+        memcpy(text + x0 + (w - len) / 2, labels[i], (size_t)len);
     }
-    line(ACTION_ROW, text, C_BLACK, C_GREY);
+    for (int r = ACTION_TOP; r < ACTION_ROW; r++) {
+        line_in(r, "", C_BLACK, C_GREY, s_kb_inset_x, s_kb_cols);
+    }
+    line_in(ACTION_ROW, text, C_BLACK, C_GREY, s_kb_inset_x, s_kb_cols);
     for (int r = ACTION_ROW + 1; r < ROWS - BAR_LAST; r++) {
         line(r, "", C_WHITE, C_BLACK);     /* the margin, and the bar's rows */
     }
+}
+
+/* Which column of the keyboard's band a tap landed in, from the panel
+ * coordinate rather than the grid one. */
+static int kb_col(void)
+{
+    int kx = s_tap_panel_x - s_kb_inset_x;
+    if (kx < 0) {
+        kx = 0;
+    }
+    const int max_x = s_kb_cols * OBSERVORE_FONT_W - 1;
+    if (kx > max_x) {
+        kx = max_x;
+    }
+    return kx / OBSERVORE_FONT_W;
 }
 
 /* A tap on the network page, above the button bar. */
@@ -2255,7 +2609,7 @@ static void wifi_tap(int x, int y)
             s_ap_chosen = (int)i;
             s_pass_len  = 0;
             s_pass[0]   = '\0';
-            s_shift     = false;
+            s_layer     = 0;
             s_reveal    = false;
             s_wifi_step = s_aps[i].secure ? WIFI_TYPING : WIFI_SAVED;
             if (!s_aps[i].secure) {
@@ -2273,11 +2627,37 @@ static void wifi_tap(int x, int y)
 
     /* Typing. */
     if (row >= KB_TOP && row < KB_TOP + KEY_ROWS * KB_HEIGHT) {
-        int kr = (row - KB_TOP) / KB_HEIGHT;
-        int kc = (x / OBSERVORE_FONT_W) / KEY_W;
-        if (kr < KEY_ROWS && kc < KEY_COLS) {
-            char ch = KEYS[s_shift ? 1 : 0][kr][kc];
-            if (ch && ch != ' ' && s_pass_len + 1 < sizeof(s_pass)) {
+        /* Resolved from the pixel, offset half a cell, not from the row.
+         *
+         * A key is two rows tall with its ruler on the first and its letter
+         * on the second, so the letter -- the thing a finger aims at -- sits
+         * at the very bottom of its own target. Measured: 24 pixels of
+         * tolerance above the glyph and 8 below it. Press the `s` and drift
+         * eight pixels low and the tap is an `x`, which is the row beneath.
+         *
+         * Shifting the zone down by half a cell puts the glyph in the middle
+         * of what it selects: 16 pixels either way. The drawing is unchanged;
+         * it was the target that was in the wrong place, not the letter. */
+        int ky = y - (KB_TOP * OBSERVORE_FONT_H + OBSERVORE_FONT_H / 2);
+        int kr = ky < 0 ? 0 : ky / (KB_HEIGHT * OBSERVORE_FONT_H);
+        if (kr >= KEY_ROWS) {
+            kr = KEY_ROWS - 1;
+        }
+        if (kr >= 0 && kr < KEY_ROWS) {
+            int n  = key_count(s_layer, kr);
+            int kc = observore_cell_at(kb_col(), n, s_kb_cols);
+            /* Every position is a key now, a space included, so there is no
+             * character to reject here. */
+            char ch = OBSERVORE_KB[s_layer][kr][kc];
+            /* What a press became, which is the one thing a report of "the
+             * wrong key" cannot carry: the panel coordinate, the band column
+             * it resolved to, and the character that went in. Not behind a
+             * build option -- a tap is a rare, deliberate event and this is
+             * one line per tap, only while a password is being typed. */
+            ESP_LOGI(TAG, "key: panel %d,%d -> band col %d of %d, row %d -> "
+                     "'%c'", s_tap_panel_x, s_tap_panel_y, kb_col(),
+                     s_kb_cols, kr, ch == ' ' ? '_' : ch);
+            if (ch && s_pass_len + 1 < sizeof(s_pass)) {
                 s_pass[s_pass_len++] = ch;
                 s_pass[s_pass_len]   = '\0';
             }
@@ -2285,16 +2665,23 @@ static void wifi_tap(int x, int y)
         return;
     }
     if (row >= ACTION_TOP && row <= ACTION_ROW) {
-        int which = (x / OBSERVORE_FONT_W) / (COLS / 4);
-        if (which > 3) which = 3;
+        int which = observore_cell_at(kb_col(), ACTIONS, s_kb_cols);
+        static const char *const ACT_NAME[ACTIONS] = {
+            "shift", "symbols", "show", "del", "join"
+        };
+        ESP_LOGI(TAG, "action: panel %d,%d -> band col %d of %d -> %s",
+                 s_tap_panel_x, s_tap_panel_y, kb_col(), s_kb_cols,
+                 ACT_NAME[which]);
         if (which == 0) {
-            s_shift = !s_shift;
+            s_layer = (s_layer == 1) ? 0 : 1;
         } else if (which == 1) {
+            s_layer = (s_layer == 2) ? 0 : 2;
+        } else if (which == 2) {
             s_reveal = !s_reveal;
             /* Times out on its own: a password left legible on a screen in a
              * room is the thing this page is careful about. */
             s_reveal_until_us = esp_timer_get_time() + 15 * 1000000;
-        } else if (which == 2) {
+        } else if (which == 3) {
             if (s_pass_len) {
                 s_pass[--s_pass_len] = '\0';
             }
@@ -2323,7 +2710,7 @@ static void draw_current(void)
     if (!s_have_snap) {
         return;
     }
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
+#if CONFIG_OBSERVORE_TOUCH
     if (s_cal_step >= 0) {
         draw_calibrate();
         return;
@@ -2343,6 +2730,7 @@ static void draw_current(void)
         s_drew_face = 0;
         clear_panel();
         memset(s_shown, 0, sizeof(s_shown));
+        memset(s_shown_cols, 0, sizeof(s_shown_cols));
     } else if (!s_drew_face && s_page == PAGE_CLOCK) {
         /* Arriving at the face: whatever is on the glass belongs to another
          * page, so the next draw must happen whether or not the minute has
@@ -2394,7 +2782,7 @@ static void draw_current(void)
     draw_buttons();
 #else
     {
-        char text[COLS + 1], up[16];
+        char text[TEXTBUF], up[16];
         const esp_app_desc_t *app = esp_app_get_description();
         /* Truncation of the version is fine and deliberate: "v0.7.0-1-gb59a6d4"
          * cut short still identifies the build, and the row has forty columns. */
@@ -2497,18 +2885,9 @@ static void system_tap(int x, int y)
         return;
     }
     int col = x / OBSERVORE_FONT_W;
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
-    const int third = COLS / 4;
-    const int last  = 3;
-#else
-    const int third = COLS / 3;
-    const int last  = 2;
-#endif
-    int which = col / third;
-    if (which > last) {
-        which = last;
-    }
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
+    /* The same arithmetic the strip was drawn with, from the same count. */
+    int which = observore_cell_at(col, SETTINGS_ACTIONS, COLS);
+#if CONFIG_OBSERVORE_TOUCH
     if (which == 3) {
         /* Measuring this panel's own sheet, which beats the bench unit's. */
         s_cal_step     = 0;
@@ -2660,7 +3039,7 @@ static void ui_task(void *arg)
          * together would deadlock. */
         int x = 0, y = 0;
         bool tapped = observore_touch_tap(&x, &y);
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
+#if CONFIG_OBSERVORE_TOUCH
         if (s_cal_step >= 0) {
             /* While calibrating, a press is a measurement rather than a
              * gesture: the mapped coordinates are exactly what is not to be
@@ -2770,7 +3149,14 @@ bool observore_display_take_baseline_request(void)
 
 uint32_t observore_display_taps(void)
 {
+#if CONFIG_OBSERVORE_TOUCH
     return s_taps;
+#else
+    /* A screen with no touch panel counts no taps. The counter itself lives
+     * behind the touch guard, and this accessor did not -- a combination no
+     * board had until one arrived with a display and no digitiser. */
+    return 0;
+#endif
 }
 
 void observore_display_notice(const char *text, int seconds)

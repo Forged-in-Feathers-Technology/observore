@@ -1,0 +1,157 @@
+# Waveshare ESP32-S3-Touch-LCD-1.85 -- a round 1.85" 360x360 IPS LCD on an S3
+# with 16 MB flash and 8 MB PSRAM.
+#
+# Radio, screen and touch all work. The watch face is the one thing left off,
+# deliberately: see the note at the bottom.
+#
+# The panel took five things being right at once, and any one of them wrong
+# leaves the glass black with no error anywhere:
+#
+#   reset      expander chip bit 1. Waveshare call it EXIO2 and their own
+#              code shifts by (Pin - 1), so their 2 is the chip's 1.
+#   sequence   Waveshare's 184-command table, not the driver's own. The
+#              stock one resets this panel cleanly and never lights it.
+#   variant    register 0x04 answers 00 02 7F 7F, which is the second of the
+#              two panels that ship behind this part number.
+#   clock      that read is done at 5 MHz. At 40 it answers 00 03 3F BF,
+#              which is no variant at all -- it is the same read corrupted.
+#   inversion  on. Their table ends with 0x21, and this project calls
+#              esp_lcd_panel_invert_color() afterwards, which sent 0x20 and
+#              undid it. That alone turns white into black.
+#
+# What is here was read off the board, not out of the wiki. The wiki has
+# already been wrong about this vendor's touch pins, panel power and battery
+# sense, so an I2C scan was run on the two candidate bus pairs and this is
+# what answered:
+#
+#   SDA 1  / SCL 3    0x15              CST816 touch
+#   SDA 11 / SCL 10   0x20  0x51  0x6B  TCA9554 expander, PCF85063 clock,
+#                                       QMI8658 accelerometer
+#
+# Two things that scan settled which the wiki did not say. The expander is on
+# the sensor bus rather than the touch bus -- so the screen's reset line is
+# downstream of the bus the clock is on, which makes bus order a constraint on
+# bringing the panel up. And the accelerometer is at 0x6B, not the 0x6A its
+# datasheet leads with, exactly as on the 1.43.
+#
+# Still to establish, and deliberately not guessed at here: which expander bit
+# is the panel reset and which is the touch reset (the wiki numbers them EXIO1
+# upward without saying whether EXIO1 is the chip's P0 or P1), and whether
+# there is a battery sense at all.
+#
+# The console is the chip's own USB-Serial/JTAG; there is no UART bridge, so
+# it enumerates as ttyACM.
+
+CONFIG_OBSERVORE_BOARD="waveshare-s3-lcd-185"
+
+# 16 MB, against the 4 MB the partition table is sized for -- the harmless
+# direction, as on the 1.43.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# 8 MB octal PSRAM, the same as the 1.43.
+#
+# This said quad on the first attempt, on the reasoning that the 1.43 was the
+# unusual one. The board disagreed immediately and in the loudest possible
+# way -- "PSRAM chip is not connected, or wrong PSRAM line mode", then a boot
+# loop. The R8 in ESP32-S3R8 is eight megabytes of octal; R2 is the quad part.
+#
+# Named explicitly rather than left to a default, because getting it wrong
+# does not degrade, it refuses to boot.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Two buses. The sensors are on the main one so that nothing which already
+# reads a clock or an accelerometer has to know the second exists; the touch
+# panel gets the auxiliary pins when it is driven.
+CONFIG_OBSERVORE_I2C=y
+CONFIG_OBSERVORE_I2C_SDA=11
+CONFIG_OBSERVORE_I2C_SCL=10
+CONFIG_OBSERVORE_I2C_AUX_SDA=1
+CONFIG_OBSERVORE_I2C_AUX_SCL=3
+
+# The expander, which nothing needs yet and which the panel will.
+CONFIG_OBSERVORE_IOEXP=y
+CONFIG_OBSERVORE_IOEXP_I2C_ADDR=0x20
+
+# The clock chip, which is the same part as the 1.43's and at the same
+# address. Worth having on day one: it is the only board besides the 1.43 that
+# knows what time it is across a power cut.
+CONFIG_OBSERVORE_RTC=y
+CONFIG_OBSERVORE_RTC_I2C_ADDR=0x51
+
+# The accelerometer, at the address the board reported rather than the one the
+# datasheet leads with.
+CONFIG_OBSERVORE_MOTION=y
+CONFIG_OBSERVORE_MOTION_I2C_ADDR=0x6B
+
+# The screen: an ST77916 over QSPI, four data lines and no D/C pin, the same
+# bus shape as the 1.43's AMOLED.
+#
+# 360x360 and round, so the text grid is the square that fits inside the
+# circle -- 254 of the 360 pixels each way, which is 31 columns by 15 rows.
+# Narrower than every other board here, and the pages truncate accordingly
+# rather than wrapping.
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_ST77916=y
+CONFIG_OBSERVORE_DISPLAY_WIDTH=360
+CONFIG_OBSERVORE_DISPLAY_HEIGHT=360
+CONFIG_OBSERVORE_DISPLAY_INSET_X=53
+CONFIG_OBSERVORE_DISPLAY_INSET_Y=53
+CONFIG_OBSERVORE_DISPLAY_SCLK=40
+CONFIG_OBSERVORE_DISPLAY_CS=21
+CONFIG_OBSERVORE_DISPLAY_QSPI_D0=46
+CONFIG_OBSERVORE_DISPLAY_QSPI_D1=45
+CONFIG_OBSERVORE_DISPLAY_QSPI_D2=42
+CONFIG_OBSERVORE_DISPLAY_QSPI_D3=41
+CONFIG_OBSERVORE_DISPLAY_MHZ=40
+
+# Inversion ON, because Waveshare's initialisation table ends with 0x21 and
+# this project calls esp_lcd_panel_invert_color() after panel_init(). Left at
+# the default, that call sends 0x20 straight after the table sent 0x21 and
+# undoes it -- which turns white into black and is indistinguishable from a
+# panel that was never driven.
+CONFIG_OBSERVORE_DISPLAY_INVERT=y
+
+# A real backlight on a pin, unlike the AMOLED which dims by panel command.
+CONFIG_OBSERVORE_DISPLAY_BL=5
+CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
+
+# No reset pin: it is on the expander. Which line is the thing the wiki does
+# not say, so this is a chip bit number settled by trying it.
+CONFIG_OBSERVORE_DISPLAY_RST=-1
+CONFIG_OBSERVORE_DISPLAY_RST_IOEXP_BIT=1
+
+# Touch: a CST816 at 0x15, on the auxiliary bus rather than the sensors' one,
+# with its reset on expander bit 0 -- Waveshare call that line EXIO1 and their
+# driver shifts by (Pin - 1), the same offset that puts the panel reset on
+# bit 1.
+CONFIG_OBSERVORE_TOUCH=y
+CONFIG_OBSERVORE_TOUCH_CST816=y
+CONFIG_OBSERVORE_TOUCH_ON_AUX_BUS=y
+CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x15
+CONFIG_OBSERVORE_TOUCH_SDA=1
+CONFIG_OBSERVORE_TOUCH_SCL=3
+CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT=0
+CONFIG_OBSERVORE_TOUCH_IRQ=4
+
+# The watch face. It needed the dial's proportions expressed as fractions of
+# its radius first: they were tuned on the 1.43's 466 pixels and written as
+# "r minus a constant", which at 360 gave an hour hand 24% of the radius
+# where that board has 42%. The 1.43 is unchanged to within a pixel.
+#
+# The frame buffer is 360x360x2, a quarter of a megabyte, and comes from the
+# PSRAM this board has eight of.
+CONFIG_OBSERVORE_WATCHFACE=y
+
+# No LED on this board's pin list -- every pin that might have been one is a
+# panel data line. Said as a backend rather than as a pin of -1, because -1
+# was tried first and produced "gpio_set_level(247): GPIO output gpio_num
+# error" on every heartbeat: no board here had ever had no LED, so nothing
+# handled it.
+CONFIG_OBSERVORE_LED_NONE=y
+# The BOOT button, the strapping pin every S3 has.
+CONFIG_OBSERVORE_BUTTON_GPIO=0

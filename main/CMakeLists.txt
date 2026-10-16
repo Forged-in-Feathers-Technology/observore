@@ -29,6 +29,7 @@ idf_component_register(
         "observore_display.c"
         "observore_touch.c"
         "observore_i2c.c"
+        "observore_ioexp.c"
         "observore_motion.c"
         "observore_surroundings.c"
         "observore_battery.c"
