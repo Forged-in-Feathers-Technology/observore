@@ -694,11 +694,31 @@ static char   s_wifi_msg[41];
  * One row is sixteen pixels. The strip sits directly above the button bar, so
  * on a single row a press a couple of pixels low crosses into it: ABC# and
  * page answered each other's presses until the strip got a margin. */
-#define ACTION_ROWS ((ROWS >= 18) ? 2 : 1)
+/* Two rows, always.
+ *
+ * It was one on any panel shorter than eighteen rows, which is both 2.8"
+ * CYDs and the 1.85" round LCD. One text row is sixteen pixels: 2.1 mm on
+ * the round panel and 2.9 mm on a CYD, against 4.2 mm for a keyboard key
+ * directly above it. The strip holds five targets including `del` and
+ * `join`, and missing that band upward hits a letter while missing it
+ * downward hits the button bar and changes the page.
+ *
+ * Measured from the glass: of four deliberate presses -- s, d, show, del --
+ * the three that registered all resolved correctly, and `show` produced no
+ * event at all. It fell outside a two-millimetre band. The horizontal
+ * mapping was never the problem; the strip was simply too short to hit.
+ *
+ * The row comes from merging the network name and the password field on
+ * panels that cannot spare one. See WIFI_TIGHT. */
+#define ACTION_ROWS 2
 #define ACTION_GAP  ((ROWS >= 18) ? 1 : 0)
 #define ACTION_TOP  (ROWS - BAR_TOUCH_ROWS - ACTION_GAP - ACTION_ROWS)
 #define ACTION_ROW  (ACTION_TOP + ACTION_ROWS - 1)   /* where the labels sit */
 #define KB_TOP      (ACTION_TOP - KEY_ROWS * KB_HEIGHT)
+/* Whether the typing view has to economise above the keyboard. The header
+ * wants three rows -- title, network name, password field -- and a short
+ * panel now has two, because the action strip took one. */
+#define WIFI_TIGHT  (KB_TOP < 3)
 #define ACTIONS     5
 
 /* How wide the keyboard is allowed to be, which on a round panel is wider
@@ -729,8 +749,6 @@ static void kb_geometry(void)
     if (INSET_X <= 0 || DISP_W != DISP_H) {
         return;
     }
-    const int r  = DISP_W / 2;
-    const int cy = DISP_H / 2;
     /* The band runs from the top of the first key row to the BOTTOM of the
      * action strip, not to the bottom of the keys.
      *
@@ -744,22 +762,7 @@ static void kb_geometry(void)
     const int y_top = INSET_Y + KB_TOP * OBSERVORE_FONT_H;
     const int y_bot = INSET_Y + (ACTION_ROW + 1) * OBSERVORE_FONT_H;
 
-    /* The band's worst edge: furthest from the centre line is narrowest. */
-    int dy_top = y_top > cy ? y_top - cy : cy - y_top;
-    int dy_bot = y_bot > cy ? y_bot - cy : cy - y_bot;
-    int dy = dy_top > dy_bot ? dy_top : dy_bot;
-    if (dy >= r) {
-        return;
-    }
-
-    /* Integer square root of r^2 - dy^2: the half-chord there. */
-    int want = r * r - dy * dy;
-    int half = 0;
-    while ((half + 1) * (half + 1) <= want) {
-        half++;
-    }
-
-    int cols = (2 * half) / OBSERVORE_FONT_W;
+    int cols = observore_chord_cols(DISP_W, y_top, y_bot, OBSERVORE_FONT_W);
     if (cols > MAXCOLS) cols = MAXCOLS;
     if (cols <= COLS) {
         return;              /* nothing to gain; keep the grid */
@@ -2504,9 +2507,6 @@ static void draw_wifi(void)
     }
 
     /* Typing. The field shows dots unless the reveal is on. */
-    snprintf(text, sizeof(text), " %.20s", s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "?");
-    line(1, text, C_WHITE, C_BLACK);
-
     char shown[TEXTBUF];
     bool reveal = s_reveal && esp_timer_get_time() < s_reveal_until_us;
     if (reveal) {
@@ -2516,8 +2516,22 @@ static void draw_wifi(void)
         memset(shown, '*', n);
         shown[n] = '\0';
     }
-    snprintf(text, sizeof(text), " pass %-29.29s", shown);
-    line(2, text, C_BLACK, reveal ? C_AMBER : C_GREEN);
+    /* On a short panel the network name and the password share a row, which
+     * is what pays for the second action row below. The name still has to
+     * be visible -- typing a password into the wrong network is a mistake
+     * nothing downstream catches -- so it is truncated rather than dropped. */
+    if (WIFI_TIGHT) {
+        snprintf(text, sizeof(text), " %-10.10s %-*.*s",
+                 s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "?",
+                 COLS - 13, COLS - 13, shown);
+        line(1, text, C_BLACK, reveal ? C_AMBER : C_GREEN);
+    } else {
+        snprintf(text, sizeof(text), " %.20s",
+                 s_ap_chosen >= 0 ? s_aps[s_ap_chosen].ssid : "?");
+        line(1, text, C_WHITE, C_BLACK);
+        snprintf(text, sizeof(text), " pass %-29.29s", shown);
+        line(2, text, C_BLACK, reveal ? C_AMBER : C_GREEN);
+    }
 
     /* The keyboard. Each key is two rows tall and as wide as its share of the
      * row, so the narrow rows get the wide keys.

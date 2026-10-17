@@ -16,16 +16,25 @@ static const char *TAG = "observore.audio";
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* 16 kHz, 16-bit, stereo.
+/* 48 kHz, 16-bit, stereo.
  *
  * Stereo rather than mono because the PCM5101 is a two-channel part and takes
  * its frame from the word-select line; feeding it mono leaves one channel
  * holding whatever was last there. The same sample goes to both.
  *
- * 16 kHz is plenty for a chirp and keeps the buffers small. This is the
- * output path only -- the microphone's sample rate is a different question,
- * because an ultrasonic beacon sits above anything this rate can represent. */
-#define RATE 16000
+ * 48 kHz and not the 16 kHz this started at. The old comment here said
+ * "16 kHz is plenty for a chirp and keeps the buffers small", which is true
+ * and beside the point, and then went on to note that an ultrasonic beacon
+ * "sits above anything this rate can represent" as though that were somebody
+ * else's problem.
+ *
+ * It is this file's problem. A sample rate's Nyquist limit is half of it, so
+ * at 16 kHz this output could not produce anything above 8 kHz -- which made
+ * the board unable to emit the one signal it most needs to emit: a tone in
+ * the ultrasonic band, to prove the microphone and the beacon detector
+ * against something rather than assume them. The speaker and the microphone
+ * are centimetres apart here. At 48 kHz they can test each other. */
+#define RATE 48000
 
 /* Volume, and why the ceiling is so far below full scale.
  *
@@ -201,6 +210,105 @@ void observore_audio_level(observore_level_t from, observore_level_t to)
     rest(40);
 }
 
+/* A tone held across several calls, so a caller can listen while it sounds.
+ * The phase carries over between chunks; restarting it each time would put a
+ * discontinuity at every boundary, and a discontinuity is broadband -- it
+ * would smear energy across the whole band being measured. */
+static int    s_tone_hz;
+static int    s_tone_peak;
+static double s_tone_phase;
+
+/* An amplitude envelope, and why a test tone needs one.
+ *
+ * Switching a loud tone on or off instantly is a step, and a step is
+ * broadband: it puts energy across the whole spectrum, including every part
+ * of it a person can hear. The ultrasonic self-test does that eight times a
+ * sweep at peak 12000, and the result was audible as a low hum -- reported
+ * from the room while the test insisted in its own log that it was
+ * inaudible. The tones were; the edges were not.
+ *
+ * Five milliseconds of linear ramp at each end removes the step. It is far
+ * shorter than a 20 ms analysis block, so it costs the measurement nothing.
+ *
+ * It matters beyond politeness. The point of this test is to put energy in
+ * one narrow band and see whether that band lights up; a click smears energy
+ * into every other band at the same instant, which is noise in exactly the
+ * measurement being taken. */
+#define TONE_RAMP_SAMPLES (RATE / 200)      /* 5 ms */
+static int    s_tone_gain;                  /* 0..TONE_RAMP_SAMPLES */
+static int    s_tone_target;
+
+void observore_audio_tone_start(int hz, int peak)
+{
+    s_tone_hz     = hz;
+    s_tone_peak   = peak;
+    s_tone_phase  = 0;
+    s_tone_gain   = 0;
+    s_tone_target = TONE_RAMP_SAMPLES;
+}
+
+void observore_audio_tone_chunk(int ms)
+{
+    if (!s_ready || s_tone_hz <= 0 || s_tone_hz >= RATE / 2) {
+        return;
+    }
+    enum { BLOCK = 256 };
+    static int16_t buf[BLOCK * 2];
+    const int frames = RATE * ms / 1000;
+    const double step = 2.0 * M_PI * s_tone_hz / RATE;
+    const int amp = s_tone_peak > 0 ? s_tone_peak : amplitude();
+
+    for (int done = 0; done < frames; done += BLOCK) {
+        int n = frames - done < BLOCK ? frames - done : BLOCK;
+        for (int i = 0; i < n; i++) {
+            if (s_tone_gain < s_tone_target) {
+                s_tone_gain++;
+            } else if (s_tone_gain > s_tone_target) {
+                s_tone_gain--;
+            }
+            int16_t v = (int16_t)(amp * sin(s_tone_phase) *
+                                  s_tone_gain / TONE_RAMP_SAMPLES);
+            s_tone_phase += step;
+            if (s_tone_phase > 2.0 * M_PI) {
+                s_tone_phase -= 2.0 * M_PI;
+            }
+            buf[i * 2]     = v;
+            buf[i * 2 + 1] = v;
+        }
+        size_t wrote = 0;
+        if (i2s_channel_write(s_tx, buf, (size_t)n * 2 * sizeof(int16_t),
+                              &wrote, pdMS_TO_TICKS(200)) != ESP_OK) {
+            return;
+        }
+    }
+}
+
+void observore_audio_tone_stop(void)
+{
+    /* Ramped down rather than cut: the same step, in the other direction,
+     * is the same click. Ten milliseconds is twice the ramp, so the gain
+     * reaches zero before the silence starts. */
+    s_tone_target = 0;
+    observore_audio_tone_chunk(10);
+    s_tone_hz = 0;
+    rest(20);
+}
+
+void observore_audio_emit(int hz, int ms)
+{
+    /* Refuses what it cannot actually produce rather than emitting an alias.
+     * Asking a 48 kHz output for 30 kHz does not give silence, it gives
+     * 18 kHz -- which in this band would look exactly like the beacon the
+     * caller was trying to test for, and would "pass". */
+    if (!s_ready || hz <= 0 || hz >= RATE / 2) {
+        ESP_LOGW(TAG, "cannot emit %d Hz: the ceiling at %d Hz sampling is "
+                      "%d Hz", hz, RATE, RATE / 2);
+        return;
+    }
+    tone(hz, ms);
+    rest(20);
+}
+
 void observore_audio_selftest(void)
 {
     if (!s_ready) {
@@ -229,5 +337,9 @@ void observore_audio_selftest(void)
 {
     ESP_LOGW(TAG, "this board has no speaker");
 }
+void observore_audio_emit(int hz, int ms) { (void)hz; (void)ms; }
+void observore_audio_tone_start(int hz, int p) { (void)hz; (void)p; }
+void observore_audio_tone_chunk(int ms) { (void)ms; }
+void observore_audio_tone_stop(void) {}
 
 #endif

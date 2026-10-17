@@ -552,6 +552,9 @@ void app_main(void)
     observore_led_init();
     observore_audio_init();
     observore_mic_init();
+#if CONFIG_OBSERVORE_MIC_SELFTEST
+    observore_mic_selftest();
+#endif
 #if CONFIG_OBSERVORE_AUDIO_SELFTEST
     observore_audio_selftest();
 #endif

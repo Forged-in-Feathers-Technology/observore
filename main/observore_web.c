@@ -1297,26 +1297,59 @@ static esp_err_t audio_handler(httpd_req_t *req)
 static esp_err_t mic_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        char body[192];
+        static char body[1600];
         int  hz = 0;
         int64_t ago = 0;
         bool seen = observore_mic_last(&hz, &ago);
-        snprintf(body, sizeof(body),
+        int n = snprintf(body, sizeof(body),
                  "{\"ok\":true,\"listening\":%s,\"episodes\":%u,"
                  "\"last_hz\":%d,\"last_seconds_ago\":%lld,"
-                 "\"band_hz\":[%d,%d]}",
+                 "\"band_hz\":[%d,%d],\"ratio\":%.0f,\"bands\":[",
                  observore_mic_enabled() ? "true" : "false",
                  (unsigned)observore_mic_count(), seen ? hz : 0,
                  seen ? (long long)ago : -1,
                  OBSERVORE_US_BASE_HZ,
                  OBSERVORE_US_BASE_HZ +
-                     (OBSERVORE_US_BINS - 1) * OBSERVORE_US_STEP_HZ);
+                     (OBSERVORE_US_BINS - 1) * OBSERVORE_US_STEP_HZ,
+                 (double)OBSERVORE_US_RATIO);
+
+        /* The live levels, because "it detected nothing" has several very
+         * different causes and they are indistinguishable without them: a
+         * microphone that is not wired reads all zeros, a quiet room reads
+         * a sensible floor with nothing above it, and a source too faint to
+         * matter reads a raised bin that never clears the ratio. */
+        float power[OBSERVORE_US_BINS], floor_[OBSERVORE_US_BINS];
+        int bins = observore_mic_bands(power, floor_, OBSERVORE_US_BINS);
+        for (int b = 0; b < bins && n > 0 && n < (int)sizeof(body) - 64; b++) {
+            n += snprintf(body + n, sizeof(body) - n,
+                          "%s{\"hz\":%d,\"power\":%.3e,\"floor\":%.3e}",
+                          b ? "," : "",
+                          OBSERVORE_US_BASE_HZ + b * OBSERVORE_US_STEP_HZ,
+                          (double)power[b], (double)floor_[b]);
+        }
+        if (n > 0 && n < (int)sizeof(body) - 3) {
+            snprintf(body + n, sizeof(body) - n, "]}");
+        }
         return send_json(req, body);
     }
 
     char value[8];
+
+    /* The self-test, which is why this is a POST with two different jobs:
+     * "prove the detector" belongs next to "turn the detector on", and a
+     * separate route for it would be a separate thing to find. */
+    if (query_param(req, "selftest", value, sizeof(value))) {
+        int heard = observore_mic_selftest();
+        char body[160];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"heard\":%d,\"note\":\"tones emitted by "
+                 "this board's own speaker and heard back on its microphone; "
+                 "see the log for the per-band levels\"}", heard);
+        return send_json(req, body);
+    }
+
     if (!query_param(req, "on", value, sizeof(value))) {
-        return fail(req, "on is required (1 or 0)");
+        return fail(req, "on is required (1 or 0), or selftest=1");
     }
     bool want = value[0] == '1' || value[0] == 't' || value[0] == 'y';
     observore_mic_set_enabled(want);
