@@ -1267,7 +1267,7 @@ hearing — around 18 to 20 kHz — from a shop display, a television advert or 
 web page, and listen for it on a phone whose app holds the microphone
 permission. Hearing the same tone links the two: the phone in your pocket and
 the screen you walked past. It is a surveillance channel that works precisely
-because nobody can hear it.
+because almost nobody can hear it.
 
 Observore watches radios. This is the same job in a different medium, and on
 the one board here with a microphone it was a channel the hardware could

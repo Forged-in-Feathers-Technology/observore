@@ -49,3 +49,40 @@ void observore_audio_level(observore_level_t from, observore_level_t to);
 /* One tone, blocking, for bring-up. Bypasses the enabled flag, because its
  * whole job is to answer "is the speaker plugged in". */
 void observore_audio_selftest(void);
+
+/* Emit one tone of `hz` for `ms`, bypassing the enabled flag.
+ *
+ * For the ultrasonic self-test: the speaker and the microphone are
+ * centimetres apart on this board, so the board can prove its own beacon
+ * detector against a real sound in real air rather than against a synthetic
+ * buffer. Above about 17 kHz it is beyond most people's hearing, which is
+ * why it is allowed to ignore the sound setting -- though "most" is doing
+ * real work in that sentence, and refusing to run it unless the owner had
+ * first turned alerts on would be refusing to let them check that a privacy
+ * feature works. */
+void observore_audio_emit(int hz, int ms);
+
+/* A continuous tone, played in short chunks so the caller can do something
+ * between them -- specifically, listen.
+ *
+ * observore_audio_emit() blocks until the DMA ring has swallowed the whole
+ * tone, which means that by the time it returns the tone has essentially
+ * finished. A self-test that called it and then started reading the
+ * microphone was listening to the silence afterwards, and reported that the
+ * speaker could not reach the band when the real fault was that nobody was
+ * playing anything by the time anybody listened.
+ *
+ * `start` sets the frequency and `chunk` queues roughly `ms` more of it;
+ * interleave chunk with a read and the tone is still sounding when the
+ * block is captured. `stop` releases it.
+ *
+ * `peak` overrides the volume setting, 0 to use it. That override exists for
+ * the ultrasonic self-test and is deliberately allowed past the normal
+ * ceiling, because the ceiling is there to protect ears and a tone nobody
+ * can hear does not threaten any. A small 8-ohm driver's response at 19 kHz
+ * is tens of decibels down on its response at 1 kHz, so reaching the
+ * microphone at all takes a drive level that would be unbearable if it were
+ * audible -- and is not, because it is not. */
+void observore_audio_tone_start(int hz, int peak);
+void observore_audio_tone_chunk(int ms);
+void observore_audio_tone_stop(void);

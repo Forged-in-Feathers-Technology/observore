@@ -1223,6 +1223,65 @@ config OBSERVORE_MIC_WS
     int "I2S word select from the microphone"
     depends on OBSERVORE_MIC
     default 2
+config OBSERVORE_MIC_SELFTEST
+    bool "Prove the beacon detector at boot"
+    depends on OBSERVORE_MIC && OBSERVORE_AUDIO
+    default n
+    help
+        Sweeps eight tones from 17.5 to 21 kHz out of this board's own
+        speaker and listens for each on its own microphone, reporting which
+        band each one came back in.
+
+        That exercises the whole chain -- I2S out, amplifier, speaker, air,
+        microphone, I2S in, filter bank -- where a synthetic buffer exercises
+        only the last of those, and the host suite already does that.
+
+        Above most people's hearing, but not guaranteed silent: the lowest
+        tones are audible to some, and an abrupt start or stop is broadband
+        and audible to anybody, which is why the tones are ramped.
+
+        Needs both the speaker and the microphone -- a board with one and
+        not the other cannot test itself this way.
+
+config OBSERVORE_MIC_SELFTEST_PEAK
+    int "Self-test drive level, of 32767"
+    # On OBSERVORE_MIC, not on OBSERVORE_MIC_SELFTEST, because the self-test
+    # can be run at any time through POST /api/mic?selftest=1 -- the boot
+    # option only decides whether it also runs unprompted. Tying the drive
+    # level to the boot option left the constant undefined in every normal
+    # build, which the bench never saw because the bench always enabled it.
+    depends on OBSERVORE_MIC
+    range 500 20000
+    default 6000
+    help
+        A trade with no single right answer.
+
+        Too low and a small speaker's poor response above 17 kHz means
+        nothing reaches the microphone, so the test proves nothing. Too high
+        and the amplifier distorts: measured at 12000, a 17.5 kHz tone
+        produced a response at 18.75 kHz ten times larger than at its own
+        frequency -- a distortion product, not a signal -- and the sweep was
+        audible across the room as a low hum even though every tone in it
+        was individually inaudible.
+
+        Measured on the 1.85, same room, same board:
+
+          drive 12000   2 of 8 tones fired the detector; audible as a low
+                        hum across the room
+          drive  6000   1 of 8; quieter
+
+        Either proves the chain. Turn it down if you can hear the sweep,
+        up if nothing reaches the microphone at all.
+
+        One thing measured here is not explained: playing 17.5 kHz produces
+        a response around 18.5-18.75 kHz an order of magnitude larger than
+        at 17.5 itself, at both drive levels. It is not a harmonic and not
+        an alias of one, and a uniform sample-rate error is ruled out
+        because 21 kHz lands in its own band correctly. Most likely a
+        breakup mode of the driver or a resonance of the case. It is
+        recorded rather than explained because guessing at it would be
+        guessing.
+
 config OBSERVORE_MIC_SD
     int "I2S data from the microphone"
     depends on OBSERVORE_MIC
