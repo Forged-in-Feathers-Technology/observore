@@ -3,7 +3,7 @@
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
-A passive counter-surveillance detector for nine ESP32 boards, in two
+A passive counter-surveillance detector for ten ESP32 boards, in two
 families: headless sensors — the [Seeed Studio XIAO
 ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/), the
 dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5) and
@@ -26,7 +26,7 @@ Observer and omnivore: it eats surveillance signals.
 pocket-watch case showing a clock face, and an open case holding a bare board
 wired to a 2000 mAh lithium cell](docs/images/boards.jpg)
 
-*Five of the nine profiles, one firmware: the 2.8" and 3.5" Cheap Yellow
+*Five of the ten profiles, one firmware: the 2.8" and 3.5" Cheap Yellow
 Displays, the C5 display board that sees both bands, and the round AMOLED
 wearing its watch face — with a headless node open on its cell beside them,
 running the same build with nothing to show it on.*
@@ -66,10 +66,10 @@ makes it fit on a chip with no PSRAM, and every memory problem this project has
 had was the TLS handshake behind a notification. A screen is a personal display,
 so the trade is a fair one.
 
-Five of the nine have screens: the 2.8" board in its two panel revisions,
-the 3.5", the C5 one below, and the round one after it. See [the screen](#the-screen) for what
-they can do and [boards, which are not the same as
-chips](#boards-which-are-not-the-same-as-chips) for the profiles.
+Six of the ten have screens: the 2.8" board in its two panel revisions, the
+3.5", the C5 one below, and the two round ones after it. See [the
+screen](#the-screen) for what they can do and [boards, which are not the same
+as chips](#boards-which-are-not-the-same-as-chips) for the profiles.
 
 RockBase's **NM-CYD-C5** is a Cheap Yellow Display with an **ESP32-C5**
 behind it, and it is the first board here that both sees 5 GHz and has a
@@ -95,7 +95,7 @@ a profile meant shipping somebody else's measurements and hoping. The
 panel in the owner's hand teaches it its own bounds. See [calibrating a
 panel](docs/display.md#calibrating-a-panel).
 
-The round one is different enough to describe separately. Waveshare's
+The two round ones are different enough to describe separately. Waveshare's
 **ESP32-S3-Touch-AMOLED-1.43** is a round 1.43" AMOLED on an S3 with 16 MB of
 flash and 8 MB of octal PSRAM — capacitive touch rather than resistive, a
 hardware clock, and an **accelerometer**, which no other board here has. That
@@ -119,14 +119,24 @@ sat at full brightness through every soak run on this board.
 **Capacitive touch** removes most of what the resistive path has to do, and
 adds one requirement instead: a bare finger, or a capacitive stylus. A
 passive plastic one registers as nothing at all, correctly and permanently,
-and the device cannot tell that apart from nobody touching it. The
-FT3168 reports how many fingers are down and where each one is, already in
-panel pixels, so there is no pressure threshold, no median filter and no
-calibration: the two days of arithmetic and one wrongly accused ribbon cable
-that the Cheap Yellow Displays cost simply do not happen. It shares its two
-wires with the motion sensor and the clock, and the driver says which of the
-three answered at startup, because "the panel is not answering" and "the
-panel is not there" look identical in a log that mentions neither.
+and the device cannot tell that apart from nobody touching it. The controller
+reports how many fingers are down and where each one is, so there is no
+pressure threshold and no median filter. It shares its two wires with the
+motion sensor and the clock, and the driver says which of the three answered
+at startup, because "the panel is not answering" and "the panel is not there"
+look identical in a log that mentions neither.
+
+What this paragraph used to claim, and no longer does, is that a capacitive
+panel needs **no calibration** — that it reports panel pixels and the two days
+of arithmetic the Cheap Yellow Displays cost simply do not happen here. That
+was a statement about one chip's factory configuration dressed up as a
+property of the interface. A CST816 reports in whatever range its firmware was
+configured for, which on a round panel need not be the panel's own, and the
+assumption had been written into three places at once: the mapping, the raw
+accessor a calibration reads, and the settings page that offers the button.
+All three had to be wrong together for a capacitive panel to have no way of
+being told it was misaligned. Calibration is offered wherever there is a touch
+panel now.
 
 **A round screen** is the first one here that is not a rectangle, and the text
 grid handles it by not trying to be clever. The largest square inside a circle
@@ -138,6 +148,29 @@ seventy pixels below the button bar are where a finger aiming at the bar
 actually lands. Text does not reflow around a curve legibly at eight
 pixels a character, and a page of readings clipped at the corners is worse
 than one that is smaller and whole.
+
+Waveshare's **ESP32-S3-Touch-LCD-1.85** is the other round one: a 360x360 LCD
+on the same S3, with the same hardware clock and accelerometer, and two things
+no other board here has — a **speaker** and a **microphone**.
+
+Almost everything about it is behind something else. Its ST77916 panel is
+driven over four data lines like the AMOLED, but *both* its reset line and the
+touch controller's are behind a TCA9554 I/O expander rather than on pins, and
+the touch controller sits on a second I2C bus of its own. The expander's two
+remaining lines are the accelerometer's interrupt outputs, so lines are
+claimed as outputs on demand rather than all at once.
+
+The screen is smaller than the 1.43" in pixels and larger in millimetres,
+which matters more than it sounds. 360 pixels across 47 mm is 7.7 per
+millimetre against the AMOLED's 12.8, so text that is cramped on one is
+comfortable on the other, and a keyboard key that is unusable at 1.9 mm is
+merely small at 4.2.
+
+The speaker and microphone are what make it the only board that can [sound an
+alert](#sound) and the only one that can look for [ultrasonic
+beacons](#ultrasonic-beacons) — and, because they sit centimetres apart, the
+only one that can prove its own beacon detector by emitting a tone and
+listening for it.
 
 ## What it does
 
@@ -514,7 +547,7 @@ firmware does, not legal advice.
 
 ## Getting started
 
-You need one of the nine supported boards and a USB cable. The whole first run
+You need one of the ten supported boards and a USB cable. The whole first run
 takes about ten minutes, most of it waiting.
 
 The browser flasher detects the chip and offers the builds that fit it. There is

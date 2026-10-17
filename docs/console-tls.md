@@ -48,7 +48,7 @@ wearing a padlock.
 
 ## What this project has that most devices do not
 
-A screen. Five of the nine boards have one.
+A screen. Six of the ten boards have one.
 
 So the certificate is self-signed and generated on the device, and its
 fingerprint is shown somewhere an attacker on the network cannot reach: on the

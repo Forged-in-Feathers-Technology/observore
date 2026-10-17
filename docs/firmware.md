@@ -64,7 +64,7 @@ itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
 
-The board matters as much as the version. Three of the nine boards here are
+The board matters as much as the version. Three of the ten boards here are
 ESP32-C5s and three are the same classic ESP32 behind different glass, and none
 of those images are interchangeable, which is why the installer offers a picker
 rather than deciding from the chip. A device updating itself has the same
