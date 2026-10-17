@@ -134,7 +134,8 @@ there is none, and where to set it.
 
 ## Reading the time off a GPS
 
-Eight of the nine boards have no clock chip. They cold boot into 1970 and stay
+Eight of the ten boards have no clock chip -- every one but the two round
+Waveshare panels. They cold boot into 1970 and stay
 there until a browser at the console or SNTP tells them otherwise — and a
 device on a camera VLAN with no route out never hears from an NTP server, which
 is the same isolation that stops a notification reaching its provider.
