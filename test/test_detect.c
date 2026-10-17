@@ -5748,17 +5748,56 @@ static void test_keyboard(void)
      * width of its glass in millimetres. The widths are the panels' active
      * areas from the vendors' own specifications; they are here because
      * nothing else in the firmware knows how big a pixel is. */
-    static const struct { const char *board; int cols; int px; double mm; } PANELS[] = {
-        { "cyd-2432s028r", 40, 320, 56.9 },
-        { "nm-cyd-c5",     40, 320, 56.9 },
-        { "cyd-3248s035r", 60, 480, 73.2 },
-        { "amoled-143",    41, 466, 36.3 },
-        { "lcd-185",       31, 360, 46.9 },
+    static const struct {
+        const char *board;
+        int cols;          /* the text grid */
+        int px;            /* panel width */
+        double mm;         /* active width of the glass */
+        int round_h;       /* panel height if round, else 0 */
+        int inset_y;
+        int rows;
+    } PANELS[] = {
+        { "cyd-2432s028r", 40, 320, 56.9,   0,  0, 15 },
+        { "nm-cyd-c5",     40, 320, 56.9,   0,  0, 15 },
+        { "cyd-3248s035r", 60, 480, 73.2,   0,  0, 20 },
+        { "amoled-143",    41, 466, 36.3, 466, 73, 20 },
+        { "lcd-185",       31, 360, 46.9, 360, 53, 15 },
     };
 
     for (size_t p = 0; p < sizeof(PANELS) / sizeof(PANELS[0]); p++) {
-        int cols = PANELS[p].cols;
         double px_per_mm = PANELS[p].px / PANELS[p].mm;
+
+        /* The width the keyboard is actually drawn at, which on a round
+         * panel is wider than the text grid.
+         *
+         * This used to test PANELS[p].cols -- the grid -- while the firmware
+         * drew at the chord of the circle across the keyboard's band. The
+         * test was therefore pessimistic: safe, in that it could not pass
+         * something that would fail in practice, but the millimetre figures
+         * it printed were not the ones anybody's finger would meet. Same
+         * arithmetic as the firmware now, from the same header. */
+        int cols = PANELS[p].cols;
+        if (PANELS[p].round_h) {
+            const int ROWS_ = PANELS[p].rows, BAR = 3;
+            int act_rows = 2;
+            int act_gap  = ROWS_ >= 18 ? 1 : 0;
+            int act_top  = ROWS_ - BAR - act_gap - act_rows;
+            int act_row  = act_top + act_rows - 1;
+            int kb_top   = act_top - 4 * 2;
+            int band = observore_chord_cols(
+                PANELS[p].px,
+                PANELS[p].inset_y + kb_top * 16,
+                PANELS[p].inset_y + (act_row + 1) * 16, 8);
+            if (band > PANELS[p].px / 8) band = PANELS[p].px / 8;
+            if (band > cols) cols = band;
+
+            /* The band must stay inside the glass: every column drawn has
+             * to fall within the chord at the band's narrowest row, or the
+             * outermost keys are off the circle and cannot be pressed. */
+            CHECK(cols * 8 <= PANELS[p].px,
+                  "%s: keyboard band %d cols is wider than the panel",
+                  PANELS[p].board, cols);
+        }
         int narrowest = cols;
 
         for (int layer = 0; layer < OBSERVORE_KB_LAYERS; layer++) {
@@ -5819,8 +5858,9 @@ static void test_keyboard(void)
         double mm = narrowest * 8 / px_per_mm;
         CHECK(mm >= 2.4, "%s: narrowest key is %.1f mm (%d columns)",
               PANELS[p].board, mm, narrowest);
-        printf("   %-16s %2d cols, narrowest key %d cols = %.1f mm\n",
-               PANELS[p].board, cols, narrowest, mm);
+        printf("   %-16s grid %2d, keyboard %2d cols, narrowest key %d "
+               "cols = %.1f mm\n", PANELS[p].board, PANELS[p].cols, cols,
+               narrowest, mm);
 
         /* The settings page's action strip, which shares the width the same
          * way and got it wrong the same way.
