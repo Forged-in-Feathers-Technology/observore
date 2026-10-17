@@ -1139,4 +1139,95 @@ config OBSERVORE_GPS_BAUD
         9600 is what almost every NMEA module ships with, and what the bench
         module answered on.
 
+menu "Audio"
+
+config OBSERVORE_AUDIO
+    bool "The board has a speaker"
+    default n
+    help
+        An I2S DAC into a power amplifier into a speaker. Only the Waveshare
+        1.85" round LCD has the parts here: a PCM5101 on GPIO 48/38/47 and an
+        8-ohm speaker on a header.
+
+        The DAC has no I2C presence, so unlike every other chip on that board
+        it cannot be probed -- the boot scan will never show it, and a speaker
+        that is not plugged into its header looks exactly like one that is.
+        OBSERVORE_AUDIO_SELFTEST is how you find out.
+
+        Whether it ever makes a sound is a separate, runtime setting that
+        starts off. This device's posture is to not announce itself, and a
+        chirp when a threat is spotted tells the room you spotted them.
+
+if OBSERVORE_AUDIO
+
+config OBSERVORE_AUDIO_BCK
+    int "I2S bit clock"
+    default 48
+config OBSERVORE_AUDIO_LRCK
+    int "I2S word select"
+    default 38
+config OBSERVORE_AUDIO_DIN
+    int "I2S data into the DAC"
+    default 47
+
+config OBSERVORE_AUDIO_VOLUME
+    int "Starting volume (1-100)"
+    range 1 100
+    default 20
+    help
+        Not a percentage of anything you can hear. The ceiling at 100 is a
+        twelfth of full scale, because this drives a 2W amplifier into an
+        8-ohm speaker and full scale is painful in a room.
+
+        The first version of this used a fifth of full scale on the reasoning
+        that a fifth sounds modest, and it was loud enough that the speaker
+        got unplugged. The number that matters is what the amplifier does with
+        it, not the fraction of the sample range.
+
+        A detector should be inconspicuous. Start quiet and turn it up.
+
+config OBSERVORE_AUDIO_SELFTEST
+    bool "Play two short notes at boot"
+    default n
+    help
+        Bring-up only. The speaker cannot be detected, so this is the only way
+        to tell a working one from a lead that is not in the header.
+
+endif
+
+config OBSERVORE_MIC
+    bool "The board has a microphone"
+    default n
+    help
+        Used for one thing: looking for ultrasonic cross-device tracking
+        beacons, the inaudible 18-20 kHz tones some advertising and retail
+        analytics systems use to link a phone to a screen it walked past.
+        That is a surveillance channel this hardware can see and was not
+        looking at.
+
+        It does not record. No audio is kept beyond the 20 ms block being
+        analysed, none is written to flash and none is sent anywhere; what
+        survives a block is twenty band energies and a counter. The bands
+        start at 17 kHz, above speech and above almost all music, so the
+        frequencies a conversation lives in are never computed at all.
+
+        Off by default and gated again at runtime, because a
+        counter-surveillance device with an open microphone is a listening
+        device, and meaning well is not a property its owner can verify.
+
+config OBSERVORE_MIC_SCK
+    int "I2S bit clock from the microphone"
+    depends on OBSERVORE_MIC
+    default 15
+config OBSERVORE_MIC_WS
+    int "I2S word select from the microphone"
+    depends on OBSERVORE_MIC
+    default 2
+config OBSERVORE_MIC_SD
+    int "I2S data from the microphone"
+    depends on OBSERVORE_MIC
+    default 39
+
+endmenu
+
 endmenu

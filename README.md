@@ -42,6 +42,8 @@ running the same build with nothing to show it on.*
 - [Joining your network](#joining-your-network)
 - [Building](#building)
 - [The screen](#the-screen)
+- [Sound](#sound)
+- [Ultrasonic beacons](#ultrasonic-beacons)
 - [Notifications](#notifications)
 - [How it works, in detail](#how-it-works-in-detail)
 - [Credit](#credit)
@@ -1228,6 +1230,88 @@ statement about a whole room; one tap on one row is not.
 Both confirmations lapse after five seconds and are cancelled by leaving the
 page, so a press nobody meant — a resistive panel under a sleeve, a board
 face-down on a desk — does nothing.
+
+## Sound
+
+Only the Waveshare 1.85" round LCD has the parts: a PCM5101 I2S DAC into a
+power amplifier into an 8-ohm speaker on a header.
+
+**It is silent until you ask for it**, and that is a considered position
+rather than a conservative default. This device's whole posture is to not
+announce itself — the watch face exists so that a thing glanced at in a
+pocket is less conspicuous than one showing a list of everybody's Bluetooth
+addresses — and a chirp when a threat appears tells the room you spotted
+them. But the posture is not universal: a detector left watching an empty
+flat has nobody to hide from, and a sound carries from the next room where a
+screen does not.
+
+```
+curl -X POST 'https://observore/api/audio?on=1&vol=20'
+curl 'https://observore/api/audio'      # {"sounding":true,"volume":20}
+```
+
+Volume runs 1 to 100, and 100 is not loud: the ceiling is a twelfth of full
+scale, because what it drives is a 2 W amplifier. The first version of this
+used a fifth of full scale, reasoning that a fifth sounds modest. It was loud
+enough that the speaker got pulled out of its socket. The number that matters
+is what the amplifier does with the sample, not the fraction of the range.
+
+Two notes rising on the way to **caution**, three on the way to **alert**.
+Nothing on the way back down: a device that chirps when it relaxes chirps
+twice as often for no added information.
+
+## Ultrasonic beacons
+
+Some advertising and retail-analytics systems emit a short tone just above
+hearing — around 18 to 20 kHz — from a shop display, a television advert or a
+web page, and listen for it on a phone whose app holds the microphone
+permission. Hearing the same tone links the two: the phone in your pocket and
+the screen you walked past. It is a surveillance channel that works precisely
+because nobody can hear it.
+
+Observore watches radios. This is the same job in a different medium, and on
+the one board here with a microphone it was a channel the hardware could
+already see and was not looking at.
+
+```
+curl 'https://observore/api/mic'        # is this thing listening?
+curl -X POST 'https://observore/api/mic?on=1'
+```
+
+**What it does not do.** It does not record. No audio is kept beyond the 20
+millisecond block being analysed, none is written to flash, and none is sent
+anywhere; what survives a block is twenty band energies and a counter. There
+is no buffer to grow, no file to open and no API that returns a sample.
+
+A counter-surveillance device that keeps a microphone open is a listening
+device, and "it means well" is not a property the person holding it can
+check. What they can check is that the code has nowhere to put the audio —
+and that the analysis **starts at 17 kHz**, above speech and above almost all
+music, so the frequencies a conversation lives in are never computed at all.
+That is structural, not a policy: the twenty filters are evaluated at twenty
+fixed frequencies and nothing else is ever calculated.
+
+It is off at build time on every board but one, off again at runtime, and
+`GET /api/mic` answers the question directly rather than making you infer it
+from a build.
+
+**How it decides.** A bank of twenty [Goertzel
+filters](https://en.wikipedia.org/wiki/Goertzel_algorithm) at 250 Hz spacing
+from 17.0 to 21.75 kHz, one 960-sample block at a time. A bin has to stand
+eight times above the floor *that room* taught it, and stay there for ten
+consecutive blocks — 200 ms — before it counts. A beacon is emitted to be
+detected, so it lasts; a key, a coin or a camera shutter is a broadband click
+that is over within one block.
+
+The floor learns only from blocks already judged quiet. Learning from every
+block would let a tone held long enough raise its own floor until it stopped
+being a tone, which is the exact failure a persistent emitter would exploit.
+
+960 samples and not a round 1024, because a rectangular-window Goertzel is
+sharp only where `N·f/Fs` is a whole number. At 1024 every target lands on a
+fractional bin and the filters leak across the band — measured, a loud 8 kHz
+tone was reported as a beacon. At 960 each 250 Hz step is exactly five bins
+and that same tone leaks twelve orders of magnitude down.
 
 ## Notifications
 

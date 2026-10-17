@@ -24,6 +24,8 @@
 #include "observore_history.h"
 #include "observore_improv.h"
 #include "observore_led.h"
+#include "observore_audio.h"
+#include "observore_mic.h"
 #include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_rtc.h"
@@ -249,6 +251,8 @@ static observore_status_t publish(void)
                  observore_level_name(s_last_level), observore_level_name(st.level),
                  st.score, st.device_count);
         observore_notify_level(s_last_level, st.level, st.score);
+        /* Sound only on the way up, and only if somebody turned it on. */
+        observore_audio_level(s_last_level, st.level);
         s_last_level = st.level;
     }
     return st;
@@ -546,6 +550,11 @@ void app_main(void)
 
     observore_track_init();
     observore_led_init();
+    observore_audio_init();
+    observore_mic_init();
+#if CONFIG_OBSERVORE_AUDIO_SELFTEST
+    observore_audio_selftest();
+#endif
 
     /* NVS is brought up by observore_wifi_init(); the mute store reads from it. */
     ESP_ERROR_CHECK(observore_wifi_init());

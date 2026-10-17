@@ -16,7 +16,8 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
            ../main/observore_httpscert.c \
            ../main/observore_watchcfg.c \
            ../main/observore_tz.c \
-           ../main/observore_gps.c
+           ../main/observore_gps.c \
+           ../main/observore_ultrasound.c
 
 # Headers count as sources here.  Most of what this suite pins down lives in
 # them -- class weights, the verdict thresholds, the follower ceiling -- and
@@ -26,7 +27,7 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
 HDRS     = $(wildcard ../main/*.h)
 
 run: $(SRCS) $(HDRS) ../main/observore_oui_table.h
-	$(CC) $(CFLAGS) $(INCS) $(SRCS) -o run
+	$(CC) $(CFLAGS) $(INCS) $(SRCS) -o run -lm
 
 ../main/observore_oui_table.h:
 	cd .. && python3 tools/gen_oui_table.py

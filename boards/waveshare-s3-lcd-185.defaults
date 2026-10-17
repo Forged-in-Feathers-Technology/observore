@@ -155,3 +155,35 @@ CONFIG_OBSERVORE_WATCHFACE=y
 CONFIG_OBSERVORE_LED_NONE=y
 # The BOOT button, the strapping pin every S3 has.
 CONFIG_OBSERVORE_BUTTON_GPIO=0
+
+# The speaker: a PCM5101 I2S DAC into a power amplifier into an 8-ohm 2W
+# driver on a header. The only board here with one.
+#
+# It cannot be detected. The DAC has no I2C address, so the boot scan that
+# finds the clock, the accelerometer, the expander and the touch controller
+# will never mention it -- and a speaker whose lead is not in the header
+# looks identical to one that is. OBSERVORE_AUDIO_SELFTEST is the only way
+# to tell, and it is a build option because listening is the test.
+#
+# Whether it ever sounds is a runtime setting (POST /api/audio?on=1) and it
+# starts off: a detector that chirps when it spots something has told the
+# room it spotted them.
+CONFIG_OBSERVORE_AUDIO=y
+CONFIG_OBSERVORE_AUDIO_BCK=48
+CONFIG_OBSERVORE_AUDIO_LRCK=38
+CONFIG_OBSERVORE_AUDIO_DIN=47
+
+# The microphone, for one purpose: ultrasonic cross-device tracking beacons.
+#
+# Separate from the speaker above -- different pins, different I2S channel,
+# and deliberately a separate build option, because wanting a chirp when a
+# threat appears and wanting an open microphone are not the same decision.
+#
+# It does not record. See observore_ultrasound.h for the band and the
+# reasoning; the short version is that the analysis starts at 17 kHz, so the
+# frequencies speech lives in are never computed. Listening is off until
+# POST /api/mic?on=1, and GET /api/mic answers whether it is on.
+CONFIG_OBSERVORE_MIC=y
+CONFIG_OBSERVORE_MIC_SCK=15
+CONFIG_OBSERVORE_MIC_WS=2
+CONFIG_OBSERVORE_MIC_SD=39
