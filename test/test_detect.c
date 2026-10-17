@@ -34,6 +34,8 @@
 #include "observore_tap.h"
 #include "observore_cells.h"
 #include "observore_keyboard.h"
+#include <math.h>
+#include "observore_ultrasound.h"
 #include "observore_watch.h"
 #include <limits.h>
 #include "observore_surroundings.h"
@@ -5878,6 +5880,156 @@ static void test_keyboard(void)
     }
 }
 
+/* ---------------------------------------------------------------- */
+
+/* Filling a block with a tone, plus optional broadband noise, so the
+ * analyser can be fed something whose answer is known. */
+static void us_fill(int16_t *buf, size_t n, double hz, double amp,
+                    double noise, unsigned *seed)
+{
+    for (size_t i = 0; i < n; i++) {
+        double v = amp * sin(2.0 * 3.14159265358979323846 * hz *
+                             (double)i / OBSERVORE_US_RATE);
+        if (noise > 0) {
+            *seed = *seed * 1103515245u + 12345u;
+            double r = (double)((*seed >> 16) & 0x7FFF) / 16383.5 - 1.0;
+            v += noise * r;
+        }
+        double s = v * 32767.0;
+        buf[i] = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
+    }
+}
+
+/* Feed the same block repeatedly and report which bin fired, if any. */
+static int us_run(observore_us_t *u, const int16_t *buf, size_t n, int blocks)
+{
+    int hit = -1;
+    for (int i = 0; i < blocks; i++) {
+        int b = observore_us_feed(u, buf, n);
+        if (b >= 0 && hit < 0) {
+            hit = b;
+        }
+    }
+    return hit;
+}
+
+static void test_ultrasound(void)
+{
+    banner("ultrasonic beacon detection");
+
+    static int16_t buf[OBSERVORE_US_BLOCK];
+    unsigned seed = 1;
+    observore_us_t u;
+
+    /* The bins cover what the schemes in the literature use, and stop below
+     * the Nyquist limit of the sample rate. */
+    CHECK(observore_us_bin_hz(0) == 17000, "first bin is %d Hz",
+          observore_us_bin_hz(0));
+    CHECK(observore_us_bin_hz(OBSERVORE_US_BINS - 1) < OBSERVORE_US_RATE / 2,
+          "top bin %d Hz is at or above Nyquist %d",
+          observore_us_bin_hz(OBSERVORE_US_BINS - 1), OBSERVORE_US_RATE / 2);
+    CHECK(observore_us_bin_hz(0) > 16000,
+          "the band must start above speech and music; it starts at %d",
+          observore_us_bin_hz(0));
+
+    /* Silence reports nothing, however long it runs. The seeding block is
+     * what stops a cold start announcing twenty beacons at once. */
+    observore_us_reset(&u);
+    memset(buf, 0, sizeof(buf));
+    CHECK(us_run(&u, buf, OBSERVORE_US_BLOCK, 100) < 0,
+          "silence reported a beacon");
+
+    /* A 19 kHz tone in quiet is found, in its own bin. 19000 is bin 8. */
+    observore_us_reset(&u);
+    memset(buf, 0, sizeof(buf));
+    observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);     /* seed on quiet */
+    us_fill(buf, OBSERVORE_US_BLOCK, 19000, 0.05, 0, &seed);
+    int hit = us_run(&u, buf, OBSERVORE_US_BLOCK, OBSERVORE_US_RUNS + 2);
+    CHECK(hit == 8, "19 kHz landed in bin %d (%d Hz), wanted bin 8", hit,
+          hit >= 0 ? observore_us_bin_hz(hit) : 0);
+
+    /* It is not reported before it has persisted: a tone present for fewer
+     * blocks than the run threshold is a click, not a beacon. */
+    observore_us_reset(&u);
+    memset(buf, 0, sizeof(buf));
+    observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);
+    us_fill(buf, OBSERVORE_US_BLOCK, 19000, 0.05, 0, &seed);
+    CHECK(us_run(&u, buf, OBSERVORE_US_BLOCK, OBSERVORE_US_RUNS - 1) < 0,
+          "a tone shorter than the run threshold was reported");
+
+    /* And it is reported once, not once per block, however long it is held.
+     * A beacon sounding for a minute is one finding. */
+    observore_us_reset(&u);
+    memset(buf, 0, sizeof(buf));
+    observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);
+    us_fill(buf, OBSERVORE_US_BLOCK, 19000, 0.05, 0, &seed);
+    int fired = 0;
+    for (int i = 0; i < 400; i++) {
+        if (observore_us_feed(&u, buf, OBSERVORE_US_BLOCK) >= 0) {
+            fired++;
+        }
+    }
+    CHECK(fired == 1, "a held tone fired %d times, wanted 1", fired);
+
+    /* A tone held indefinitely must not train its own floor up until it
+     * stops counting as a tone. The floor learns only from quiet blocks, so
+     * the run keeps climbing for as long as the tone is really there --
+     * otherwise a persistent emitter simply waits the detector out. */
+    CHECK(u.runs[8] >= 400, "the run stopped counting at %u while the tone "
+          "was still sounding", (unsigned)u.runs[8]);
+
+    /* Speech and music live below the band and must not reach it. 8 kHz at
+     * a level far above the beacon above. */
+    observore_us_reset(&u);
+    memset(buf, 0, sizeof(buf));
+    observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);
+    us_fill(buf, OBSERVORE_US_BLOCK, 8000, 0.8, 0, &seed);
+    CHECK(us_run(&u, buf, OBSERVORE_US_BLOCK, 60) < 0,
+          "a loud 8 kHz tone -- the range speech and music live in -- was "
+          "reported as an ultrasonic beacon");
+
+    /* Broadband noise raises every bin together and is not a tone. This is
+     * the room, a fan, a hand over the microphone. */
+    observore_us_reset(&u);
+    memset(buf, 0, sizeof(buf));
+    observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);
+    for (int i = 0; i < 80; i++) {
+        us_fill(buf, OBSERVORE_US_BLOCK, 0, 0, 0.3, &seed);
+        observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);
+    }
+    int noise_hits = 0;
+    for (int i = 0; i < 80; i++) {
+        us_fill(buf, OBSERVORE_US_BLOCK, 0, 0, 0.3, &seed);
+        if (observore_us_feed(&u, buf, OBSERVORE_US_BLOCK) >= 0) {
+            noise_hits++;
+        }
+    }
+    CHECK(noise_hits == 0, "broadband noise produced %d beacon(s)",
+          noise_hits);
+
+    /* Every documented beacon frequency lands in the band and in a distinct
+     * bin -- 18, 18.5, 19, 19.5, 20 and 21 kHz. */
+    static const int SCHEMES[] = {18000, 18500, 19000, 19500, 20000, 21000};
+    int last = -1;
+    for (size_t i = 0; i < sizeof(SCHEMES) / sizeof(SCHEMES[0]); i++) {
+        observore_us_reset(&u);
+        memset(buf, 0, sizeof(buf));
+        observore_us_feed(&u, buf, OBSERVORE_US_BLOCK);
+        us_fill(buf, OBSERVORE_US_BLOCK, SCHEMES[i], 0.05, 0, &seed);
+        int b = us_run(&u, buf, OBSERVORE_US_BLOCK, OBSERVORE_US_RUNS + 2);
+        CHECK(b >= 0, "%d Hz was not detected", SCHEMES[i]);
+        CHECK(b != last, "%d Hz shares a bin with the previous scheme",
+              SCHEMES[i]);
+        if (b >= 0) {
+            int err = observore_us_bin_hz(b) - SCHEMES[i];
+            CHECK(err > -OBSERVORE_US_STEP_HZ && err < OBSERVORE_US_STEP_HZ,
+                  "%d Hz reported as bin %d (%d Hz)", SCHEMES[i], b,
+                  observore_us_bin_hz(b));
+        }
+        last = b;
+    }
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -5947,6 +6099,7 @@ int main(void)
     test_timezone();
     test_gps();
     test_keyboard();
+    test_ultrasound();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

@@ -22,6 +22,9 @@
 #include "observore_tz.h"
 #include "observore_update.h"
 #include "observore_display.h"
+#include "observore_audio.h"
+#include "observore_mic.h"
+#include "observore_ultrasound.h"
 #include "observore_heapwatch.h"
 #include "observore_runs.h"
 #include "observore_web.h"
@@ -1246,6 +1249,83 @@ static esp_err_t bright_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* Sound on or off, and whether this board can make any.
+ *
+ * A POST rather than a build option because the answer changes with where the
+ * device is standing: the same unit wants to be silent in a cafe and audible
+ * two rooms away at home. It persists, and it starts off. */
+static esp_err_t audio_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        char body[128];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"sounding\":%s,\"volume\":%d}",
+                 observore_audio_enabled() ? "true" : "false",
+                 observore_audio_volume());
+        return send_json(req, body);
+    }
+
+    char value[8];
+    if (!query_param(req, "on", value, sizeof(value))) {
+        return fail(req, "on is required (1 or 0)");
+    }
+    bool want = value[0] == '1' || value[0] == 't' || value[0] == 'y';
+    /* Volume is optional and clamped by the driver; -1 leaves it alone. */
+    int volume = -1;
+    char vol[8];
+    if (query_param(req, "vol", vol, sizeof(vol))) {
+        volume = atoi(vol);
+        if (volume < 1 || volume > 100) {
+            return fail(req, "vol is 1 to 100");
+        }
+    }
+    observore_audio_set(want, volume);
+    /* Reports what actually happened rather than what was asked: a board
+     * with no speaker accepts the setting and still cannot sound, and a
+     * caller that is told "ok" either way has learned nothing. */
+    if (want && !observore_audio_enabled()) {
+        return fail(req, "this board has no speaker");
+    }
+    return ok(req);
+}
+
+/* The microphone: on or off, and what it has heard.
+ *
+ * A GET as well as a POST, unlike the speaker, because "is this thing
+ * listening" is a question the owner of a counter-surveillance device is
+ * entitled to ask it directly rather than infer from a build. */
+static esp_err_t mic_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        char body[192];
+        int  hz = 0;
+        int64_t ago = 0;
+        bool seen = observore_mic_last(&hz, &ago);
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"listening\":%s,\"episodes\":%u,"
+                 "\"last_hz\":%d,\"last_seconds_ago\":%lld,"
+                 "\"band_hz\":[%d,%d]}",
+                 observore_mic_enabled() ? "true" : "false",
+                 (unsigned)observore_mic_count(), seen ? hz : 0,
+                 seen ? (long long)ago : -1,
+                 OBSERVORE_US_BASE_HZ,
+                 OBSERVORE_US_BASE_HZ +
+                     (OBSERVORE_US_BINS - 1) * OBSERVORE_US_STEP_HZ);
+        return send_json(req, body);
+    }
+
+    char value[8];
+    if (!query_param(req, "on", value, sizeof(value))) {
+        return fail(req, "on is required (1 or 0)");
+    }
+    bool want = value[0] == '1' || value[0] == 't' || value[0] == 'y';
+    observore_mic_set_enabled(want);
+    if (want && !observore_mic_enabled()) {
+        return fail(req, "this board has no microphone");
+    }
+    return ok(req);
+}
+
 static esp_err_t update_check_handler(httpd_req_t *req)
 {
     observore_update_check_now();
@@ -1490,6 +1570,10 @@ esp_err_t observore_web_start(void)
         {"/api/update",    HTTP_POST, update_handler,     false},
         {"/api/update/check", HTTP_POST, update_check_handler, false},
         {"/api/bright",    HTTP_POST, bright_handler,     false},
+        {"/api/audio",     HTTP_POST, audio_handler,      false},
+        {"/api/audio",     HTTP_GET,  audio_handler,      false},
+        {"/api/mic",       HTTP_POST, mic_handler,        false},
+        {"/api/mic",       HTTP_GET,  mic_handler,        false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/census",    HTTP_GET,  census_handler,     false},
         {"/api/time",      HTTP_POST, time_handler,       false},
