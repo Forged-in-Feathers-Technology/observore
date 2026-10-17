@@ -962,12 +962,20 @@ $('setclock').onclick = () =>
  * database every five days across two years, with the POSIX side evaluated by
  * the C library rather than reinterpreted.
  *
- * America/Vancouver and America/Edmonton are deliberately absent. tzdata
- * 2026c has British Columbia and Alberta adopting permanent daylight saving
- * on 1 November 2026, modelled as a change of standard zone. A POSIX string
- * has no year qualifiers and cannot express a rule that changes on a date, so
- * those zones are not representable across that boundary at all. The
- * fixed-offset fallback below covers them.
+ * America/Vancouver, America/Edmonton and America/Winnipeg are deliberately
+ * absent. tzdata has British Columbia, Alberta and Manitoba adopting
+ * permanent daylight saving on 1 November 2026, modelled as a change of
+ * standard zone: after that date Winnipeg is a fixed -05:00 for good, as
+ * Vancouver is -08:00 and Edmonton -07:00. A POSIX string has no year
+ * qualifiers and cannot express a rule that changes on a date, so those
+ * zones are not representable across that boundary at all. The fixed-offset
+ * fallback below covers them.
+ *
+ * Winnipeg was missed when the other two were dropped, and the checker only
+ * started failing as the window it tests rolled forward onto the boundary --
+ * which is the useful property of checking a range of future dates rather
+ * than today. It would otherwise have shipped and then quietly started
+ * giving Manitoba an hour's error on 1 November.
  */
 const TZ_ZONES = {
   'UTC': 'UTC0',
@@ -976,7 +984,6 @@ const TZ_ZONES = {
   'America/Toronto': 'EST5EDT,M3.2.0,M11.1.0',
   'America/New_York': 'EST5EDT,M3.2.0,M11.1.0',
   'America/Chicago': 'CST6CDT,M3.2.0,M11.1.0',
-  'America/Winnipeg': 'CST6CDT,M3.2.0,M11.1.0',
   'America/Denver': 'MST7MDT,M3.2.0,M11.1.0',
   'America/Phoenix': 'MST7',
   'America/Los_Angeles': 'PST8PDT,M3.2.0,M11.1.0',
