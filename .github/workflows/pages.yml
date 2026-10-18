@@ -172,19 +172,28 @@ jobs:
       # v0.14.0 and nine boards for four hours, with the tenth board's
       # manifest returning 404 to anybody who picked it.
       #
-      # The cause was two deployments from the same commit. A `web/**` push
-      # had already deployed that SHA while v0.15.0 was still a draft, so it
-      # resolved the firmware to the newest *published* release, which was
-      # v0.14.0. Tagging the release at that same commit meant the release
-      # deployment carried an identical SHA and did not replace the
-      # artifact already serving.
+      # The cause is not known, and the first explanation written here was
+      # wrong. It said the release deployment had been deduplicated against
+      # an earlier one from the same commit -- a `web/**` push had deployed
+      # that SHA while v0.15.0 was still a draft, so it correctly served
+      # v0.14.0, and the release was tagged at that same commit.
       #
-      # Diagnosing GitHub's deduplication is not the fix. Every signal this
-      # workflow produces was green while the thing it exists to publish was
-      # wrong, so the fix is to stop believing the signals and read the
-      # page. A flasher serving firmware older than the release it claims is
-      # the one failure that matters here, and it is one HTTP request away
-      # from being provable.
+      # That reads well and the evidence refutes it: the workflow_dispatch
+      # that eventually fixed the site ran at the *same* commit, 4fa57224,
+      # and replaced the content without trouble. A same-SHA deployment can
+      # plainly succeed, so being same-SHA is not what stopped the first one.
+      #
+      # What is known is only this: the deploy reported success, the build
+      # log proves the artifact was right, and the bytes being served did
+      # not change for four hours.
+      #
+      # Which is the argument for this step rather than against it. Every
+      # signal this workflow produces was green while the thing it exists to
+      # publish was wrong. A cause nobody has identified cannot be guarded
+      # against at its source; an outcome can be checked whatever caused it.
+      # A flasher serving firmware older than the release it claims is the
+      # one failure that matters here, and it is one HTTP request away from
+      # being provable.
       - name: Read the page back
         env:
           GH_TOKEN: ${{ github.token }}
