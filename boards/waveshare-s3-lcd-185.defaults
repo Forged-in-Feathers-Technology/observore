@@ -214,3 +214,72 @@ CONFIG_OBSERVORE_BATTERY_ADC_CHANNEL=7
 # not a floating pin. Times three that is 4.07 V, a charged cell.
 CONFIG_OBSERVORE_POWER_HOLD_GPIO=7
 CONFIG_OBSERVORE_POWER_KEY_GPIO=6
+
+# The whole pin map, from the vendor's schematic and GPIO table, so that
+# nobody has to derive it from the board again. Everything above was worked
+# out by probing; this is what it turned out to be.
+#
+#   IO0   boot button          IO21  LCD_CS
+#   IO1   TP_SDA               IO33  PSRAM  <- internal, never touch
+#   IO2   MIC_WS               IO34  PSRAM
+#   IO3   TP_SCL               IO35  PSRAM
+#   IO4   TP_INT               IO36  PSRAM
+#   IO5   BL_PWM               IO37  PSRAM
+#   IO6   Key_BAT              IO38  I2S_LRCK   (speaker)
+#   IO7   BAT_Control          IO39  MIC_SD
+#   IO8   BAT_ADC              IO40  LCD_SCK
+#   IO9   RTC_INT              IO41  LCD_SDA3
+#   IO10  I2C SCL              IO42  LCD_SDA2
+#   IO11  I2C SDA              IO43  UART_TXD
+#   IO12  unallocated          IO44  UART_RXD
+#   IO13  unallocated          IO45  LCD_SDA1
+#   IO14  SD_SCLK              IO46  LCD_SDA0
+#   IO15  MIC_SCK              IO47  I2S_DIN    (speaker)
+#   IO16  SD_MISO              IO48  I2S_BCK    (speaker)
+#   IO17  SD_MOSI
+#   IO18  LCD_TE               EXIO1  TP_RST      EXIO5  IMU_INT1
+#   IO19  USB D-               EXIO2  LCD_RST     EXIO6  unconnected
+#   IO20  USB D+               EXIO3  SD_CS       EXIO7  unconnected
+#                              EXIO4  IMU_INT2    EXIO8  unconnected
+#
+# Every pin this profile sets is confirmed against that table: the panel's
+# six, the two I2C buses, the touch interrupt, the backlight, the three
+# speaker lines, the three microphone lines, the battery trio and both
+# expander reset bits.
+#
+# IO33 to IO37 are the octal PSRAM and are listed by the vendor as internal
+# occupancy. Nothing here uses them and nothing should; an S3 that loses its
+# PSRAM pins does not fail politely.
+#
+# The expander's last three lines go nowhere. Worth knowing because they
+# were driven high during bring-up, hunting for the battery latch that
+# turned out to be IO7 -- an experiment that was harmless because these pins
+# are not attached to anything, and which could never have worked for the
+# same reason.
+#
+# IO43 and IO44 are a real UART, unused here. This project can read a GPS
+# module for the time, and on a board that already has a clock chip that is
+# a redundancy rather than a need -- but it is wired if anybody wants it.
+#
+# The battery divider is R5 200K over R11 100K, so BAT_ADC is the cell over
+# three exactly -- which is what this profile already assumed and what the
+# bench measured as 1357 mV for a 4.07 V cell.
+#
+# There is no charging-status signal. The ETA6098's STAT pin drives an
+# indicator LED and reaches no GPIO, so the firmware cannot tell charging
+# from charged however it is asked. The green and red LEDs on this board are
+# USB-present and system-power, both wired straight to their rails. Recorded
+# because "show whether it is charging" is an obvious thing to want and the
+# answer is that this hardware cannot.
+#
+# Three things here are unused and would work:
+#
+#   IO9   RTC_INT. The PCF85063 can raise an alarm, which is how a board
+#         would wake itself on a schedule rather than by polling a clock.
+#         Open-drain, so it reads as floating until an alarm is pending --
+#         which is exactly how it measured.
+#   IO18  LCD_TE. The panel's tearing-effect line. Drawing in step with it
+#         is how a full-screen redraw stops shearing, which the watch face
+#         would notice more than the text pages.
+#   IO14/16/17 plus EXIO3 as chip select: a MicroSD slot. This project has
+#         wanted somewhere to put history longer than NVS will hold.
