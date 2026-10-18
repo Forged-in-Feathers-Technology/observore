@@ -172,19 +172,28 @@ jobs:
       # v0.14.0 and nine boards for four hours, with the tenth board's
       # manifest returning 404 to anybody who picked it.
       #
-      # The cause was two deployments from the same commit. A `web/**` push
-      # had already deployed that SHA while v0.15.0 was still a draft, so it
-      # resolved the firmware to the newest *published* release, which was
-      # v0.14.0. Tagging the release at that same commit meant the release
-      # deployment carried an identical SHA and did not replace the
-      # artifact already serving.
+      # The cause is not known, and the first explanation written here was
+      # wrong. It said the release deployment had been deduplicated against
+      # an earlier one from the same commit -- a `web/**` push had deployed
+      # that SHA while v0.15.0 was still a draft, so it correctly served
+      # v0.14.0, and the release was tagged at that same commit.
       #
-      # Diagnosing GitHub's deduplication is not the fix. Every signal this
-      # workflow produces was green while the thing it exists to publish was
-      # wrong, so the fix is to stop believing the signals and read the
-      # page. A flasher serving firmware older than the release it claims is
-      # the one failure that matters here, and it is one HTTP request away
-      # from being provable.
+      # That reads well and the evidence refutes it: the workflow_dispatch
+      # that eventually fixed the site ran at the *same* commit, 4fa57224,
+      # and replaced the content without trouble. A same-SHA deployment can
+      # plainly succeed, so being same-SHA is not what stopped the first one.
+      #
+      # What is known is only this: the deploy reported success, the build
+      # log proves the artifact was right, and the bytes being served did
+      # not change for four hours.
+      #
+      # Which is the argument for this step rather than against it. Every
+      # signal this workflow produces was green while the thing it exists to
+      # publish was wrong. A cause nobody has identified cannot be guarded
+      # against at its source; an outcome can be checked whatever caused it.
+      # A flasher serving firmware older than the release it claims is the
+      # one failure that matters here, and it is one HTTP request away from
+      # being provable.
       - name: Read the page back
         env:
           GH_TOKEN: ${{ github.token }}
@@ -197,21 +206,45 @@ jobs:
           fi
           URL="https://$SITE/firmware/boards.json"
 
+          # Every failure says which failure it was.
+          #
+          # The first version of this sent both curl's and python's stderr to
+          # /dev/null and reported a bare "unreachable". It then failed on
+          # every attempt against a site that was serving HTTP 200 the whole
+          # time, and the log could not say whether the fetch or the parse
+          # had broken. That is the same fault this project fixed in
+          # flashboard.sh, which swallowed build output and cost three
+          # rounds of debugging an exit code.
+          #
           # Pages takes a little while to serve a new deployment, so this
-          # waits rather than failing on the first read -- but it does fail.
+          # retries -- but it reports each attempt in full.
           for attempt in $(seq 1 20); do
-            got=$(curl -fsS "$URL?cb=$RANDOM$attempt" 2>/dev/null \
-                  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["version"],len(d["boards"]))' \
-                  2>/dev/null || echo "")
+            code=$(curl -sSL -o /tmp/boards.json -w '%{http_code}' \
+                   -A 'observore-pages-check' \
+                   "$URL?cb=$RANDOM$attempt" 2>/tmp/curl.err) || true
+            if [ "${code:-000}" != "200" ]; then
+              echo "attempt $attempt: HTTP ${code:-none} -- $(tr -d '\n' < /tmp/curl.err | head -c 200)"
+              sleep 15
+              continue
+            fi
+            got=$(python3 -c 'import sys,json;d=json.load(open("/tmp/boards.json"));print(d["version"],len(d["boards"]))' 2>/tmp/py.err) || true
+            if [ -z "$got" ]; then
+              echo "attempt $attempt: HTTP 200 but unparseable -- $(tr -d '\n' < /tmp/py.err | head -c 200)"
+              echo "  first bytes: $(head -c 120 /tmp/boards.json | tr -d '\n')"
+              sleep 15
+              continue
+            fi
             set -- $got
-            if [ "${1:-}" = "$TAG" ]; then
+            if [ "$1" = "$TAG" ]; then
               echo "::notice::the page serves $1 with $2 boards"
               exit 0
             fi
-            echo "attempt $attempt: page says '${1:-unreachable}', want $TAG"
+            echo "attempt $attempt: page serves $1 with $2 boards, want $TAG"
             sleep 15
           done
-          echo "::error::$URL still does not serve $TAG after five minutes."
-          echo "::error::The deploy reported success and the page did not change."
-          echo "::error::This is the failure that shipped v0.15.0 serving v0.14.0."
+
+          echo "::error::$URL did not serve $TAG within five minutes."
+          echo "::error::The deploy reported success. Read the attempts above:"
+          echo "::error::a wrong version is the stale-deploy failure this step"
+          echo "::error::exists for; an HTTP or parse error is this step itself."
           exit 1
