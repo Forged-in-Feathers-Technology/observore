@@ -187,3 +187,30 @@ CONFIG_OBSERVORE_MIC=y
 CONFIG_OBSERVORE_MIC_SCK=15
 CONFIG_OBSERVORE_MIC_WS=2
 CONFIG_OBSERVORE_MIC_SD=39
+
+# The cell, divided by three into ADC1 channel 7 -- GPIO8.
+#
+# Not from the wiki, which documents the battery connector and names no sense
+# pin at all. Found by reading the four ADC1 pins this board leaves free and
+# seeing which behaved like a divider: GPIO6 sat pinned at 3114 mV, GPIO7 at
+# 0, GPIO9 wandered across 89-575 mV like the unconnected pin it is, and
+# GPIO8 held 1357 mV with three millivolts of spread. Times three that is
+# 4.07 V, a charged lithium cell, and three is the same divider the 1.43
+# uses.
+CONFIG_OBSERVORE_BATTERY=y
+CONFIG_OBSERVORE_BATTERY_ADC_CHANNEL=7
+
+# Battery power, which on this board the firmware has to hold on itself.
+#
+# From the schematic: IO6 is Key_BAT, IO7 is BAT_Control, IO8 is BAT_ADC.
+# The power button connects the cell only while it is held down, so without
+# something driving BAT_Control high the board comes up and switches off
+# again the moment the finger lifts -- which is exactly what it did.
+#
+# All three were visible from the board before the schematic confirmed them:
+# a pull survey showed IO6 held high (its button's pull-up), IO7 held low
+# (the latch's pull-down, correct for defaulting to off) and IO8 holding
+# 1357 mV against both internal pulls, which is a low-impedance divider and
+# not a floating pin. Times three that is 4.07 V, a charged cell.
+CONFIG_OBSERVORE_POWER_HOLD_GPIO=7
+CONFIG_OBSERVORE_POWER_KEY_GPIO=6

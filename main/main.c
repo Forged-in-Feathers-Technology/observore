@@ -26,6 +26,7 @@
 #include "observore_led.h"
 #include "observore_audio.h"
 #include "observore_mic.h"
+#include "observore_power.h"
 #include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_rtc.h"
@@ -526,6 +527,19 @@ static void mesh_warn(int64_t now_us)
 
 void app_main(void)
 {
+    /* Before anything else, including the banner.
+     *
+     * On a board whose battery is behind a soft latch, this is the only
+     * instruction that matters until it has run: the power button connects
+     * the cell while it is held, and if nothing asserts the hold before the
+     * finger lifts, the board switches off mid-boot. Everything below --
+     * the radio, the panel, the buses -- takes long enough that a person
+     * would have let go.
+     *
+     * It does nothing at all on the nine boards that hold their own power
+     * up, so it costs them a function call. */
+    observore_power_hold();
+
     /* The banner names the build, not just the program.
      *
      * "Observore starting" was all it said, which meant the only ways to ask a
@@ -552,6 +566,8 @@ void app_main(void)
     observore_led_init();
     observore_audio_init();
     observore_mic_init();
+    /* The other half of the latch: a way to let go of it. */
+    observore_power_start();
 #if CONFIG_OBSERVORE_MIC_SELFTEST
     observore_mic_selftest();
 #endif
