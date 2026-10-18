@@ -214,3 +214,41 @@ CONFIG_OBSERVORE_BATTERY_ADC_CHANNEL=7
 # not a floating pin. Times three that is 4.07 V, a charged cell.
 CONFIG_OBSERVORE_POWER_HOLD_GPIO=7
 CONFIG_OBSERVORE_POWER_KEY_GPIO=6
+
+# The whole pin map, from the vendor's schematic and GPIO table, so that
+# nobody has to derive it from the board again. Everything above was worked
+# out by probing; this is what it turned out to be.
+#
+#   IO0   boot button          IO10  I2C SCL  (IMU, RTC, expander)
+#   IO1   TP_SDA               IO11  I2C SDA  (IMU, RTC, expander)
+#   IO2   MIC_WS               IO12  unallocated
+#   IO3   TP_SCL               IO13  unallocated
+#   IO4   TP_INT               IO14  SD_SCLK
+#   IO5   BL_PWM               IO15  MIC_SCK
+#   IO6   Key_BAT              IO16  SD_MISO
+#   IO7   BAT_Control          IO17  SD_MOSI
+#   IO8   BAT_ADC              IO18  LCD_TE
+#   IO9   RTC_INT
+#
+# The battery divider is R5 200K over R11 100K, so BAT_ADC is the cell over
+# three exactly -- which is what this profile already assumed and what the
+# bench measured as 1357 mV for a 4.07 V cell.
+#
+# There is no charging-status signal. The ETA6098's STAT pin drives an
+# indicator LED and reaches no GPIO, so the firmware cannot tell charging
+# from charged however it is asked. The green and red LEDs on this board are
+# USB-present and system-power, both wired straight to their rails. Recorded
+# because "show whether it is charging" is an obvious thing to want and the
+# answer is that this hardware cannot.
+#
+# Three things here are unused and would work:
+#
+#   IO9   RTC_INT. The PCF85063 can raise an alarm, which is how a board
+#         would wake itself on a schedule rather than by polling a clock.
+#         Open-drain, so it reads as floating until an alarm is pending --
+#         which is exactly how it measured.
+#   IO18  LCD_TE. The panel's tearing-effect line. Drawing in step with it
+#         is how a full-screen redraw stops shearing, which the watch face
+#         would notice more than the text pages.
+#   IO14/16/17 plus EXIO3 as chip select: a MicroSD slot. This project has
+#         wanted somewhere to put history longer than NVS will hold.
