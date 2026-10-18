@@ -206,21 +206,45 @@ jobs:
           fi
           URL="https://$SITE/firmware/boards.json"
 
+          # Every failure says which failure it was.
+          #
+          # The first version of this sent both curl's and python's stderr to
+          # /dev/null and reported a bare "unreachable". It then failed on
+          # every attempt against a site that was serving HTTP 200 the whole
+          # time, and the log could not say whether the fetch or the parse
+          # had broken. That is the same fault this project fixed in
+          # flashboard.sh, which swallowed build output and cost three
+          # rounds of debugging an exit code.
+          #
           # Pages takes a little while to serve a new deployment, so this
-          # waits rather than failing on the first read -- but it does fail.
+          # retries -- but it reports each attempt in full.
           for attempt in $(seq 1 20); do
-            got=$(curl -fsS "$URL?cb=$RANDOM$attempt" 2>/dev/null \
-                  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["version"],len(d["boards"]))' \
-                  2>/dev/null || echo "")
+            code=$(curl -sSL -o /tmp/boards.json -w '%{http_code}' \
+                   -A 'observore-pages-check' \
+                   "$URL?cb=$RANDOM$attempt" 2>/tmp/curl.err) || true
+            if [ "${code:-000}" != "200" ]; then
+              echo "attempt $attempt: HTTP ${code:-none} -- $(tr -d '\n' < /tmp/curl.err | head -c 200)"
+              sleep 15
+              continue
+            fi
+            got=$(python3 -c 'import sys,json;d=json.load(open("/tmp/boards.json"));print(d["version"],len(d["boards"]))' 2>/tmp/py.err) || true
+            if [ -z "$got" ]; then
+              echo "attempt $attempt: HTTP 200 but unparseable -- $(tr -d '\n' < /tmp/py.err | head -c 200)"
+              echo "  first bytes: $(head -c 120 /tmp/boards.json | tr -d '\n')"
+              sleep 15
+              continue
+            fi
             set -- $got
-            if [ "${1:-}" = "$TAG" ]; then
+            if [ "$1" = "$TAG" ]; then
               echo "::notice::the page serves $1 with $2 boards"
               exit 0
             fi
-            echo "attempt $attempt: page says '${1:-unreachable}', want $TAG"
+            echo "attempt $attempt: page serves $1 with $2 boards, want $TAG"
             sleep 15
           done
-          echo "::error::$URL still does not serve $TAG after five minutes."
-          echo "::error::The deploy reported success and the page did not change."
-          echo "::error::This is the failure that shipped v0.15.0 serving v0.14.0."
+
+          echo "::error::$URL did not serve $TAG within five minutes."
+          echo "::error::The deploy reported success. Read the attempts above:"
+          echo "::error::a wrong version is the stale-deploy failure this step"
+          echo "::error::exists for; an HTTP or parse error is this step itself."
           exit 1
