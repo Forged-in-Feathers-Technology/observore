@@ -1195,6 +1195,32 @@ config OBSERVORE_AUDIO_SELFTEST
 
 endif
 
+config OBSERVORE_POWER_HOLD_GPIO
+    int "Battery latch hold line, or -1"
+    default -1
+    help
+        An output that has to be driven high to keep the battery connected.
+
+        The Waveshare 1.85's power button connects the cell only while it is
+        held down; something must assert this line before the button is
+        released or the board switches off again. It has an external
+        pull-down so the default at reset is off, which is correct -- a board
+        that latched itself on from a transient could never be switched off.
+
+        -1 where the board holds its own power up, which is every other board
+        here. On those the setting does nothing at all.
+
+config OBSERVORE_POWER_KEY_GPIO
+    int "Battery power button, or -1"
+    default -1
+    help
+        The power button, read as an input: pulled high, grounded by a press.
+        Held for two seconds it releases the latch and switches the board off.
+
+        Needed because the firmware is what holds the power on. Without a way
+        to let go, the only way to switch the board off would be to flatten
+        the cell or unplug it.
+
 config OBSERVORE_MIC
     bool "The board has a microphone"
     default n

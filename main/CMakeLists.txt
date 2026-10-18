@@ -31,6 +31,7 @@ idf_component_register(
         "observore_audio.c"
         "observore_ultrasound.c"
         "observore_mic.c"
+        "observore_power.c"
         "observore_i2c.c"
         "observore_ioexp.c"
         "observore_motion.c"
