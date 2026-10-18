@@ -1195,6 +1195,85 @@ config OBSERVORE_AUDIO_SELFTEST
 
 endif
 
+config OBSERVORE_SDCARD
+    bool "The board has a MicroSD slot"
+    default n
+    help
+        Only the Waveshare 1.85 has one here.
+
+        Its chip select is a line on the I/O expander rather than a GPIO,
+        which the SPI driver cannot reach. Nothing else is on those three
+        wires -- the panel has its own QSPI bus -- so the select is asserted
+        once at mount and left low, and the driver is told there is none to
+        manage.
+
+        The card is never formatted. One arriving with something on it
+        belongs to whoever put it there, and a detector that wipes what it
+        was handed is worse than one with no slot.
+
+if OBSERVORE_SDCARD
+
+config OBSERVORE_SDCARD_SCLK
+    int "Card clock"
+    default 14
+config OBSERVORE_SDCARD_MISO
+    int "Card data out"
+    default 16
+config OBSERVORE_SDCARD_MOSI
+    int "Card data in"
+    default 17
+config OBSERVORE_SDCARD_CS_IOEXP_BIT
+    int "Chip select, as an expander bit"
+    default 2
+    help
+        Expander bit, not a GPIO. The vendor calls it EXIO3 and numbers from
+        one, so their EXIO3 is this chip's bit 2.
+config OBSERVORE_SDCARD_SPI_HOST
+    int "SPI host, as the esp_spi_host_device_t value"
+    default 2
+    help
+        The number is the enum, not the peripheral's name, and the two are
+        off by one: SPI1_HOST is 0, SPI2_HOST is 1, SPI3_HOST is 2. So the
+        default of 2 means SPI3.
+
+        It has to be SPI3 because the panel already holds SPI2 -- see
+        spi_bus_initialize(SPI2_HOST, ...) in observore_display.c. Two
+        drivers on one host do not fail politely; they fight over the bus
+        and the symptom is whichever of the two is unlucky.
+config OBSERVORE_SDCARD_BENCH
+    bool "Time a write and a read at boot"
+    default n
+    help
+        Bring-up only. Mounting proves the card can be read; this says
+        whether it can be written and at what rate, which is what decides
+        whether it is somewhere to keep a history or only somewhere to read
+        a config from. Writes 128 KB and deletes it again.
+
+config OBSERVORE_SDCARD_KHZ
+    int "Clock speed ceiling, kHz"
+    default 20000
+    help
+        A ceiling, not a rate: the card is always probed at 400 kHz, which
+        every card must accept, and the driver raises it afterwards.
+
+        Measured on this bench, writing and reading 128 KB through FAT:
+
+              400 kHz    44 KB/s write    41 KB/s read
+            4,000 kHz   306 KB/s write   225 KB/s read
+           20,000 kHz   569 KB/s write   364 KB/s read
+
+        20 MHz mounted on six boots out of six and is also ESP-IDF's own
+        default ceiling for SPI cards, so it is not an adventurous number.
+        It is still one card on one board: a card that will not run that
+        fast fails at use rather than falling back, so lower this if a
+        particular card misbehaves.
+
+        Far more than this project needs either way. A detection is a line
+        of text; the limit on how much history a card can hold is its size,
+        not this.
+
+endif
+
 config OBSERVORE_POWER_HOLD_GPIO
     int "Battery latch hold line, or -1"
     default -1

@@ -27,6 +27,7 @@
 #include "observore_audio.h"
 #include "observore_mic.h"
 #include "observore_power.h"
+#include "observore_sd.h"
 #include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_rtc.h"
@@ -626,6 +627,13 @@ void app_main(void)
     observore_touch_init();
     observore_motion_init();
     observore_battery_init();
+    /* After observore_ioexp_init, and the ordering is load-bearing: this
+     * card's chip select is an expander line, so mounting before the
+     * expander exists fails every time. It did, on the first try -- the
+     * slot sat two dozen lines too early in this function and reported
+     * "could not pull the card's select line low", which is true and says
+     * nothing about the card. */
+    observore_sd_init();
     /* Before the network, so a device restarted away from one still knows
      * what time it is and its findings are dated. */
     observore_rtc_init();
