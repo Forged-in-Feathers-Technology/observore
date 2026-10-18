@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "observore_battery.h"
+#include "observore_sd.h"
 #include "observore_census.h"
 #include "observore_monitors.h"
 #include "observore_peer.h"
@@ -269,6 +270,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     observore_status_t st;
     observore_track_status(&st, now);
 
+    /* Zero on the nine boards with no slot, which is also what an empty
+     * slot reports -- "mounted" is what tells those apart. */
+    uint32_t sd_total = 0, sd_free = 0;
+    observore_sd_space(&sd_total, &sd_free);
+
     /* Empty until the clock has been set. Reported rather than faked so the
      * console can say "times are relative to boot" instead of rendering an
      * uptime as though it were a date. */
@@ -326,6 +332,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"motion\":{\"sensor\":%s,\"carried\":%s,\"journeys\":%u"
         ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
+        ",\"card\":{\"mounted\":%s,\"name\":\"%.20s\","
+        "\"total_mb\":%u,\"free_mb\":%u}"
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
         ",\"peers\":{\"nodes\":%d,\"warnings\":%d,\"tx\":%s"
@@ -376,6 +384,9 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_battery_available() ? "true" : "false",
         observore_battery_mv(),
         observore_battery_pct_from_mv(observore_battery_mv()),
+        observore_sd_ready() ? "true" : "false",
+        observore_sd_name(),
+        (unsigned)sd_total, (unsigned)sd_free,
         (unsigned)observore_display_taps(),
         st.monitors_off, (unsigned long)observore_monitors_off_mask(),
         peer_nodes, peer_warnings,

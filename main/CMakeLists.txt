@@ -32,6 +32,7 @@ idf_component_register(
         "observore_ultrasound.c"
         "observore_mic.c"
         "observore_power.c"
+        "observore_sd.c"
         "observore_i2c.c"
         "observore_ioexp.c"
         "observore_motion.c"
@@ -67,6 +68,9 @@ idf_component_register(
         esp_https_ota
         esp_lcd
         nvs_flash
+        fatfs
+        esp_driver_sdspi
+        sdmmc
 )
 
 # The console is embedded gzipped and served with Content-Encoding: gzip.

@@ -283,3 +283,17 @@ CONFIG_OBSERVORE_POWER_KEY_GPIO=6
 #         would notice more than the text pages.
 #   IO14/16/17 plus EXIO3 as chip select: a MicroSD slot. This project has
 #         wanted somewhere to put history longer than NVS will hold.
+
+# The MicroSD slot. Clock, MISO and MOSI are pins; the chip select is not --
+# it is EXIO3, bit 2 of the expander, which the SPI driver cannot reach.
+#
+# Nothing else is on those three wires, so the select is asserted once and
+# left low rather than toggled over I2C around every transaction. SPI3
+# because the panel holds SPI2.
+CONFIG_OBSERVORE_SDCARD=y
+CONFIG_OBSERVORE_SDCARD_SCLK=14
+CONFIG_OBSERVORE_SDCARD_MISO=16
+CONFIG_OBSERVORE_SDCARD_MOSI=17
+CONFIG_OBSERVORE_SDCARD_CS_IOEXP_BIT=2
+CONFIG_OBSERVORE_SDCARD_SPI_HOST=2
+CONFIG_OBSERVORE_SDCARD_KHZ=20000
