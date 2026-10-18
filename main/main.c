@@ -28,6 +28,7 @@
 #include "observore_mic.h"
 #include "observore_power.h"
 #include "observore_sd.h"
+#include "observore_sdlog.h"
 #include "observore_battery.h"
 #include "observore_motion.h"
 #include "observore_rtc.h"
@@ -234,6 +235,7 @@ static observore_status_t publish(void)
     for (size_t i = 0; i < n; i++) {
         const observore_event_t *e = &found[i];
         observore_history_note(e);
+        observore_sdlog_note(e);
         observore_notify_event(e);
         char macbuf[OBSERVORE_MAC_STR_LEN];
         ESP_LOGW(TAG, "%-16s %s %4d dBm  via %-10s %-13s  %s%s%s",
@@ -634,6 +636,7 @@ void app_main(void)
      * "could not pull the card's select line low", which is true and says
      * nothing about the card. */
     observore_sd_init();
+    observore_sdlog_init();
     /* Before the network, so a device restarted away from one still knows
      * what time it is and its findings are dated. */
     observore_rtc_init();

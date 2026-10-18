@@ -17,7 +17,8 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
            ../main/observore_watchcfg.c \
            ../main/observore_tz.c \
            ../main/observore_gps.c \
-           ../main/observore_ultrasound.c
+           ../main/observore_ultrasound.c \
+           ../main/observore_csv.c
 
 # Headers count as sources here.  Most of what this suite pins down lives in
 # them -- class weights, the verdict thresholds, the follower ceiling -- and
