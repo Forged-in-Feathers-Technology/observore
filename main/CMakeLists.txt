@@ -33,6 +33,8 @@ idf_component_register(
         "observore_mic.c"
         "observore_power.c"
         "observore_sd.c"
+        "observore_csv.c"
+        "observore_sdlog.c"
         "observore_i2c.c"
         "observore_ioexp.c"
         "observore_motion.c"

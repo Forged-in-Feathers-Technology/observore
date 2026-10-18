@@ -5,6 +5,7 @@
 
 #include "observore_battery.h"
 #include "observore_sd.h"
+#include "observore_sdlog.h"
 #include "observore_census.h"
 #include "observore_monitors.h"
 #include "observore_peer.h"
@@ -274,6 +275,12 @@ static esp_err_t status_handler(httpd_req_t *req)
      * slot reports -- "mounted" is what tells those apart. */
     uint32_t sd_total = 0, sd_free = 0;
     observore_sd_space(&sd_total, &sd_free);
+    /* Both numbers, because "logged 400" and "logged 400, dropped 12" are
+     * different claims and only the second one is honest. A card that
+     * started refusing writes an hour ago should say so here rather than
+     * being discovered when somebody reads it. */
+    uint32_t sd_logged = 0, sd_dropped = 0;
+    observore_sdlog_counts(&sd_logged, &sd_dropped);
 
     /* Empty until the clock has been set. Reported rather than faked so the
      * console can say "times are relative to boot" instead of rendering an
@@ -333,7 +340,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"last_overlap_pct\":%d,\"last_faded_db\":%d}"
         ",\"battery\":{\"sense\":%s,\"mv\":%d,\"pct\":%d}"
         ",\"card\":{\"mounted\":%s,\"name\":\"%.20s\","
-        "\"total_mb\":%u,\"free_mb\":%u}"
+        "\"total_mb\":%u,\"free_mb\":%u"
+        ",\"logged\":%u,\"dropped\":%u}"
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
         ",\"peers\":{\"nodes\":%d,\"warnings\":%d,\"tx\":%s"
@@ -387,6 +395,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         observore_sd_ready() ? "true" : "false",
         observore_sd_name(),
         (unsigned)sd_total, (unsigned)sd_free,
+        (unsigned)sd_logged, (unsigned)sd_dropped,
         (unsigned)observore_display_taps(),
         st.monitors_off, (unsigned long)observore_monitors_off_mask(),
         peer_nodes, peer_warnings,

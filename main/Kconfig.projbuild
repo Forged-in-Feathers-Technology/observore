@@ -1274,6 +1274,63 @@ config OBSERVORE_SDCARD_KHZ
 
 endif
 
+config OBSERVORE_SDLOG
+    bool "Log detections to the card as CSV"
+    depends on OBSERVORE_SDCARD
+    default n
+    help
+        NVS holds 48 history entries, which is a property of where the
+        history is kept rather than of anything the detector knows. A card
+        does not have that limit.
+
+        CSV because the point of taking the card out is to read it
+        somewhere else, and every machine already opens CSV.
+
+        Worth being clear about what this writes: a list of who was near
+        the device and when, readable on any laptop, on a thing that can be
+        pocketed. That is a different exposure from the same data in NVS,
+        which needs a cable and a flash reader. It is logged anyway because
+        every byte of it was broadcast unencrypted by the devices
+        themselves to anybody in range -- the card records a public fact
+        rather than creating a private one. A Wi-Fi password is a secret
+        and is covered by a different issue; a beacon is a shout.
+
+if OBSERVORE_SDLOG
+
+choice OBSERVORE_SDLOG_ROTATE
+    prompt "When to start a new file"
+    default OBSERVORE_SDLOG_ROTATE_DAILY
+
+config OBSERVORE_SDLOG_ROTATE_DAILY
+    bool "Daily"
+    help
+        One file a day, named for the date -- 261018.CSV -- so the card can
+        be read without opening anything. Needs a clock: records taken
+        before one is set go to UNDATED.CSV rather than being dropped, and
+        still carry uptime.
+
+config OBSERVORE_SDLOG_ROTATE_SIZE
+    bool "By size"
+    help
+        A new file every so many kilobytes, OBS00000.CSV upward. The
+        sequence is found by looking at the card rather than remembered, so
+        a reboot continues instead of overwriting.
+
+config OBSERVORE_SDLOG_ROTATE_NEVER
+    bool "One file, forever"
+    help
+        Everything in OBSERVOR.CSV. Simplest, and the one that eventually
+        produces a file too large for whatever opens it.
+
+endchoice
+
+config OBSERVORE_SDLOG_MAX_KB
+    int "Kilobytes per file"
+    depends on OBSERVORE_SDLOG_ROTATE_SIZE
+    default 1024
+
+endif
+
 config OBSERVORE_POWER_HOLD_GPIO
     int "Battery latch hold line, or -1"
     default -1

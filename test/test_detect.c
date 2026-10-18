@@ -36,6 +36,7 @@
 #include "observore_keyboard.h"
 #include <math.h>
 #include "observore_ultrasound.h"
+#include "observore_csv.h"
 #include "observore_watch.h"
 #include <limits.h>
 #include "observore_surroundings.h"
@@ -6070,6 +6071,80 @@ static void test_ultrasound(void)
     }
 }
 
+/* ---------------------------------------------------------------- */
+
+/* The CSV escaper, fed the strings that actually arrive.
+ *
+ * Every one of these is something an SSID or a Bluetooth name can legally
+ * be. An SSID is thirty-two arbitrary bytes and nothing stops somebody
+ * choosing them to break whatever reads the log. */
+static void test_csv_field(void)
+{
+    banner("CSV field escaping");
+
+    char out[64];
+    struct { const char *in; const char *want; const char *why; } CASES[] = {
+        { "plain",            "\"plain\"",          "ordinary text is still quoted" },
+        { "",                 "\"\"",               "empty is an empty quoted field" },
+        { NULL,               "\"\"",               "NULL is an empty field, not a crash" },
+        { "Cafe, Free WiFi",  "\"Cafe, Free WiFi\"","a comma must not add a column" },
+        { "Bob\"s iPhone",    "\"Bob\"\"s iPhone\"","a quote is doubled, not dropped" },
+        { "\"\"",             "\"\"\"\"\"\"",       "two quotes become four" },
+        { "a\nb",             "\"ab\"",             "a newline must not end the record" },
+        { "a\r\nb",           "\"ab\"",             "nor a CRLF" },
+        { "a\tb",             "\"ab\"",             "a tab is dropped rather than passed" },
+        { "a\x7F" "b",        "\"ab\"",             "DEL too" },
+        { "\x01\x02",         "\"\"",               "all-control collapses to empty" },
+    };
+    for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+        size_t n = observore_csv_field(out, sizeof(out), CASES[i].in);
+        CHECK(strcmp(out, CASES[i].want) == 0,
+              "%s: got %s, wanted %s", CASES[i].why, out, CASES[i].want);
+        CHECK(n == strlen(out), "returned length %zu, string is %zu",
+              n, strlen(out));
+    }
+
+    /* Always balanced, whatever it is handed and however little room it
+     * has. One unbalanced quote does not corrupt a field, it corrupts
+     * every field after it to the end of the file. */
+    for (size_t cap = 0; cap <= 24; cap++) {
+        static const char *AWKWARD[] = {
+            "\"\"\"\"\"\"\"\"", "a\"b\"c\"d", "\"", "aaaaaaaaaaaaaaaaaaaa",
+        };
+        for (size_t k = 0; k < sizeof(AWKWARD) / sizeof(AWKWARD[0]); k++) {
+            char buf[32];
+            memset(buf, '!', sizeof(buf));
+            size_t n = observore_csv_field(buf, cap, AWKWARD[k]);
+            if (cap == 0) {
+                /* Nowhere to put a terminator, so it must write nothing at
+                 * all -- writing one would be the overflow this is
+                 * checking for. */
+                CHECK(n == 0 && buf[0] == '!',
+                      "cap 0: wrote into a zero-length buffer");
+                continue;
+            }
+            CHECK(n < sizeof(buf) && buf[n] == '\0',
+                  "cap %zu: not terminated where it said", cap);
+            CHECK(n <= (cap ? cap - 1 : 0),
+                  "cap %zu: wrote %zu, past the buffer", cap, n);
+            if (n == 0) {
+                continue;        /* too small for even "" -- empty is fine */
+            }
+            CHECK(buf[0] == '"' && buf[n - 1] == '"',
+                  "cap %zu: field is not wrapped in quotes: %s", cap, buf);
+            /* Every quote inside the wrapper must be part of a pair, or a
+             * reader sees the field end early and the line reshape. */
+            size_t inner = 0;
+            for (size_t j = 1; j + 1 < n; j++) {
+                if (buf[j] == '"') inner++;
+            }
+            CHECK(inner % 2 == 0,
+                  "cap %zu: %zu quotes inside the field, an odd number: %s",
+                  cap, inner, buf);
+        }
+    }
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -6140,6 +6215,7 @@ int main(void)
     test_gps();
     test_keyboard();
     test_ultrasound();
+    test_csv_field();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
