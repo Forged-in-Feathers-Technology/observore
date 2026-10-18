@@ -518,12 +518,29 @@ So it is worth being precise about what survives a power cut:
 | household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
 | device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
 | peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
+| card log *(1.85 only, off by default)* | every detection, as CSV: time, address, class, label, signal, vendor | until you delete the file |
 
 Two things in that table are worth drawing out. The **census keeps no
 addresses** — only hashes, because the question it asks is *how many* a device
 has worn, never *which*, so there was nothing to gain by storing them. And the
 identifiable record is the **history**, which is 48 entries deep and
-overwrites itself; it is not a growing log.
+overwrites itself.
+
+**Unless you give it a card.** That sentence used to end "it is not a growing
+log", and on nine of the ten boards it still is not. The 1.85 has a MicroSD
+slot, and with `OBSERVORE_SDLOG` turned on it writes every detection to it as
+CSV and never overwrites anything. That is the point — 48 entries is a limit
+of where the history was kept rather than of anything the detector knows — but
+it is a different object from the rest of this table: a readable, growing,
+removable record of who was near the device and when, on a card that fits in
+a pocket and opens on any laptop.
+
+It is off unless a board profile enables it. The reasoning for allowing it at
+all is that every byte in it was broadcast unencrypted by the devices
+themselves to anybody in range: the card records a public fact rather than
+creating a private one. A Wi-Fi password is a secret; a beacon is a shout. If
+that trade is not one you want, leave it off and the board behaves like the
+other nine.
 
 The console can show and clear all of it. `POST /api/history` empties the
 history, `/api/unmute?all=1` the rules.
