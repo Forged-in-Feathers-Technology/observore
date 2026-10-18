@@ -218,11 +218,14 @@ jobs:
           #
           # Pages takes a little while to serve a new deployment, so this
           # retries -- but it reports each attempt in full.
+          last_code=000
+          last_seen=""
           for attempt in $(seq 1 20); do
             code=$(curl -sSL -o /tmp/boards.json -w '%{http_code}' \
                    -A 'observore-pages-check' \
                    "$URL?cb=$RANDOM$attempt" 2>/tmp/curl.err) || true
-            if [ "${code:-000}" != "200" ]; then
+            last_code=${code:-000}
+            if [ "$last_code" != "200" ]; then
               echo "attempt $attempt: HTTP ${code:-none} -- $(tr -d '\n' < /tmp/curl.err | head -c 200)"
               sleep 15
               continue
@@ -235,6 +238,7 @@ jobs:
               continue
             fi
             set -- $got
+            last_seen="$1"
             if [ "$1" = "$TAG" ]; then
               echo "::notice::the page serves $1 with $2 boards"
               exit 0
@@ -243,8 +247,28 @@ jobs:
             sleep 15
           done
 
-          echo "::error::$URL did not serve $TAG within five minutes."
-          echo "::error::The deploy reported success. Read the attempts above:"
-          echo "::error::a wrong version is the stale-deploy failure this step"
-          echo "::error::exists for; an HTTP or parse error is this step itself."
+          # Out of attempts. Which of the two failures was it?
+          #
+          # They are not the same thing and must not be reported as though
+          # they were. A wrong version means the deploy silently did not
+          # take, which is what this step exists to catch and is worth
+          # failing a release over. Never reaching the page means this step
+          # could not run -- and failing every deploy because the guard is
+          # broken teaches everyone to ignore it, which costs the guard
+          # itself. A check that always fails catches nothing.
+          if [ "${last_code:-000}" != "200" ]; then
+            echo "::warning::could not read $URL (last status ${last_code:-none})."
+            echo "::warning::This guard did NOT run. The deploy is unverified,"
+            echo "::warning::not known-bad -- the page may well be correct."
+            echo "::warning::Measured 2026-10-18: Cloudflare returns 403 to"
+            echo "::warning::GitHub runners for this host while answering every"
+            echo "::warning::user agent from a normal address, so it is the"
+            echo "::warning::runner's address being refused and not the site"
+            echo "::warning::being down. A WAF skip rule for this one path"
+            echo "::warning::restores the check."
+            exit 0
+          fi
+          echo "::error::$URL serves $last_seen, not $TAG."
+          echo "::error::The deploy reported success and the page did not change."
+          echo "::error::This is the failure that shipped v0.15.0 serving v0.14.0."
           exit 1
