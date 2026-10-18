@@ -1,0 +1,71 @@
+name: Deploy the flasher for a release
+
+# Publishing a release has to update the flasher, and deploying it directly
+# from the release does not work.
+#
+# Measured, twice, with the release in between:
+#
+#   event             ref        live site afterwards
+#   release           v0.15.0    unchanged (served v0.14.0 for four hours)
+#   release           v0.15.1    unchanged (served v0.15.0)
+#   push              main       updated
+#   workflow_dispatch main       updated
+#   push              main       updated
+#   push              main       updated
+#   workflow_dispatch main       updated
+#
+# Six deployments from main took; two from a tag did not. In both failures
+# the build was provably correct -- the log says "publishing v0.15.1" and
+# "wrote boards.json listing 10 boards" -- and GitHub recorded the
+# deployment as a success. The bytes being served simply did not change.
+#
+# Why, nobody here knows. Three explanations have been written down and the
+# evidence refuted all three: that same-SHA deployments are deduplicated (a
+# same-SHA dispatch worked), that the environment rejects tag refs (its
+# policy allows "v*" explicitly), and in between a checker that reported
+# the wrong failure entirely. A fourth guess is not worth making.
+#
+# What is worth doing is routing around it. Every deployment from main has
+# worked and no deployment from a tag has, so a release now asks the flasher
+# workflow to run on main rather than deploying from the tag itself. The
+# firmware it serves still comes from the release, because the tag is passed
+# in as an input.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the flasher workflow to run on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          echo "asking pages.yml to publish $TAG from main"
+          gh workflow run pages.yml --repo "${{ github.repository }}" \
+            --ref main -f tag="$TAG"
+
+          # Proving it started, because a dispatch that silently does not
+          # queue would leave the flasher stale exactly as before, and this
+          # workflow exists to stop that happening quietly.
+          for i in $(seq 1 10); do
+            sleep 6
+            id=$(gh run list --repo "${{ github.repository }}" \
+                   --workflow=pages.yml --event=workflow_dispatch \
+                   --limit 1 --json databaseId,createdAt \
+                   -q '.[0].databaseId' 2>/dev/null || echo "")
+            if [ -n "$id" ]; then
+              echo "::notice::pages.yml run $id is publishing $TAG"
+              exit 0
+            fi
+          done
+          echo "::error::dispatched pages.yml for $TAG and no run appeared."
+          echo "::error::The flasher will still be serving the previous release."
+          exit 1

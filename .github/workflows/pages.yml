@@ -9,8 +9,12 @@ name: Flasher page
 # Tools cannot read them. Serving the same bytes same-origin avoids all of it,
 # and keeps binaries out of the repository.
 on:
-  release:
-    types: [published]
+  # Deliberately not `release: published`. A deployment made from a tag ref
+  # reports success and does not change what the site serves -- measured
+  # twice, across two releases, with correct artifacts both times. See
+  # release-pages.yml, which catches the release and asks this workflow to
+  # run on main instead, passing the tag in.
+  #
   # The page is not only published with firmware.  Edits to the page itself --
   # wording, browser guidance, flashing instructions -- used to sit unpublished
   # until the next release happened to go out, which meant the site could
