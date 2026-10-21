@@ -1,0 +1,77 @@
+# Elecrow CrowPanel 1.46" HMI Rotary Display (DHR55146D) -- a 360x360 round
+# IPS panel on an S3, with a rotary encoder around the glass.
+#
+# Shipped as a radio first, which is the same order the 1.43 and the 1.85
+# arrived in: the profile goes under CI from the day it exists rather than
+# rotting on a branch until the screen works.
+#
+# What is driven here: the radio, and the RGB pixel. What is not: the panel,
+# because its controller is a JD9855 and no driver for it exists -- not in
+# ESP-IDF, not in the component registry, not on GitHub. Elecrow's own
+# example drives it from ESPHome by sending a custom initialisation
+# sequence, which is the same situation the 1.85's ST77916 was in before
+# its table was extracted from the vendor's demo. That is the next piece of
+# work and it should be easier than the ST77916 was: this is ordinary SPI
+# with a D/C pin rather than QSPI, where the command has to travel in the
+# address phase.
+#
+# Read off the board rather than taken on trust:
+#
+#   esptool      ESP32-S3 (QFN56) rev v0.2, 16 MB flash, 8 MB PSRAM
+#   espefuse     PSRAM_CAP 8M, PSRAM_VENDOR AP_3v3, PKG_VERSION 0
+#
+# That efuse signature is byte-for-byte the one the Waveshare 1.85 reports,
+# and the 1.85 is known octal -- it boot-looped when this project asserted
+# quad. Comparing against a board whose answer is already known beats
+# reasoning from a part number, which is how that mistake was made.
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# The Wi-Fi and lwIP buffers from PSRAM, for the reason the 1.43 profile
+# gives at length: patrol takes thirty-odd dynamic receive buffers out of
+# internal memory every cycle, and this board has eight megabytes doing
+# nothing.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# The pixel, which this board has and most do not: a single addressable LED
+# on GPIO 48, so threat level reaches the eye in colour as well as rhythm.
+CONFIG_OBSERVORE_LED_ADDRESSABLE=y
+CONFIG_OBSERVORE_LED_GPIO=48
+
+# No touch here yet, and the attempt to add it is worth recording.
+#
+# The plan was to enable the CST816 before the panel, so the boot scan
+# would say what is on that bus and the panel work would start with one
+# less unknown. Kconfig discarded every line of it without a word:
+# OBSERVORE_TOUCH lives inside `if OBSERVORE_DISPLAY`, so with no display
+# the symbol does not exist, and OBSERVORE_I2C went with it because touch
+# is what selects the bus.
+#
+# Caught by reading the resolved sdkconfig rather than the profile -- the
+# profile says what was asked for and only the sdkconfig says what was
+# granted. The same trap has cost this project a silently-missing watch
+# face and a build that failed on nine boards out of ten.
+#
+# And the dependency is right. A tap handler drives pages; without a screen
+# there are no pages, so touch really is meaningless here until the panel
+# works. The pins are recorded for when it does:
+#
+#   touch   CST816T, SDA 6, SCL 7, INT 5, RST 13 (a plain pin, not an
+#           expander line like the 1.85's)
+#   I2C     a general-purpose pair on 38/39, brought out to a connector
+#   panel   JD9855, SPI with D/C: CS 9, SCLK 10, MOSI 11, DC 3, RST 14,
+#           backlight 46
+#   encoder A 45, B 42, push 41
+
+# The encoder's push switch. The only button on the board -- there is no
+# separate user button -- and the rotation on GPIO 45/42 is not read yet.
+# A knob is a better input than a 4 mm on-screen key and is the reason this
+# board is interesting; that is work after the panel.
+CONFIG_OBSERVORE_BUTTON_GPIO=41
+
+CONFIG_OBSERVORE_BOARD="crowpanel-146-rotary"

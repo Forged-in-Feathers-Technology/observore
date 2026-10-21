@@ -697,6 +697,20 @@ config OBSERVORE_TOUCH_ON_AUX_BUS
         panel a pair of pins of its own, so the sensors can stay where every
         other board has them.
 
+config OBSERVORE_TOUCH_RST_GPIO
+    int "Touch reset, as a GPIO, or -1"
+    depends on OBSERVORE_TOUCH_CAPACITIVE
+    default -1
+    help
+        A plain reset pin, which is how most boards wire it. The Waveshare
+        1.85 is the odd one out, with its touch reset behind an I/O
+        expander -- see OBSERVORE_TOUCH_RST_IOEXP_BIT. Set one or the
+        other, not both.
+
+        A CST816 that is never pulsed may answer its address and report a
+        chip id of zero, which reads exactly like a panel that is not
+        there.
+
 config OBSERVORE_TOUCH_RST_IOEXP_BIT
     int "Expander line the touch reset is on, or -1 for none"
     depends on OBSERVORE_TOUCH_CAPACITIVE
