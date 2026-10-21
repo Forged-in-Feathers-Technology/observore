@@ -529,6 +529,26 @@ static bool backend_init(void)
         return false;
     }
 
+#if CONFIG_OBSERVORE_TOUCH_RST_GPIO >= 0
+    /* The ordinary way: a reset pin. Ten milliseconds low and fifty to
+     * settle, the same timing the expander path uses and the same the
+     * vendor drivers wait. */
+    {
+        gpio_config_t rst = {
+            .pin_bit_mask = 1ULL << CONFIG_OBSERVORE_TOUCH_RST_GPIO,
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        if (gpio_config(&rst) == ESP_OK) {
+            gpio_set_level(CONFIG_OBSERVORE_TOUCH_RST_GPIO, 0);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            gpio_set_level(CONFIG_OBSERVORE_TOUCH_RST_GPIO, 1);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        } else {
+            ESP_LOGW(TAG, "could not pulse the touch reset on GPIO%d",
+                     CONFIG_OBSERVORE_TOUCH_RST_GPIO);
+        }
+    }
+#endif
 #if CONFIG_OBSERVORE_TOUCH_RST_IOEXP_BIT >= 0
     /* Held in reset until something lets go of it. The expander has to be up
      * first, which it is: it comes up with the clock's bus, well before any

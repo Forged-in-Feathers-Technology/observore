@@ -891,6 +891,13 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x8000  partition-table-waveshare-s3-lcd-185.bin \
     0x10000 ota_data_initial-waveshare-s3-lcd-185.bin \
     0x20000 observore-waveshare-s3-lcd-185.bin
+
+# Elecrow CrowPanel 1.46" rotary (round, 360x360 -- radio only, no screen yet)
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
+    0x0     bootloader-crowpanel-146-rotary.bin \
+    0x8000  partition-table-crowpanel-146-rotary.bin \
+    0x10000 ota_data_initial-crowpanel-146-rotary.bin \
+    0x20000 observore-crowpanel-146-rotary.bin
 ```
 
 `manifest.json` in the release is the authoritative copy of those offsets: it

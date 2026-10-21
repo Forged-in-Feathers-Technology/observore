@@ -75,6 +75,16 @@ jobs:
           - board: waveshare-s3-lcd-185
             target: esp32s3
             profile: boards/waveshare-s3-lcd-185.defaults
+          # The Elecrow CrowPanel 1.46" rotary display. A detector, not yet a
+          # screen: its JD9855 controller has no driver anywhere -- not in
+          # ESP-IDF, not in the component registry, not on GitHub -- and the
+          # vendor drives it from ESPHome with a custom initialisation
+          # sequence. Shipped as a radio now, the same order the two round
+          # Waveshare boards arrived in, so the profile is under CI from the
+          # day it exists rather than rotting until the panel works.
+          - board: crowpanel-146-rotary
+            target: esp32s3
+            profile: boards/crowpanel-146-rotary.defaults
           # Ships now that a panel can measure its own touch bounds. It was
           # held back because the bounds in its profile are defaults rather
           # than measurements -- and shipping any profile's bounds was really
