@@ -863,6 +863,34 @@ config OBSERVORE_TOUCH_FLIP_Y
         Wrong flips are unmistakable: the cursor goes the other way from the
         finger, in one axis or both.
 
+config OBSERVORE_TOUCH_GRID_TEST
+    bool "Measure where presses land, against nine drawn targets"
+    depends on OBSERVORE_TOUCH
+    default n
+    help
+        Draws a marker at nine known points in turn and records where each
+        press actually arrives, then fits the raw bounds across all nine
+        and prints them ready to paste into a board profile.
+
+        For characterising a panel nobody has measured. It exists because
+        the alternatives are worse: pressing the edges of the glass assumes
+        the finger reached the exact edge, and the on-screen calibration
+        takes two inset presses and multiplies their error by 1.7 in x and
+        2.2 in y to reach the panel's corners -- which on the CrowPanel
+        produced 0-400, then 0-394, each attempt further out than the last.
+
+        Nine rather than two, because a straight line through two points
+        fits them both perfectly and says nothing. Nine show whether the
+        mapping is linear at all, and the worst residual is printed so a
+        bad press is visible rather than averaged in.
+
+        Set the swap and the flips first. The fit reports each raw axis
+        against the screen axis that axis actually drives, so with the
+        orientation wrong the residuals are large and the bounds are
+        meaningless -- which is the useful signal: on the CrowPanel a
+        crossed pair of axes showed up as residuals of 101 and 77 px
+        against 14 once swapped.
+
 config OBSERVORE_TOUCH_FORGET_CALIBRATION
     bool "Erase the stored calibration at boot"
     default n
