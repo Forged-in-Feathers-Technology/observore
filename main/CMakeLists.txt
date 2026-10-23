@@ -32,6 +32,7 @@ idf_component_register(
         "observore_ultrasound.c"
         "observore_mic.c"
         "observore_power.c"
+        "observore_rotary.c"
         "observore_sd.c"
         "observore_csv.c"
         "observore_sdlog.c"
