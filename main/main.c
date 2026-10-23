@@ -44,6 +44,7 @@
 #include "observore_heapwatch.h"
 #include "observore_runs.h"
 #include "observore_touch.h"
+#include "observore_rotary.h"
 #include "observore_display.h"
 #include "observore_track.h"
 #include "observore_web.h"
@@ -627,6 +628,7 @@ void app_main(void)
     observore_runs_init();
     observore_display_init();
     observore_touch_init();
+    observore_rotary_init();
     observore_motion_init();
     observore_battery_init();
     /* After observore_ioexp_init, and the ordering is load-bearing: this

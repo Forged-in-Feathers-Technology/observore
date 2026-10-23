@@ -85,6 +85,7 @@
 #include "observore_census.h"
 #include "observore_touchcal.h"
 #include "observore_touch.h"
+#include "observore_rotary.h"
 #include "observore_update.h"
 #include "observore_util.h"
 
@@ -3215,6 +3216,28 @@ static void system_tap(int x, int y)
 }
 
 /* One tap, routed by page. */
+/* Move `delta` pages, wrapping. Shared, because a knob turns both ways and
+ * the page button only ever went forward: leaving the step inline would have
+ * meant two copies of the arrival side, and the arrival side is the part
+ * with the consequences. */
+static void page_go(int delta)
+{
+    s_page = (page_t)(((int)s_page + delta % PAGE_COUNT + PAGE_COUNT)
+                      % PAGE_COUNT);
+    s_armed_row     = -1;
+    s_install_armed = false;
+    if (s_page == PAGE_WIFI) {
+        /* Whatever the last patrol scan saw. Nothing is started here: the
+         * chip has one radio and a scan on demand would fight the sweep
+         * for it. */
+        s_ap_count  = observore_wifi_last_scan(s_aps, ARRAY_SIZE(s_aps));
+        s_wifi_step = WIFI_LIST;
+        s_ap_chosen = -1;
+        memset(s_pass, 0, sizeof(s_pass));
+        s_pass_len  = 0;
+    }
+}
+
 static void handle_tap(int x, int y)
 {
 #if CONFIG_OBSERVORE_WATCHFACE
@@ -3246,19 +3269,7 @@ static void handle_tap(int x, int y)
 
     switch (b) {
         case 0:
-            s_page = (s_page + 1) % PAGE_COUNT;
-            s_armed_row     = -1;
-            s_install_armed = false;
-            if (s_page == PAGE_WIFI) {
-                /* Whatever the last patrol scan saw. Nothing is started here:
-                 * the chip has one radio and a scan on demand would fight the
-                 * sweep for it. */
-                s_ap_count  = observore_wifi_last_scan(s_aps, ARRAY_SIZE(s_aps));
-                s_wifi_step = WIFI_LIST;
-                s_ap_chosen = -1;
-                memset(s_pass, 0, sizeof(s_pass));
-                s_pass_len  = 0;
-            }
+            page_go(1);
             break;
         case 1:
             /* The main loop owns the memory a baseline needs, so this only
@@ -3305,6 +3316,15 @@ static void ui_task(void *arg)
         /* Asked for before the display lock is taken, never while holding it:
          * the touch layer takes the display lock itself, and the two orders
          * together would deadlock. */
+        int turned = observore_rotary_take();
+        if (turned) {
+            /* A knob is for the page the glass is for too, so it goes
+             * through the same mover: anything a new page has to set up on
+             * arrival is set up once, wherever the arrival came from. */
+            page_go(turned);
+            s_dirty = true;
+        }
+
         int x = 0, y = 0;
         bool tapped = observore_touch_tap(&x, &y);
 #if CONFIG_OBSERVORE_TOUCH_GRID_TEST

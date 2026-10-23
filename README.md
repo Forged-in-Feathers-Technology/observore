@@ -892,7 +892,7 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x10000 ota_data_initial-waveshare-s3-lcd-185.bin \
     0x20000 observore-waveshare-s3-lcd-185.bin
 
-# Elecrow CrowPanel 1.46" rotary (round, 360x360 -- radio only, no screen yet)
+# Elecrow CrowPanel 1.46" rotary (round, 360x360, capacitive, knob turns the page)
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash \
     0x0     bootloader-crowpanel-146-rotary.bin \
     0x8000  partition-table-crowpanel-146-rotary.bin \

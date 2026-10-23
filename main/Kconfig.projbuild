@@ -863,6 +863,30 @@ config OBSERVORE_TOUCH_FLIP_Y
         Wrong flips are unmistakable: the cursor goes the other way from the
         finger, in one axis or both.
 
+config OBSERVORE_ROTARY
+    bool "A rotary encoder, as a page selector"
+    depends on OBSERVORE_DISPLAY
+    default n
+    help
+        A detented quadrature knob, counted by the PCNT peripheral rather
+        than polled: a knob turned quickly outruns the UI's poll, and a
+        software reader that misses an edge does not merely miss travel,
+        it can count a detent the wrong way.
+
+        Turning changes page, in both directions. The knob's push, where
+        there is one, is wired as the ordinary board button.
+
+config OBSERVORE_ROTARY_A_GPIO
+    int "Rotary A"
+    depends on OBSERVORE_ROTARY
+    default 45
+config OBSERVORE_ROTARY_B_GPIO
+    int "Rotary B"
+    depends on OBSERVORE_ROTARY
+    default 42
+    help
+        Swap A and B if the knob turns the pages the wrong way.
+
 config OBSERVORE_TOUCH_GRID_TEST
     bool "Measure where presses land, against nine drawn targets"
     depends on OBSERVORE_TOUCH
