@@ -423,6 +423,24 @@ config OBSERVORE_DISPLAY_ILI9341
         are the values every other project uses for it, and each is a build
         option in case they are wrong.
 
+config OBSERVORE_DISPLAY_ST77961
+    bool "ST77961 round LCD over SPI"
+    help
+        The 360x360 round panel on the Elecrow CrowPanel 1.46.
+
+        The same family as the ST77916 below and wired the ordinary way
+        instead: one data line and a D/C pin, so it goes through the same
+        SPI path as the Cheap Yellow Displays rather than the QSPI one.
+
+        Elecrow's product page calls the controller a JD9855. Their own
+        working example instantiates lgfx::Panel_ST77961, and code that
+        drives the glass beats a comparison table.
+
+        There is no esp_lcd_st77961 anywhere, so this uses the ST77916
+        driver with its own initialisation sequence -- see
+        observore_st77961_init.h. Everything that driver does after
+        initialisation is the standard MIPI set, which this panel answers.
+
 config OBSERVORE_DISPLAY_ST77916
     bool "ST77916 round LCD over QSPI"
     help
@@ -844,6 +862,43 @@ config OBSERVORE_TOUCH_FLIP_Y
     help
         Wrong flips are unmistakable: the cursor goes the other way from the
         finger, in one axis or both.
+
+config OBSERVORE_TOUCH_FORGET_CALIBRATION
+    bool "Erase the stored calibration at boot"
+    default n
+    help
+        Throws away whatever calibration is in NVS and goes back to the
+        bounds this profile compiles in.
+
+        Needed because a calibration can be worse than none and there was
+        no way to undo one. Two bad presses on the CrowPanel stored a
+        y range of 0-400 for a 360-pixel panel, which compressed every tap
+        upward far enough that the bottom of the screen could not be
+        reached -- including the button that would have fixed it.
+
+        A build option, and a one-shot: flash it, boot once, flash without
+        it. Nothing should erase a working calibration on every start.
+
+config OBSERVORE_TOUCH_CALIBRATE_AT_BOOT
+    bool "Start in calibration on every boot"
+    default n
+    help
+        The way out of a circular problem: a panel far enough out of true
+        cannot reach the calibrate button, and the button is what fixes it.
+        That happened on the first CrowPanel build -- pressing at the very
+        bottom of the glass registered in the middle of the findings list,
+        so the action strip along the bottom was unreachable and the panel
+        could not be told it was wrong.
+
+        With this set the device enters calibration as soon as the screen
+        is up, before anything needs to be pressed accurately: two targets
+        in opposite corners, and the only presses that matter are the ones
+        being measured.
+
+        A build option rather than a runtime setting on purpose. It is for
+        bringing up a panel nobody has measured yet, and a device that
+        asked to be calibrated at every boot would be worse than one that
+        is slightly out.
 
 config OBSERVORE_TOUCH_LOG_RAW
     bool "Log raw touch values"

@@ -202,6 +202,33 @@ typedef struct {
 
 static void cal_load(void)
 {
+#if CONFIG_OBSERVORE_TOUCH_FORGET_CALIBRATION
+    {
+        touch_cal_t none = {0};
+        observore_nvs_item_t item = {.key = "touchcal",
+                                     .type = OBSERVORE_NVS_BLOB,
+                                     .buf = &none, .len = sizeof(none)};
+        observore_nvs_write(&item, 1);
+        ESP_LOGW(TAG, "stored calibration erased "
+                      "(OBSERVORE_TOUCH_FORGET_CALIBRATION); using the "
+                      "bounds this build compiles in");
+        return;
+    }
+#endif
+#if CONFIG_OBSERVORE_TOUCH_CALIBRATE_AT_BOOT
+    /* Start from the compiled defaults, not from last time.
+     *
+     * Calibrating at boot and then loading a stored calibration means each
+     * attempt measures the panel *through* the previous attempt's mapping,
+     * so a bad press is not replaced, it is compounded. Three runs on the
+     * CrowPanel went 0-358/0-400, then 0-385/0-394, each derived from a
+     * panel already mis-scaled by the one before.
+     *
+     * If a build is going to ask for calibration every boot, the stored
+     * answer is by definition not trusted. */
+    ESP_LOGW(TAG, "calibrating at boot: ignoring any stored bounds");
+    return;
+#endif
     touch_cal_t cal = {0};
     observore_nvs_item_t item = {.key = "touchcal", .type = OBSERVORE_NVS_BLOB,
                                  .buf = &cal, .len = sizeof(cal)};
@@ -699,11 +726,20 @@ void observore_touch_init(void)
     if (!backend_init()) {
         return;
     }
-#if CONFIG_OBSERVORE_TOUCH_XPT2046
-    /* Only a resistive sheet has edges to learn. A capacitive controller
-     * reports panel pixels and has nothing to calibrate. */
+    /* Every panel, not only the resistive ones.
+     *
+     * This was guarded on XPT2046, with the comment "only a resistive sheet
+     * has edges to learn; a capacitive controller reports panel pixels and
+     * has nothing to calibrate" -- the fourth copy of an assumption this
+     * project has already disproved three times over, and the one that
+     * survived the sweep that removed the others.
+     *
+     * Its effect was quieter than the rest and worse: a capacitive panel
+     * could be calibrated, the bounds applied immediately and saved to NVS,
+     * and then silently forgotten at the next boot. The calibration appeared
+     * to work and did not last, which is harder to notice than one that
+     * never worked at all. */
     cal_load();
-#endif
     s_lock = xSemaphoreCreateMutex();
     if (!s_lock) {
         ESP_LOGE(TAG, "no memory for the touch lock");
