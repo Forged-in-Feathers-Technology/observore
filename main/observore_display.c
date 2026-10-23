@@ -1040,6 +1040,202 @@ static void bl_init(void)
 #endif
 }
 
+#if CONFIG_OBSERVORE_TOUCH_GRID_TEST
+/* Where a press actually lands, against where it was asked for.
+ *
+ * Built after three rounds of measuring this badly. Pressing the edges of
+ * the glass and reading the raw values back sounds direct, and is not: it
+ * assumes the finger reached the exact edge, on a round panel where the
+ * curve makes that hard and where the answer is wrong by however far short
+ * it stopped. Two presses "in the middle" are worse still -- the middle of
+ * a 360-pixel circle by eye is not 180,180, and the error is invisible.
+ *
+ * So the board says where to press. Nine targets, drawn one at a time, each
+ * recorded as (asked, got). That is a table of pairs with no extrapolation
+ * in it anywhere, and it is the thing the on-screen calibration cannot be:
+ * that routine takes two inset presses and multiplies their error by 1.7 in
+ * x and 2.2 in y to reach the panel's edges, which is how three attempts on
+ * this board produced 0-400, then 0-394, each further out than the last.
+ *
+ * Nine points rather than two because a straight line through two points
+ * fits any two points perfectly. Nine show whether the mapping is actually
+ * linear, and a residual that is large in the middle and small at the ends
+ * means something other than scale is wrong.
+ */
+#define GRID_N 9
+/* Targets as a column and row of the text grid, because a cell's centre is
+ * a panel pixel this code knows exactly -- INSET + col*8 + 4. Drawing a
+ * marker at an arbitrary pixel would need a bitmap blit and would put the
+ * target somewhere only approximately known, which is the error being
+ * measured. */
+static const uint8_t GRID_PCT[GRID_N][2] = {
+    {50, 50},                                   /* centre first: easiest  */
+    { 6, 50}, {94, 50},                         /* x, at mid height       */
+    {50,  6}, {50, 94},                         /* y, at mid width        */
+    {20, 20}, {80, 20}, {20, 80}, {80, 80},     /* and the quadrants      */
+};
+static int s_grid_step = -1;
+static int s_grid_raw[GRID_N][2];
+static int64_t s_grid_ready_us;
+
+/* Where target n sits, in panel pixels. Placed against the whole panel
+ * rather than against the text grid: the grid is inset for the corners of a
+ * round screen, so its cells only span the middle 40% of the glass, and a
+ * fit over that span has to be extrapolated 2.5x to reach the edges --
+ * which moved RAW_MIN_X from -40 to -89 between two runs of the same nine
+ * presses. The percentages above stay inside the circle: the furthest, at
+ * 6% along an axis, sits 158px from a 180px radius. */
+static void grid_target(int n, int *px, int *py)
+{
+    *px = (DISP_W - 1) * GRID_PCT[n][0] / 100;
+    *py = (DISP_H - 1) * GRID_PCT[n][1] / 100;
+}
+
+/* A glyph centred on an arbitrary pixel, which the row/col blit cannot do.
+ * The target has to be placeable anywhere on the glass for the span above
+ * to be worth having. */
+static void grid_mark(int px_x, int px_y, uint8_t c)
+{
+    /* From the ring, not the stack: draw_bitmap queues the transfer and the
+     * DMA reads the buffer after this returns, and the drawing task has
+     * under a kilobyte of headroom. */
+    uint16_t *cell = s_cells[s_cell_next++ % CELLS];
+    const uint8_t *g = OBSERVORE_FONT[c - OBSERVORE_FONT_FIRST];
+    for (int y = 0; y < OBSERVORE_FONT_H; y++) {
+        for (int x = 0; x < OBSERVORE_FONT_W; x++) {
+            cell[y * OBSERVORE_FONT_W + x] =
+                px((g[y] >> (7 - x)) & 1 ? C_AMBER : C_BLACK);
+        }
+    }
+    int x0 = px_x - OBSERVORE_FONT_W / 2;
+    int y0 = px_y - OBSERVORE_FONT_H / 2;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x0 > DISP_W - OBSERVORE_FONT_W) x0 = DISP_W - OBSERVORE_FONT_W;
+    if (y0 > DISP_H - OBSERVORE_FONT_H) y0 = DISP_H - OBSERVORE_FONT_H;
+    esp_lcd_panel_draw_bitmap(s_panel, X_OFF + x0, y0,
+                              X_OFF + x0 + OBSERVORE_FONT_W,
+                              y0 + OBSERVORE_FONT_H, cell);
+}
+
+static void draw_grid_test(void)
+{
+    int tx = 0, ty = 0;
+    grid_target(s_grid_step, &tx, &ty);
+
+    for (int r = 0; r < ROWS; r++) {
+        if (r == 0) {
+            char msg[COLS + 1];
+            snprintf(msg, sizeof(msg), " press the + %d of %d",
+                     s_grid_step + 1, GRID_N);
+            line(r, msg, C_BLACK, C_GREY);
+        } else {
+            line(r, "", C_WHITE, C_BLACK);
+        }
+    }
+    /* After the rows, so a target overlapping row 0 is not painted over --
+     * and erasing the previous one explicitly, because a target outside the
+     * text grid's inset is not covered by any row's blanking. */
+    static int prev_x = -1, prev_y = -1;
+    if (prev_x >= 0) {
+        grid_mark(prev_x, prev_y, ' ');
+    }
+    grid_mark(tx, ty, '+');
+    prev_x = tx; prev_y = ty;
+}
+
+/* The orientation the bounds are being fitted under, as plain integers so
+ * the fit reads as arithmetic rather than as preprocessor. */
+#if CONFIG_OBSERVORE_TOUCH_SWAP_XY
+#define GRID_SWAP 1
+#else
+#define GRID_SWAP 0
+#endif
+#if CONFIG_OBSERVORE_TOUCH_FLIP_X
+#define GRID_FLIP_X 1
+#else
+#define GRID_FLIP_X 0
+#endif
+#if CONFIG_OBSERVORE_TOUCH_FLIP_Y
+#define GRID_FLIP_Y 1
+#else
+#define GRID_FLIP_Y 0
+#endif
+
+static void grid_poll(void)
+{
+    if (esp_timer_get_time() < s_grid_ready_us) {
+        return;                 /* let go of the last one first */
+    }
+    int rx = 0, ry = 0;
+    if (!observore_touch_raw(&rx, &ry)) {
+        return;
+    }
+    s_grid_raw[s_grid_step][0] = rx;
+    s_grid_raw[s_grid_step][1] = ry;
+    int ex = 0, ey = 0;
+    grid_target(s_grid_step, &ex, &ey);
+    ESP_LOGW(TAG, "grid %d/%d: asked %d,%d  got raw %d,%d",
+             s_grid_step + 1, GRID_N, ex, ey, rx, ry);
+
+    s_grid_step++;
+    s_grid_ready_us = esp_timer_get_time() + 900 * 1000;
+    s_dirty = true;
+    if (s_grid_step < GRID_N) {
+        return;
+    }
+
+    /* Done. The fit, printed rather than applied: least squares through all
+     * nine, which is the honest way to turn pairs into bounds. */
+    s_grid_step = -1;
+    for (int axis = 0; axis < 2; axis++) {
+        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        /* Which screen axis this raw axis drives, and whether it arrives
+         * reversed: to_screen() normalises against the bounds first, then
+         * swaps, then flips, so the bounds belong to the raw axis but the
+         * screen coordinate to fit against is the post-swap, pre-flip one. */
+        int sc = GRID_SWAP ? !axis : axis;
+        int flip = sc ? GRID_FLIP_Y : GRID_FLIP_X;
+        int full = sc ? DISP_H : DISP_W;
+        for (int i = 0; i < GRID_N; i++) {
+            int tx = 0, ty = 0;
+            grid_target(i, &tx, &ty);
+            double want = sc ? ty : tx;
+            if (flip) want = (full - 1) - want;
+            double got  = s_grid_raw[i][axis];
+            sx += want; sy += got; sxx += want * want; sxy += want * got;
+        }
+        double n = GRID_N;
+        double denom = n * sxx - sx * sx;
+        if (denom == 0) {
+            continue;
+        }
+        double slope = (n * sxy - sx * sy) / denom;
+        double inter = (sy - slope * sx) / n;
+        /* raw = slope*screen + inter, so the raw values at the two ends
+         * are what RAW_MIN and RAW_MAX should be. */
+        double lo = inter;
+        double hi = slope * (full - 1) + inter;
+        double worst = 0;
+        for (int i = 0; i < GRID_N; i++) {
+            int tx = 0, ty = 0;
+            grid_target(i, &tx, &ty);
+            double want = sc ? ty : tx;
+            if (flip) want = (full - 1) - want;
+            double pred = slope * want + inter;
+            double r = pred - s_grid_raw[i][axis];
+            if (r < 0) r = -r;
+            if (r > worst) worst = r;
+        }
+        ESP_LOGW(TAG, "grid fit %c: RAW_MIN %d  RAW_MAX %d  (slope %.3f, "
+                      "worst residual %.0f px)", axis ? 'Y' : 'X',
+                 (int)(lo + 0.5), (int)(hi + 0.5), slope, worst);
+    }
+    ESP_LOGW(TAG, "grid: put those two lines in the board profile as "
+                  "OBSERVORE_TOUCH_RAW_MIN/MAX_X and _Y");
+}
+#endif
+
 void observore_display_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
@@ -1290,6 +1486,20 @@ void observore_display_init(void)
     memset(s_shown_cols, 0, sizeof(s_shown_cols));
 #if CONFIG_OBSERVORE_TOUCH
     kb_geometry();
+#if CONFIG_OBSERVORE_TOUCH_GRID_TEST
+    s_grid_step     = 0;
+    s_grid_ready_us = esp_timer_get_time() + 1200 * 1000;
+    /* And ask to be drawn.
+     *
+     * The drawing task only calls draw_current() when something has marked
+     * the screen dirty, and until the first patrol produces a status
+     * nothing does -- so setting the step alone left the boot banner up
+     * and the test invisible. Two separate reasons the same symptom
+     * appeared, found one after the other. */
+    s_dirty = true;
+    ESP_LOGW(TAG, "grid test: press each + as it appears, %d of them",
+             GRID_N);
+#endif
 #if CONFIG_OBSERVORE_TOUCH_CALIBRATE_AT_BOOT
     /* Straight into calibration, before anything has to be pressed
      * accurately. A panel that is far enough out cannot reach the button
@@ -2751,6 +2961,20 @@ static void wifi_tap(int x, int y)
 
 static void draw_current(void)
 {
+#if CONFIG_OBSERVORE_TOUCH_GRID_TEST
+    /* Before the snapshot guard, not after it.
+     *
+     * Every page below needs a status to render, so draw_current() returns
+     * early until the first patrol produces one -- which on this board is
+     * most of a minute, during which the screen keeps the boot banner. The
+     * grid test needs no status at all: it draws a cross and reads a
+     * finger. Behind the guard it simply never appeared, and the board sat
+     * on "starting" looking as though the build had not taken. */
+    if (s_grid_step >= 0) {
+        draw_grid_test();
+        return;
+    }
+#endif
     if (!s_have_snap) {
         return;
     }
@@ -3083,6 +3307,14 @@ static void ui_task(void *arg)
          * together would deadlock. */
         int x = 0, y = 0;
         bool tapped = observore_touch_tap(&x, &y);
+#if CONFIG_OBSERVORE_TOUCH_GRID_TEST
+        if (s_grid_step >= 0) {
+            /* A press is a measurement, not a gesture: swallow the tap but
+             * fall through, so the target still gets drawn. */
+            grid_poll();
+            tapped = false;
+        }
+#endif
 #if CONFIG_OBSERVORE_TOUCH
         if (s_cal_step >= 0) {
             /* While calibrating, a press is a measurement rather than a
