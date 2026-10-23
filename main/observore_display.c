@@ -30,6 +30,17 @@
 #include "observore_st77916_init.h"
 #define PANEL_NAME "ST77916"
 #define new_panel  esp_lcd_new_panel_st77916
+#elif CONFIG_OBSERVORE_DISPLAY_ST77961
+/* Driven by the ST77916 component on purpose. There is no esp_lcd_st77961
+ * anywhere, and everything that driver does after initialisation is the
+ * standard MIPI set this panel answers. The chip-specific part is the
+ * initialisation, and that is what observore_st77961_init.h replaces.
+ * Unlike the 1.85 this one is plain SPI with a D/C pin, which the same
+ * component supports -- use_qspi_interface defaults to 0. */
+#include "esp_lcd_st77916.h"
+#include "observore_st77961_init.h"
+#define PANEL_NAME "ST77961"
+#define new_panel  esp_lcd_new_panel_st77916
 #elif CONFIG_OBSERVORE_DISPLAY_QSPI_AMOLED
 #include "esp_lcd_sh8601.h"
 #if CONFIG_OBSERVORE_DISPLAY_CO5300
@@ -1149,6 +1160,16 @@ void observore_display_init(void)
                           sizeof(OBSERVORE_ST77916_INIT[0]),
         .flags = { .use_qspi_interface = 1 },
     };
+#elif CONFIG_OBSERVORE_DISPLAY_ST77961
+    /* LovyanGFX's sequence, which is what Elecrow's own example sends. The
+     * interface flag is the difference from the 1.85 above: this board has
+     * a D/C pin and one data line, not four. */
+    st77916_vendor_config_t vendor = {
+        .init_cmds = OBSERVORE_ST77961_INIT,
+        .init_cmds_size = sizeof(OBSERVORE_ST77961_INIT) /
+                          sizeof(OBSERVORE_ST77961_INIT[0]),
+        .flags = { .use_qspi_interface = 0 },
+    };
 #endif
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = CONFIG_OBSERVORE_DISPLAY_RST,
@@ -1156,7 +1177,7 @@ void observore_display_init(void)
                                                       : LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         .bits_per_pixel = 16,
-#if CONFIG_OBSERVORE_DISPLAY_QSPI
+#if CONFIG_OBSERVORE_DISPLAY_QSPI || CONFIG_OBSERVORE_DISPLAY_ST77961
         .vendor_config = &vendor,
 #endif
     };
@@ -1269,6 +1290,15 @@ void observore_display_init(void)
     memset(s_shown_cols, 0, sizeof(s_shown_cols));
 #if CONFIG_OBSERVORE_TOUCH
     kb_geometry();
+#if CONFIG_OBSERVORE_TOUCH_CALIBRATE_AT_BOOT
+    /* Straight into calibration, before anything has to be pressed
+     * accurately. A panel that is far enough out cannot reach the button
+     * that fixes it, which is a circle this is the way out of. */
+    s_cal_step     = 0;
+    s_cal_ready_us = esp_timer_get_time() + 1200 * 1000;
+    ESP_LOGW(TAG, "starting in calibration (OBSERVORE_TOUCH_CALIBRATE_AT_BOOT)"
+                  " -- press the two targets");
+#endif
 #endif
     s_ready = true;
     for (int r = 0; r < ROWS; r++) {

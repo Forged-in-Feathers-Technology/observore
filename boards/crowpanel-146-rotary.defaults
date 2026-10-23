@@ -43,7 +43,51 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_OBSERVORE_LED_ADDRESSABLE=y
 CONFIG_OBSERVORE_LED_GPIO=48
 
-# No touch here yet, and the attempt to add it is worth recording.
+# Touch, now that there is a screen for it to drive.
+#
+# The wiki says CST816T. The chip says 0xB6, which is a CST816D -- the 1.85
+# is the one that answers 0xB5. Same family, same registers, same driver,
+# and the difference matters only because this is the third thing on this
+# board the vendor's documentation has got wrong: the controller is an
+# ST77961 and not the advertised JD9855, and the touch part is a D and not
+# a T. Read the silicon.
+#
+# Its reset is a plain pin here rather than an expander line, which is the
+# ordinary arrangement and the reason OBSERVORE_TOUCH_RST_GPIO exists.
+# Address 0x15, confirmed by the boot scan rather than assumed.
+CONFIG_OBSERVORE_TOUCH=y
+CONFIG_OBSERVORE_TOUCH_CST816=y
+CONFIG_OBSERVORE_TOUCH_ON_AUX_BUS=y
+CONFIG_OBSERVORE_TOUCH_SDA=6
+CONFIG_OBSERVORE_TOUCH_SCL=7
+CONFIG_OBSERVORE_TOUCH_I2C_ADDR=0x15
+CONFIG_OBSERVORE_TOUCH_RST_GPIO=13
+CONFIG_OBSERVORE_TOUCH_IRQ=5
+
+# The digitiser's range, measured rather than assumed.
+#
+# Pressing each edge of the glass in turn, one axis at a time, with the raw
+# reading logged: left 1, right 331, top 5, bottom 352. So this controller
+# does not report panel pixels -- it reports about 1..331 across 360 of
+# glass in x, which puts a tap near the right-hand edge some thirty pixels
+# left of the finger.
+#
+# Taken from edge presses rather than from the on-screen calibration on
+# purpose. That derives the full range from two targets inset two cells
+# from the corners, so it multiplies any press error by 1.7 in x and 2.2
+# in y -- three attempts on this board produced 0-400, then 0-394, each
+# one further out than the last. Pressing the actual edges measures the
+# thing directly and has no amplification in it at all.
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_X=1
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_X=331
+CONFIG_OBSERVORE_TOUCH_RAW_MIN_Y=5
+CONFIG_OBSERVORE_TOUCH_RAW_MAX_Y=352
+CONFIG_OBSERVORE_I2C_SDA=38
+CONFIG_OBSERVORE_I2C_SCL=39
+CONFIG_OBSERVORE_I2C_AUX_SDA=6
+CONFIG_OBSERVORE_I2C_AUX_SCL=7
+
+# The earlier attempt to enable this before the panel is worth recording.
 #
 # The plan was to enable the CST816 before the panel, so the boot scan
 # would say what is on that bus and the panel work would start with one
@@ -75,3 +119,31 @@ CONFIG_OBSERVORE_LED_GPIO=48
 CONFIG_OBSERVORE_BUTTON_GPIO=41
 
 CONFIG_OBSERVORE_BOARD="crowpanel-146-rotary"
+
+# The panel. An ST77961 -- not the JD9855 the product page advertises, which
+# Elecrow's own LovyanGFX example contradicts by instantiating
+# lgfx::Panel_ST77961. Their code drives the glass; the table does not.
+#
+# Ordinary SPI with a D/C pin, so it takes the same path as the Cheap Yellow
+# Displays rather than the QSPI one the two Waveshare rounds use. Pins and
+# geometry are Elecrow's own: SCLK 10, MOSI 11, DC 3, CS 9, RST 14,
+# backlight 46, 360x360 with no offset, not inverted, RGB order.
+#
+# The text grid is the largest square inside the circle, which at 360 across
+# is the same 31 columns by 15 rows the 1.85 has -- so every piece of
+# round-panel work already done applies here unchanged.
+CONFIG_OBSERVORE_DISPLAY=y
+CONFIG_OBSERVORE_DISPLAY_ST77961=y
+CONFIG_OBSERVORE_DISPLAY_WIDTH=360
+CONFIG_OBSERVORE_DISPLAY_HEIGHT=360
+CONFIG_OBSERVORE_DISPLAY_INSET_X=53
+CONFIG_OBSERVORE_DISPLAY_INSET_Y=53
+CONFIG_OBSERVORE_DISPLAY_SCLK=10
+CONFIG_OBSERVORE_DISPLAY_MOSI=11
+CONFIG_OBSERVORE_DISPLAY_MISO=-1
+CONFIG_OBSERVORE_DISPLAY_DC=3
+CONFIG_OBSERVORE_DISPLAY_CS=9
+CONFIG_OBSERVORE_DISPLAY_RST=14
+CONFIG_OBSERVORE_DISPLAY_BL=46
+CONFIG_OBSERVORE_DISPLAY_MHZ=40
+CONFIG_OBSERVORE_DISPLAY_LDR_GPIO=-1
