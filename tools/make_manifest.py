@@ -37,6 +37,8 @@ LABELS = {
     "cyd-3248s035r-st7796": "ESP32-3248S035R 3.5\" CYD (ST7796 panel)",
     "nm-cyd-c5":        "RockBase NM-CYD-C5 2.8\" CYD (ESP32-C5)",
     "waveshare-s3-amoled-143": "Waveshare ESP32-S3 1.43\" round AMOLED",
+    "waveshare-s3-lcd-185": "Waveshare ESP32-S3 1.85\" round LCD",
+    "crowpanel-146-rotary": "Elecrow CrowPanel 1.46\" rotary (round, knob)",
 }
 
 NOTES = {
@@ -57,6 +59,12 @@ NOTES = {
                              "Not yet confirmed on real hardware -- if the picture is a negative or the colours are swapped, "
                              "tell us. The flasher cannot tell the two revisions apart: wrong one means wrong colours, "
                              "and the fix is to flash the other",
+    "waveshare-s3-lcd-185": "round screen with capacitive touch, a clock and "
+                            "an accelerometer, and a MicroSD slot it can log "
+                            "detections to",
+    "crowpanel-146-rotary": "round screen with capacitive touch and a rotary "
+                            "knob: turning it changes page, and pressing it "
+                            "is the board button",
 }
 
 
@@ -117,8 +125,18 @@ def main():
         with open(out, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2)
             fh.write("\n")
+        if board not in LABELS:
+            # Loudly, because the fallback was the board's own slug and the
+            # flasher's picker showed it without complaint: the 1.85 offered
+            # itself as "waveshare-s3-lcd-185" from the release that added it
+            # until somebody read the live list. A board nobody can name is a
+            # board nobody picks.
+            raise SystemExit(
+                "no label for board %r -- add it to LABELS in %s. Every board "
+                "offered by the flasher needs a name a person would recognise."
+                % (board, os.path.basename(__file__)))
         index.append({"board": board,
-                      "label": LABELS.get(board, board),
+                      "label": LABELS[board],
                       "chipFamily": build["chipFamily"],
                       "manifest": "manifest-%s.json" % board,
                       "note": NOTES.get(board, "")})
