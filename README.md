@@ -521,6 +521,30 @@ So it is worth being precise about what survives a power cut:
 | peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
 | card log *(1.85 and 1.43 only, off by default)* | every detection, as CSV: time, address, class, label, signal, vendor | until you delete the file |
 
+### What a recovered board gives up
+
+On most boards, now, not much. Everything in NVS — the Wi-Fi password, the
+console password, the notifier tokens, the **household mesh key**, the mute
+rules and the history — is encrypted at rest with keys derived from a
+256-bit key the chip generates for itself and burns into its own eFuse on
+first boot. It never leaves the chip and is different on every device.
+`esptool read_flash` on a board that is lost, seized or sold second-hand
+returns ciphertext.
+
+**Not on the three plain-ESP32 boards.** The 2.8" CYD in both panel
+revisions and the 3.5" CYD have no HMAC peripheral, so there is nothing on
+the chip to anchor a key to and their stored secrets are readable. That is
+a property of those chips and not something a future release fixes. If the
+mesh key matters to you, do not put it on one of those three.
+
+Be clear about the limit on the other eight, too: this stops somebody
+**reading** the flash. It does not stop somebody who can run their own code
+on the board, because that code can ask the same peripheral for the same
+keys. Closing that needs secure boot, which is a different and far more
+expensive trade — it permanently ends plaintext USB flashing on every board
+it touches. What is defended here is the recovered board, not the
+determined attacker with it on a bench.
+
 Two things in that table are worth drawing out. The **census keeps no
 addresses** — only hashes, because the question it asks is *how many* a device
 has worn, never *which*, so there was nothing to gain by storing them. And the

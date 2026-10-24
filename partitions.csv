@@ -56,11 +56,20 @@
 # whichever slot is not running, so a pair of different sizes is a trap: an
 # image that fits the one you tested would fail on the other half of the time.
 #
-# 64K spare is left above the coredump rather than given to the slots, because
-# #185 needs an nvs_keys partition if NVS encryption is ever enabled, and a
-# partition table change cannot reach an existing device over the air -- the
-# browser flasher writes the table and OTA does not. The cable upgrade should
-# be spent once.
+# 64K spare is left above the coredump rather than given to the slots. It was
+# reserved for an nvs_keys partition, on the reading that NVS encryption would
+# need one and that the resulting table change could never reach an existing
+# device -- the browser flasher writes the table and OTA does not, so the
+# cable upgrade should be spent once.
+#
+# #185 did not need it. NVS_ENCRYPTION depends on SECURE_FLASH_ENC_ENABLED
+# *or* SOC_HMAC_SUPPORTED, and the second branch derives the keys from an
+# eFuse key instead of storing them in a partition. So encryption shipped
+# over the air with this table untouched, and no cable was spent.
+#
+# The space stays spare anyway, for whatever does eventually need the table
+# to change -- including flash encryption proper, which would want the
+# nvs_keys partition after all.
 #
 # Safe for devices still on the old table: esp_core_dump finds its partition
 # by name at runtime, so a device without one simply never writes a dump. It

@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "observore_netcfg.h"
+#include "observore_nvs.h"
 #include "mdns.h"
 #include "observore_surroundings.h"
 #include "observore_track.h"
@@ -894,10 +895,75 @@ esp_err_t observore_wifi_init(void)
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        /* Say what is about to be lost, rather than losing it quietly.
+         *
+         * This branch used to be a formality -- a fresh chip, or a store
+         * written by a newer version. Since #185 it is also the upgrade
+         * path: a board that stored its settings in the clear cannot read
+         * them back once NVS is encrypted, because the keys are derived
+         * from an eFuse key that did not exist when they were written.
+         *
+         * Everything in that store goes: the Wi-Fi credentials, the console
+         * password, the notifier tokens, the mesh key, the mute rules and
+         * the detection history. The board comes back up as though it were
+         * new and wants provisioning again. That is recoverable over the
+         * SoftAP console and needs no cable -- but somebody watching a
+         * device forget its network deserves to find out why from the log
+         * rather than by guessing. */
+        ESP_LOGW(TAG, "stored settings could not be read (%s) -- erasing and "
+                      "starting empty. Wi-Fi credentials, the console "
+                      "password, notifier tokens, the mesh key, mute rules "
+                      "and the detection history are all gone, and the board "
+                      "needs provisioning again.", esp_err_to_name(err));
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+#if CONFIG_NVS_ENCRYPTION
+    /* Erase a store that was written before encryption, because nothing
+     * else will.
+     *
+     * This was found by dumping the partition rather than by reading the
+     * log, and the log is why it needed finding: on the first encrypted
+     * boot of a board that already had settings, the driver reports
+     * "NVS partition \"nvs\" is encrypted", the eFuse key is burnt
+     * correctly, the board comes up asking to be provisioned -- and the
+     * old plaintext is still lying in those sectors, mesh key included.
+     *
+     * nvs_flash_init() does not fail on it. The page headers are not
+     * encrypted, so the partition still parses; only the entries decrypt
+     * to nonsense and are skipped. An empty-looking store and an erased
+     * one are not the same thing, and only the second one is the point of
+     * this feature.
+     *
+     * A marker says which has happened. Absent means either a factory
+     * board, where erasing costs nothing, or an upgraded one, where it is
+     * the whole job. */
+    /* Through the registry, not nvs_get_u8 directly. The first version used
+     * the raw call and check_nvs_registry.py passed, because it only sees
+     * keys handed to observore_nvs_read/write -- and an unregistered key is
+     * one a namespace rename would leave behind. This key going missing
+     * does not lose a setting, it erases every setting: the board would
+     * read "unmarked" and wipe itself. */
+    uint8_t v = 0;
+    observore_nvs_item_t mark = {
+        .key = "nvsenc", .type = OBSERVORE_NVS_BLOB,
+        .buf = &v, .len = sizeof(v),
+    };
+    observore_nvs_read(&mark, 1);
+    if (!(mark.found && v == 1)) {
+        ESP_LOGW(TAG, "erasing a store written before encryption. Wi-Fi "
+                      "credentials, the console password, notifier tokens, "
+                      "the mesh key, mute rules and the detection history "
+                      "are gone, and this board needs provisioning again. "
+                      "Once only, on the first boot after this arrives.");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+        v = 1;
+        observore_nvs_write(&mark, 1);
+    }
+#endif
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
