@@ -110,6 +110,12 @@ CONFIG_OBSERVORE_BOARD="devkit-esp32c5"
 # Not set for the plain ESP32: it has no HMAC peripheral, so the symbol would
 # be silently discarded rather than refused. Hence per target, not in the
 # common defaults.
+#
+# Verified on hardware (C5 DevKit, 2026-10-24): eFuse KEY_PURPOSE_5 went
+# from USER to HMAC_UP, write-protected, key read-protected. The nvs
+# partition went from 119 readable strings to 7, with meshkey, gotify_url,
+# gotify_tok, sta_pass and ap_pass all absent. The one-time erase fires on
+# a captured first boot and not the next, and data survives reboots.
 CONFIG_NVS_ENCRYPTION=y
 CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
 CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5

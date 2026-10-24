@@ -42,6 +42,12 @@ CONFIG_OBSERVORE_BOARD="xiao-esp32c6"
 # Not set for the plain ESP32: it has no HMAC peripheral, so the symbol would
 # be silently discarded rather than refused. Hence per target, not in the
 # common defaults.
+#
+# NOT run on hardware. No C6 has been on the bench since this was written,
+# and each hardware check permanently spends an eFuse key block, so this
+# target is build-tested only -- as the XIAO C6 profile already was. The
+# S3 and C5 were both checked and behaved identically, which is reason to
+# expect this works and is not evidence that it does.
 CONFIG_NVS_ENCRYPTION=y
 CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
 CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5
