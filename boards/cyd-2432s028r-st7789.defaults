@@ -67,3 +67,14 @@ CONFIG_OBSERVORE_BUTTON_GPIO=0
 CONFIG_OBSERVORE_MAX_DEVICES=96
 
 CONFIG_OBSERVORE_BOARD="cyd-2432s028r-st7789"
+
+# No MicroSD here, for two independent reasons, both measured 2026-10-23.
+#
+# There is no free SPI host. This board wires touch to its own pins rather
+# than sharing the panel's, so the XPT2046 holds SPI3 and the panel holds
+# SPI2, and a classic ESP32 has no third.
+#
+# And it could not afford one anyway: the slot costs about 30 KB of
+# internal RAM on a board whose heap low-water is 17684 bytes. See the
+# numbers in cyd-3248s035r-st7796.defaults, where the slot was actually
+# tried.
