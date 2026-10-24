@@ -88,3 +88,28 @@ CONFIG_OBSERVORE_BUTTON_GPIO=0
 CONFIG_OBSERVORE_MAX_DEVICES=96
 
 CONFIG_OBSERVORE_BOARD="cyd-3248s035r-st7796"
+
+# The MicroSD slot: pins confirmed, and deliberately NOT enabled.
+#
+#   IO5  SD_CS    IO23 SD_MOSI    IO19 SD_MISO    IO18 SD_SCLK
+#
+# A real chip select, so OBSERVORE_SDCARD_CS_GPIO=5 and SPI3 -- free here
+# because this board's touch shares the panel's bus. Tried on the bench
+# 2026-10-23 against the card already in the slot, and it works: "SA08G"
+# mounted, 7444 MB, 208 KB/s write and 321 KB/s read.
+#
+# It is off because of what it costs, measured on this board either side:
+#
+#            heap free   low-water   largest block   web console
+#   without      32808       11772           18432   fine
+#   with          2196          24            1856   ENOMEM
+#
+# FATFS and the SPI driver want about 30 KB of internal RAM, and an ESP32
+# with no PSRAM driving a 480x320 panel does not have it. The low-water
+# mark goes to 24 bytes and httpd_server_init fails with errno 12, so the
+# console -- the only way into this board over the network -- stops
+# working. A card that costs the console is a bad trade.
+#
+# Reviving this means finding ~25 KB, not tuning the mount options. The
+# 2.8" board is worse off still: its touch has its own SPI3, so there is
+# no free host at all, and its low-water is 17684 against the same 30 KB.
