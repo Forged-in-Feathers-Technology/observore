@@ -9,3 +9,39 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
 # Which board this image is for. The chip does not say: see OBSERVORE_BOARD.
 CONFIG_OBSERVORE_BOARD="xiao-esp32c6"
+
+# Secrets at rest (#185).
+#
+# NVS holds the Wi-Fi password, the console password, the notifier tokens and
+# the household mesh key. Without this, a board that is lost, seized or sold
+# hands all of it over to one `esptool read_flash`, and the mesh key is the
+# sharp end: one shared secret means one recovered board compromises every
+# node you own.
+#
+# Encrypted with keys derived from a 256-bit key in eFuse, not from a key
+# stored in flash. The chip generates that key itself on the first boot after
+# this arrives and burns it into block 5 -- per device, never leaving the
+# chip, with no provisioning step and nothing for anybody to copy.
+#
+# Block 5 rather than 0, so the low blocks stay free for secure boot or flash
+# encryption if either is ever adopted; those conventionally take block 0 up.
+#
+# This is NOT flash encryption, which is the point. Flash encryption is a
+# one-way per-board eFuse burn that permanently ends plaintext UART flashing,
+# needs a separate nvs_keys partition the table would have to grow, and so
+# could never reach an existing device -- the browser flasher writes the
+# partition table and OTA does not. The HMAC scheme needs none of that:
+# NVS_ENCRYPTION depends on SECURE_FLASH_ENC_ENABLED *or* SOC_HMAC_SUPPORTED,
+# and this is the second branch.
+#
+# What it does not do: stop somebody who can run their own code on the board.
+# A custom firmware can ask the same HMAC peripheral for the same derivation.
+# Closing that needs secure boot. This defeats reading the flash, which is
+# the lost, resold and casually-seized board -- not a determined attacker.
+#
+# Not set for the plain ESP32: it has no HMAC peripheral, so the symbol would
+# be silently discarded rather than refused. Hence per target, not in the
+# common defaults.
+CONFIG_NVS_ENCRYPTION=y
+CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
+CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5

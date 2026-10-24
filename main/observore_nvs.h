@@ -49,7 +49,8 @@
     X(WATCHCFG,    "watchcfg",    OBSERVORE_NVS_BLOB) \
     X(TZ,          "tz",          OBSERVORE_NVS_STR)  \
     X(AUDIO,       "audio",       OBSERVORE_NVS_BLOB) \
-    X(MIC,         "mic",         OBSERVORE_NVS_BLOB)
+    X(MIC,         "mic",         OBSERVORE_NVS_BLOB) \
+    X(NVSENC,      "nvsenc",      OBSERVORE_NVS_BLOB)
 
 #define OBSERVORE_NVS_NAMESPACE "observore"
 
