@@ -473,6 +473,17 @@ Read these before trusting it.
 - **A first update cannot arrive over the air:** an updater has to be running
   before it can fetch anything, so a device on a release older than v0.6.0 has
   to be flashed once over USB. After that it can update itself.
+- **Updating into v0.16.1 clears the settings, once:** that release encrypts
+  everything stored on the device, and a store written before it cannot be
+  read back afterwards -- the keys are derived from a chip key that did not
+  exist when those settings were written. So the Wi-Fi credentials, the
+  console password, the notifier tokens, the mesh key, the mute rules and the
+  detection history all go, and the board comes up wanting to be provisioned
+  again. The log says so plainly rather than letting a device quietly forget
+  its network. No cable is needed: it comes back on its own SoftAP console,
+  and a board with a screen can be provisioned from the screen. Only the
+  three plain-ESP32 boards are unaffected, because they cannot do this at
+  all.
 - **Notification delivery is verified for three providers of five:** Gotify
   and the webhook have been sent end to end from the device; ntfy accepted the
   exact request the firmware builds; Pushover and Telegram have had their
