@@ -3,7 +3,7 @@
 [![CI](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml/badge.svg)](https://github.com/Forged-in-Feathers-Technology/observore/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Forged-in-Feathers-Technology/observore?sort=semver)](https://github.com/Forged-in-Feathers-Technology/observore/releases)
 
-A passive counter-surveillance detector for ten ESP32 boards, in two
+A passive counter-surveillance detector for eleven ESP32 boards, in two
 families: headless sensors — the [Seeed Studio XIAO
 ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/), the
 dual-band [ESP32-C5](https://www.espressif.com/en/products/socs/esp32-c5) and
@@ -26,7 +26,7 @@ Observer and omnivore: it eats surveillance signals.
 pocket-watch case showing a clock face, and an open case holding a bare board
 wired to a 2000 mAh lithium cell](docs/images/boards.jpg)
 
-*Five of the ten profiles, one firmware: the 2.8" and 3.5" Cheap Yellow
+*Five of the eleven profiles, one firmware: the 2.8" and 3.5" Cheap Yellow
 Displays, the C5 display board that sees both bands, and the round AMOLED
 wearing its watch face — with a headless node open on its cell beside them,
 running the same build with nothing to show it on.*
@@ -66,8 +66,9 @@ makes it fit on a chip with no PSRAM, and every memory problem this project has
 had was the TLS handshake behind a notification. A screen is a personal display,
 so the trade is a fair one.
 
-Six of the ten have screens: the 2.8" board in its two panel revisions, the
-3.5", the C5 one below, and the two round ones after it. See [the
+Seven of the eleven have screens: the 2.8" board in its two panel
+revisions, the 3.5", the C5 one below, the two round ones after it, and the
+CrowPanel 1.46", which adds a knob that turns the page. See [the
 screen](#the-screen) for what they can do and [boards, which are not the same
 as chips](#boards-which-are-not-the-same-as-chips) for the profiles.
 
@@ -518,7 +519,7 @@ So it is worth being precise about what survives a power cut:
 | household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
 | device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
 | peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
-| card log *(1.85 only, off by default)* | every detection, as CSV: time, address, class, label, signal, vendor | until you delete the file |
+| card log *(1.85 and 1.43 only, off by default)* | every detection, as CSV: time, address, class, label, signal, vendor | until you delete the file |
 
 Two things in that table are worth drawing out. The **census keeps no
 addresses** — only hashes, because the question it asks is *how many* a device
@@ -527,9 +528,9 @@ identifiable record is the **history**, which is 48 entries deep and
 overwrites itself.
 
 **Unless you give it a card.** That sentence used to end "it is not a growing
-log", and on nine of the ten boards it still is not. The 1.85 has a MicroSD
-slot, and with `OBSERVORE_SDLOG` turned on it writes every detection to it as
-CSV and never overwrites anything. That is the point — 48 entries is a limit
+log", and on nine of the eleven boards it still is not. The 1.85 and the 1.43
+AMOLED have a MicroSD slot, and with `OBSERVORE_SDLOG` turned on they write
+every detection to it as CSV and never overwrite anything. That is the point — 48 entries is a limit
 of where the history was kept rather than of anything the detector knows — but
 it is a different object from the rest of this table: a readable, growing,
 removable record of who was near the device and when, on a card that fits in
@@ -541,6 +542,13 @@ themselves to anybody in range: the card records a public fact rather than
 creating a private one. A Wi-Fi password is a secret; a beacon is a shout. If
 that trade is not one you want, leave it off and the board behaves like the
 other nine.
+
+The two CYDs have a slot too, and deliberately do not use it. It works —
+the card mounts and writes — but FATFS and the SPI driver want about 30 KB
+of internal RAM, and an ESP32 with no PSRAM driving those panels has not got
+it: the heap low-water mark falls from 11,772 bytes to 24 and the web console
+stops starting. A card that costs the console is a bad trade, and "it
+mounted" would have shipped it.
 
 The console can show and clear all of it. `POST /api/history` empties the
 history, `/api/unmute?all=1` the rules.
@@ -564,7 +572,7 @@ firmware does, not legal advice.
 
 ## Getting started
 
-You need one of the ten supported boards and a USB cable. The whole first run
+You need one of the eleven supported boards and a USB cable. The whole first run
 takes about ten minutes, most of it waiting.
 
 The browser flasher detects the chip and offers the builds that fit it. There is
@@ -955,6 +963,7 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | `boards/nm-cyd-c5` | GPIO27, WS2812 | GPIO28 | the 2.8" CYD on a **C5**: 8 MB PSRAM, dual-band, with touch. The only display board that sees 5 GHz |
 | `boards/waveshare-s3-amoled-143` | none — the panel is the indicator | GPIO0 | round 466x466 AMOLED, capacitive touch, clock and **accelerometer** |
 | `boards/waveshare-s3-lcd-185` | none | GPIO0 | round 1.85" 360x360 LCD with capacitive touch, clock and **accelerometer**. 31 columns, the narrowest here |
+| `boards/crowpanel-146-rotary` | GPIO48, WS2812 | GPIO41 *(the knob's push)* | round 1.46" 360x360 LCD, capacitive touch, and a **rotary knob that turns the page**. Octal PSRAM |
 
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
@@ -972,6 +981,21 @@ panel nor the touch controller has a reset pin — both are behind the expander
 No watch face on it yet. Nothing blocks one; the dial was tuned against the
 1.43's 466 pixels and wants checking against 360 rather than assuming it
 scales.
+
+The CrowPanel is the one with a knob, and it is the only input here that is
+not a finger or a single button: turning it changes page, in either
+direction, and its push is the ordinary board button. It is counted by the
+PCNT peripheral rather than polled, because a knob turned quickly outruns
+the UI loop and a missed edge does not merely lose travel — it counts a
+detent the wrong way.
+
+Its touch panel arrives with **x and y crossed and one of them reversed**,
+which no pair of calibration bounds can express; `OBSERVORE_TOUCH_SWAP_XY`
+and `OBSERVORE_TOUCH_FLIP_Y` do. Three rounds of on-screen calibration each
+made it worse before that was measured. The raw x axis also saturates,
+covering screen rows 32 to 302 and pinning beyond them — the text area sits
+wholly inside that, but anything drawn at the extreme top or bottom edge
+would be out of reach.
 
 The XIAO profiles are **compile-tested only**. Neither board has been run.
 [docs/xiao-verification.md](docs/xiao-verification.md) lists what is unverified
