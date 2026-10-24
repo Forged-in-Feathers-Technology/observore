@@ -60,6 +60,14 @@ CONFIG_OBSERVORE_BOARD="xiao-esp32s3"
 # Not set for the plain ESP32: it has no HMAC peripheral, so the symbol would
 # be silently discarded rather than refused. Hence per target, not in the
 # common defaults.
+#
+# Verified on hardware (CrowPanel 1.46", 2026-10-24): eFuse KEY_PURPOSE_5
+# went from USER to HMAC_UP, write-protected, the key itself reading back
+# as ?? . The nvs partition went from 145 readable strings to 12, with
+# meshkey, sta_pass, ap_pass, gotify and tlskey all absent. From a wiped
+# partition the one-time erase fires on the first boot and not the second,
+# and the console identity survives three reboots, so encrypted data is
+# written and read back across power cycles.
 CONFIG_NVS_ENCRYPTION=y
 CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
 CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5
