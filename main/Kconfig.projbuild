@@ -1320,7 +1320,7 @@ config OBSERVORE_SDCARD
     bool "The board has a MicroSD slot"
     default n
     help
-        Only the Waveshare 1.85 has one here.
+        The Waveshare 1.85 and the 1.43 AMOLED have one here.
 
         Its chip select is a line on the I/O expander rather than a GPIO,
         which the SPI driver cannot reach. Nothing else is on those three
@@ -1343,12 +1343,27 @@ config OBSERVORE_SDCARD_MISO
 config OBSERVORE_SDCARD_MOSI
     int "Card data in"
     default 17
+config OBSERVORE_SDCARD_CS_GPIO
+    int "Chip select, as a GPIO (-1 when it is on the expander)"
+    default -1
+    help
+        A real pin, so the SPI peripheral drives it and the driver asserts
+        it per transaction. Leave at -1 on a board whose select is an
+        expander line, and set the bit below instead.
+
+        The two are not interchangeable settings for the same thing: a
+        select the peripheral can reach gets the driver's own entry
+        sequence, and one it cannot has to be clocked into SPI mode by
+        hand before the bus is handed over.
+
 config OBSERVORE_SDCARD_CS_IOEXP_BIT
     int "Chip select, as an expander bit"
     default 2
     help
         Expander bit, not a GPIO. The vendor calls it EXIO3 and numbers from
         one, so their EXIO3 is this chip's bit 2.
+
+        Ignored when the select above is a GPIO.
 config OBSERVORE_SDCARD_SPI_HOST
     int "SPI host, as the esp_spi_host_device_t value"
     default 2

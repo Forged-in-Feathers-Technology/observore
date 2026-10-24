@@ -20,6 +20,15 @@ static const char *TAG = "observore.sd";
 
 #include "observore_ioexp.h"
 
+/* Whether this board's card select is a GPIO the SPI peripheral can drive,
+ * or a line on an I2C expander that it cannot. The two need genuinely
+ * different mount sequences, not a different pin number. */
+#if CONFIG_OBSERVORE_SDCARD_CS_GPIO >= 0
+#define SD_CS_IS_GPIO 1
+#else
+#define SD_CS_IS_GPIO 0
+#endif
+
 #define MOUNT_POINT "/sd"
 
 static sdmmc_card_t *s_card;
@@ -28,6 +37,7 @@ static char s_name[32];
 
 void observore_sd_init(void)
 {
+#if !SD_CS_IS_GPIO
     /* Deselected first, and that ordering is the whole of the trick.
      *
      * A card enters SPI mode only after it has seen at least 74 clock
@@ -44,6 +54,7 @@ void observore_sd_init(void)
                  CONFIG_OBSERVORE_SDCARD_CS_IOEXP_BIT);
         return;
     }
+#endif
 
     spi_bus_config_t bus = {
         .mosi_io_num = CONFIG_OBSERVORE_SDCARD_MOSI,
@@ -60,12 +71,18 @@ void observore_sd_init(void)
         return;
     }
 
+#if !SD_CS_IS_GPIO
     /* The entry sequence: 80 clocks with select high and data high.
      *
      * Sent through a temporary device with no select of its own, because
      * the real one is on an I2C expander and the SPI peripheral cannot
      * drive it. Ten bytes of 0xFF is 80 clocks, comfortably over the 74 the
-     * card is entitled to. */
+     * card is entitled to.
+     *
+     * Only needed where the select line is not a pin. Where it is, the
+     * sdspi driver clocks the card into SPI mode itself, with the select
+     * it is managing held high -- which is the same sequence, done by the
+     * code that owns the line. */
     spi_device_interface_config_t idle = {
         .clock_speed_hz = 400 * 1000,
         .mode = 0,
@@ -92,6 +109,7 @@ void observore_sd_init(void)
      * wires, so the alternative -- an I2C round trip around every SPI
      * transaction -- would cost more than it bought. */
     observore_ioexp_set(CONFIG_OBSERVORE_SDCARD_CS_IOEXP_BIT, false);
+#endif  /* !SD_CS_IS_GPIO */
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = CONFIG_OBSERVORE_SDCARD_SPI_HOST;
@@ -101,9 +119,16 @@ void observore_sd_init(void)
 
     sdspi_device_config_t dev = SDSPI_DEVICE_CONFIG_DEFAULT();
     dev.host_id = CONFIG_OBSERVORE_SDCARD_SPI_HOST;
+#if SD_CS_IS_GPIO
+    /* A pin the peripheral can drive, so the driver manages it: select is
+     * then asserted per transaction, as the card expects, rather than tied
+     * low for the life of the board. */
+    dev.gpio_cs = (gpio_num_t)CONFIG_OBSERVORE_SDCARD_CS_GPIO;
+#else
     /* The driver is told there is no select to manage, because the one this
      * board has is not a pin it can reach. It is already low. */
     dev.gpio_cs = SDSPI_SLOT_NO_CS;
+#endif
     dev.gpio_cd = SDSPI_SLOT_NO_CD;
     dev.gpio_wp = SDSPI_SLOT_NO_WP;
     dev.gpio_int = GPIO_NUM_NC;
@@ -129,7 +154,9 @@ void observore_sd_init(void)
             ESP_LOGI(TAG, "no card (%s)", esp_err_to_name(err));
         }
         spi_bus_free(CONFIG_OBSERVORE_SDCARD_SPI_HOST);
+#if !SD_CS_IS_GPIO
         observore_ioexp_set(CONFIG_OBSERVORE_SDCARD_CS_IOEXP_BIT, true);
+#endif
         return;
     }
 

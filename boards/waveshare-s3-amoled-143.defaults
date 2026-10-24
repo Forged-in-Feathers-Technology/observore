@@ -121,3 +121,22 @@ CONFIG_OBSERVORE_LED_NONE=y
 CONFIG_OBSERVORE_BUTTON_GPIO=0
 
 CONFIG_OBSERVORE_BOARD="waveshare-s3-amoled-143"
+
+# The MicroSD slot, on the back of the board, and NOT turned on here.
+#
+# The pins are the vendor's, from the wiki's interface table:
+#
+#   IO38  SD_CS        IO40  SD_MISO
+#   IO39  SD_MOSI      IO41  SD_SCLK
+#
+# They clash with nothing: the panel is QSPI on IO9-14, touch and the other
+# I2C parts are on IO47/48, and the PSRAM on this part does not reach IO38.
+# Unlike the 1.85, the select is a real pin, so the SPI peripheral drives it
+# and the sdspi driver runs its own entry sequence -- see
+# OBSERVORE_SDCARD_CS_GPIO.
+#
+# Off because it has never been seen to work. A build with these settings
+# reached the mount and got ESP_ERR_TIMEOUT, which is the correct answer for
+# an empty slot and indistinguishable from a wrong pin. There was no card in
+# this board to tell the two apart. Enable it, put a FAT32 card in, and if it
+# mounts then this comment should become the four settings below it.
