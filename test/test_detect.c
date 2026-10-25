@@ -1418,6 +1418,27 @@ static void test_a_warning_survives_the_round_trip(void)
     CHECK(out.seq == in.seq, "the sequence survives");
     CHECK(out.age_s == in.age_s, "the age survives");
     CHECK(!out.have_pos, "no position was claimed");
+
+    /* The rule that decides whether a position reaches the wire, now that a
+     * second caller depends on it: whatever supplies a node its own position
+     * refuses the same values, at the point somebody typed them rather than
+     * silently at transmit time. */
+    CHECK(observore_peer_position_usable(515074000, -1278000),
+          "London is a usable position");
+    CHECK(observore_peer_position_usable(-338688000, 1512093000),
+          "so is Sydney, both signs");
+    CHECK(!observore_peer_position_usable(0, 0),
+          "Null Island is not: an unset field is far likelier than a buoy");
+    CHECK(!observore_peer_position_usable(900000001, 0),
+          "nor is a latitude past the pole");
+    CHECK(!observore_peer_position_usable(-900000001, 0),
+          "nor past the other pole");
+    CHECK(!observore_peer_position_usable(0, 1800000001),
+          "nor a longitude past the antimeridian");
+    CHECK(!observore_peer_position_usable(0, -1800000001),
+          "nor past it the other way");
+    CHECK(observore_peer_position_usable(900000000, 1800000000),
+          "but the limits themselves are usable");
     CHECK(!out.trusted, "and nothing unsigned arrives trusted");
 
     /* With a position. Three bytes a coordinate, so the value comes back

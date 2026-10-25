@@ -96,6 +96,66 @@ icon added would have arrived as a negative number and drawn a question mark.
 Both take a `uint8_t` now. #132 said the mesh mark would not be the last icon
 this project wants; adding one is a line in `ICONS` and sixteen bytes.
 
+## Warnings that say where
+
+A warning that says *what* is worth less than one that says *what, and
+where*. The wire format has carried a position since the first version and
+the receiver has decoded it since — and nothing ever filled it in, so every
+warning this project sent for its first several releases was positionless.
+The field was shipped, tested, and dead at the sending end.
+
+It is filled from a position the **owner gives the node**, not from a sensor:
+
+```
+POST /api/nodepos?lat_e7=515074000&lon_e7=-1278000
+GET  /api/nodepos      -> {"ok":true,"set":true,"lat_e7":515074000,...}
+POST /api/nodepos?clear=1
+```
+
+Degrees times ten million, because that is what the wire carries and because
+a decimal point in a query string is a rounding argument nobody needs. 51.5074
+is `515074000`.
+
+### Why the owner rather than a GPS
+
+A stationary node knows where it is the moment somebody tells it, and most
+nodes are stationary — that is the premise of learning what is normally
+around. A GPS costs a part and a UART and is fitted to one board profile, so
+it is a second source, not a prerequisite.
+
+### There is no default, and that is deliberate
+
+Unset means warnings go out exactly as they did before. Nothing is inferred
+from a timezone, from an IP, or from anything else: broadcasting where a
+detector is sitting is its own hazard, and a device that guessed would be
+making that choice on the owner's behalf.
+
+It is also only ever sent by a node that is already transmitting. Mesh
+broadcast is off by default, and off means the advertising code is not
+compiled in — so setting a position on a silent node changes nothing about
+what leaves it.
+
+### Coarse on the wire, with no setting to make it finer
+
+Stored exactly, transmitted divided by 256 — about 2.8 metres. There is no
+option to send more precision, because a node broadcasting its exact location
+would be offering a resolution that only helps somebody looking for it.
+
+The validity rule is one function, `observore_peer_position_usable()`, shared
+by the encoder and by whatever stores a position, so a coordinate refused at
+transmit time is refused at the point a person typed it instead. Null Island
+is excluded: 0,0 is in the Gulf of Guinea and is overwhelmingly more likely to
+be an unset field than a node on a buoy.
+
+### Reading them back
+
+`GET /api/peers` lists the standing warnings — node, class, age, whether the
+sender was trusted, and the position when one was sent. The function behind
+it, `observore_peer_recent()`, existed and was host-tested and had **no caller
+in the firmware**: a node could report that three neighbours were warning and
+nothing could say what about. Counting is not reporting, and a position that
+cannot be read back is not worth sending.
+
 ## Warnings your own nodes signed
 
 `trusted` was permanently false until now: the field existed so the parser

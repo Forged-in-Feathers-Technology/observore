@@ -91,10 +91,11 @@
  *
  * ## What is deliberately not here yet
  *
- * No key management, so nothing can be trusted and `trusted` is always false.
- * The field exists because the parser has to know a tag may follow in order
- * to not mistake it for payload, and because the format should not need
- * changing when keys arrive.
+ * Nothing, as of this writing. Key management arrived in #183: a warning
+ * carrying a tag this node can verify against the household secret is
+ * reported `trusted`, and one that does not is a stranger's. This paragraph
+ * said the opposite for several releases after that stopped being true,
+ * which is the ordinary way a comment goes wrong.
  */
 
 #define OBSERVORE_PEER_MAGIC   "OBW1"
@@ -130,7 +131,7 @@ typedef struct {
     uint16_t age_s;      /* how long before sending they saw it */
     bool     have_pos;
     int32_t  lat_e7, lon_e7;
-    bool     trusted;    /* carried a tag this device could verify: never yet */
+    bool     trusted;    /* carried a tag this device could verify (#183) */
     int64_t  heard_us;   /* when we heard it, for ageing */
 } observore_peer_warning_t;
 
@@ -158,6 +159,18 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
  * the sort of thing that drifts. */
 bool observore_peer_from_advert(const uint8_t *adv, size_t adv_len,
                                observore_peer_warning_t *out);
+
+/* Whether a position is one this format will carry.
+ *
+ * Public because the rule has two callers now: the encoder, which refuses to
+ * put an unusable position on the wire, and whatever supplies a node its own
+ * position in the first place, which should refuse it at the point a person
+ * typed it rather than silently drop it at transmit time. One rule, so the
+ * two answers cannot drift apart.
+ *
+ * Null Island is excluded. 0,0 is in the Gulf of Guinea and is overwhelmingly
+ * more likely to be an unset field than a node on a buoy. */
+bool observore_peer_position_usable(int32_t lat_e7, int32_t lon_e7);
 
 /* This node's id, from its own address.
  *
