@@ -405,10 +405,29 @@ static void gps_task(void *arg)
             next_summary = now + 60 * 1000000;
             observore_gps_t g = observore_gps_state();
             if (g.time_valid) {
-                ESP_LOGI(TAG, "%04d-%02d-%02d %02d:%02d:%02dZ, %u satellites, "
-                         "fix %u, %u sentences", g.year, g.mon, g.day,
-                         g.hour, g.min, g.sec, g.satellites, g.fix_quality,
-                         (unsigned)g.sentences);
+                /* With the position, now that one is read. The summary said
+                 * "fix 1" and nothing about where, which is no use to
+                 * somebody checking whether the coordinates are right --
+                 * and a wrong coordinate reads exactly like a right one
+                 * until it is printed next to a place you recognise. */
+                if (g.have_pos) {
+                    ESP_LOGI(TAG, "%04d-%02d-%02d %02d:%02d:%02dZ, "
+                             "%u satellites, fix %u, at %ld.%07ld, "
+                             "%ld.%07ld, %u sentences",
+                             g.year, g.mon, g.day, g.hour, g.min, g.sec,
+                             g.satellites, g.fix_quality,
+                             (long)(g.lat_e7 / 10000000),
+                             (long)labs(g.lat_e7 % 10000000),
+                             (long)(g.lon_e7 / 10000000),
+                             (long)labs(g.lon_e7 % 10000000),
+                             (unsigned)g.sentences);
+                } else {
+                    ESP_LOGI(TAG, "%04d-%02d-%02d %02d:%02d:%02dZ, "
+                             "%u satellites, fix %u, no position yet, "
+                             "%u sentences", g.year, g.mon, g.day,
+                             g.hour, g.min, g.sec, g.satellites,
+                             g.fix_quality, (unsigned)g.sentences);
+                }
             } else {
                 /* The antenna is named because an antenna fault and a basement
                  * look identical from a satellite count of zero, and they want
