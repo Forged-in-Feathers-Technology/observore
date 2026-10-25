@@ -116,12 +116,35 @@ Degrees times ten million, because that is what the wire carries and because
 a decimal point in a query string is a rounding argument nobody needs. 51.5074
 is `515074000`.
 
-### Why the owner rather than a GPS
+### Why the owner first, and a GPS second
 
 A stationary node knows where it is the moment somebody tells it, and most
 nodes are stationary — that is the premise of learning what is normally
 around. A GPS costs a part and a UART and is fitted to one board profile, so
-it is a second source, not a prerequisite.
+it is the second source, not the prerequisite.
+
+Where there is a receiver, a fix fills the position in when nobody has set
+one. The owner's answer wins when there is one: a typed position is a
+deliberate statement about where a node lives, and silently overriding it
+with a receiver that has just acquired a marginal fix would make the setting
+look broken. A node that moves is a node nobody pinned, and that is the case
+the GPS branch is for.
+
+The NMEA parser had been reading straight past the coordinates for several
+releases. It was written to set a clock, and the position was sitting in the
+same GGA sentence the whole time.
+
+Two things about reading it that are easy to get wrong:
+
+- **NMEA glues degrees to decimal *minutes*** — `ddmm.mmmm`, not decimal
+  degrees. `5557.1980` is 55 degrees and 57.198 minutes, which is 55.9533
+  degrees and not 55.5720. Reading it as a decimal degree is wrong by up to
+  forty per cent of a degree, which is tens of kilometres, and looks entirely
+  plausible.
+- **A module without a fix may still fill the fields** with the last thing it
+  believed. Quality zero means no position here, whatever the fields say,
+  because a stale fix broadcast as current is worse than sending none. Losing
+  a fix clears the position with it.
 
 ### There is no default, and that is deliberate
 

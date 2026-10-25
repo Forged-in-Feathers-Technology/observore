@@ -4,7 +4,9 @@
 
 #include "esp_log.h"
 #include "observore_nvs.h"
+#include "observore_gps.h"
 #include "observore_peer.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "observore.nodepos";
 
@@ -48,12 +50,28 @@ void observore_nodepos_init(void)
 
 bool observore_nodepos_get(int32_t *lat_e7, int32_t *lon_e7)
 {
-    if (!s_have) {
-        return false;
+    if (s_have) {
+        if (lat_e7) { *lat_e7 = s_pos.lat_e7; }
+        if (lon_e7) { *lon_e7 = s_pos.lon_e7; }
+        return true;
     }
-    if (lat_e7) { *lat_e7 = s_pos.lat_e7; }
-    if (lon_e7) { *lon_e7 = s_pos.lon_e7; }
-    return true;
+#if CONFIG_OBSERVORE_GPS
+    /* A fix, where there is a receiver and no position was given.
+     *
+     * The owner's answer wins when there is one. A position typed by a
+     * person is a deliberate statement about where a node lives, and
+     * silently overriding it with a receiver that has just acquired a fix
+     * -- possibly a poor one, possibly indoors against a window -- would
+     * make the setting look broken. A node that moves is a node nobody
+     * pinned, and that is the one this branch is for. */
+    observore_gps_t g = observore_gps_state();
+    if (g.have_pos && observore_peer_position_usable(g.lat_e7, g.lon_e7)) {
+        if (lat_e7) { *lat_e7 = g.lat_e7; }
+        if (lon_e7) { *lon_e7 = g.lon_e7; }
+        return true;
+    }
+#endif
+    return false;
 }
 
 bool observore_nodepos_set(int32_t lat_e7, int32_t lon_e7)

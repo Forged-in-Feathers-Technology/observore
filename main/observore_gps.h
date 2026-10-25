@@ -80,6 +80,12 @@ typedef struct {
     bool    antenna_seen;
     uint32_t sentences;        /* checksum-valid sentences understood */
     uint32_t bad_checksum;
+    /* Where the module says it is, in degrees times ten million -- the same
+     * unit the mesh format carries, so nothing is converted between them.
+     * Only set while there is a fix; cleared by any GGA without one, so a
+     * position can never outlive the fix that produced it. */
+    bool    have_pos;
+    int32_t lat_e7, lon_e7;
 } observore_gps_t;
 
 /* Feed one byte. Returns a complete sentence when one finishes, or NULL.
