@@ -480,10 +480,13 @@ Read these before trusting it.
   console password, the notifier tokens, the mesh key, the mute rules and the
   detection history all go, and the board comes up wanting to be provisioned
   again. The log says so plainly rather than letting a device quietly forget
-  its network. No cable is needed: it comes back on its own SoftAP console,
-  and a board with a screen can be provisioned from the screen. Only the
-  three plain-ESP32 boards are unaffected, because they cannot do this at
-  all.
+  its network. No cable is needed, but the console does not appear by
+  itself: **hold the button for four seconds** to put the board into console
+  mode, which is what starts the SoftAP. A patrolling board is sniffing
+  across channels and runs no access point at all — six scans over forty
+  seconds found nothing, which is what sent somebody looking. A board with a
+  screen can be provisioned from the screen instead. Only the three
+  plain-ESP32 boards are unaffected, because they cannot encrypt at all.
 - **Notification delivery is verified for three providers of five:** Gotify
   and the webhook have been sent end to end from the device; ntfy accepted the
   exact request the firmware builds; Pushover and Telegram have had their

@@ -1418,6 +1418,27 @@ static void test_a_warning_survives_the_round_trip(void)
     CHECK(out.seq == in.seq, "the sequence survives");
     CHECK(out.age_s == in.age_s, "the age survives");
     CHECK(!out.have_pos, "no position was claimed");
+
+    /* The rule that decides whether a position reaches the wire, now that a
+     * second caller depends on it: whatever supplies a node its own position
+     * refuses the same values, at the point somebody typed them rather than
+     * silently at transmit time. */
+    CHECK(observore_peer_position_usable(515074000, -1278000),
+          "London is a usable position");
+    CHECK(observore_peer_position_usable(-338688000, 1512093000),
+          "so is Sydney, both signs");
+    CHECK(!observore_peer_position_usable(0, 0),
+          "Null Island is not: an unset field is far likelier than a buoy");
+    CHECK(!observore_peer_position_usable(900000001, 0),
+          "nor is a latitude past the pole");
+    CHECK(!observore_peer_position_usable(-900000001, 0),
+          "nor past the other pole");
+    CHECK(!observore_peer_position_usable(0, 1800000001),
+          "nor a longitude past the antimeridian");
+    CHECK(!observore_peer_position_usable(0, -1800000001),
+          "nor past it the other way");
+    CHECK(observore_peer_position_usable(900000000, 1800000000),
+          "but the limits themselves are usable");
     CHECK(!out.trusted, "and nothing unsigned arrives trusted");
 
     /* With a position. Three bytes a coordinate, so the value comes back
@@ -5630,6 +5651,60 @@ static void test_gps(void)
           "the bench antenna reports OK, which is not the same as having a fix");
     CHECK(!observore_gps_utc(&g, &(struct tm){0}),
           "no valid time means no tm, however many sentences arrived");
+    CHECK(!g.have_pos, "and no fix means no position");
+
+    /* ---- the position, which this parser used to read straight past ---- */
+
+    /* NMEA glues degrees to decimal *minutes*: ddmm.mmmm. Reading it as a
+     * decimal degree is not slightly wrong, it is wrong by up to forty per
+     * cent of a degree -- tens of kilometres. 5557.1980 is 55 degrees and
+     * 57.198 minutes, which is 55.9533 degrees, not 55.5720. */
+    observore_gps_t p1 = {0};
+    CHECK(observore_gps_apply(&p1,
+          "$GNGGA,123519,5557.1980,N,00311.2980,W,1,09,0.8,50.0,M,46.9,M,,*7E"),
+          "a GGA with a fix is understood");
+    CHECK(p1.have_pos, "and it carries a position");
+    CHECK(p1.lat_e7 == 559533000,
+          "5557.1980 N is 55.9533000 degrees, not 55.5719800: got %ld",
+          (long)p1.lat_e7);
+    CHECK(p1.lon_e7 == -31883000,
+          "00311.2980 W is -3.1883000 degrees: got %ld", (long)p1.lon_e7);
+
+    observore_gps_t p2 = {0};
+    CHECK(observore_gps_apply(&p2,
+          "$GNGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*59"),
+          "a three-decimal fraction is understood too");
+    CHECK(p2.lat_e7 == 481173000, "4807.038 N is 48.1173000: got %ld",
+          (long)p2.lat_e7);
+    CHECK(p2.lon_e7 == 115166666,
+          "01131.000 E is 11.5166666, a third of a degree repeating that "
+          "truncates rather than rounds: got %ld", (long)p2.lon_e7);
+
+    /* Both signs, and a longitude needing three degree digits. */
+    observore_gps_t p3 = {0};
+    CHECK(observore_gps_apply(&p3,
+          "$GNGGA,123519,3352.1280,S,15112.5580,E,2,07,1.1,20.0,M,46.9,M,,*73"),
+          "the southern and eastern hemispheres are understood");
+    CHECK(p3.lat_e7 == -338688000, "3352.1280 S is -33.8688000: got %ld",
+          (long)p3.lat_e7);
+    CHECK(p3.lon_e7 == 1512093000, "15112.5580 E is 151.2093000: got %ld",
+          (long)p3.lon_e7);
+
+    /* A module still searching may leave the last position it believed in
+     * the fields. Broadcasting a stale fix as current is worse than sending
+     * none, so quality zero means no position whatever the fields say. */
+    observore_gps_t p4 = {0};
+    CHECK(observore_gps_apply(&p4,
+          "$GNGGA,123519,4807.038,N,01131.000,E,0,00,99.9,,,,,,*5B"),
+          "a GGA with no fix but a populated position is understood");
+    CHECK(!p4.have_pos,
+          "and its position is refused: quality zero outranks the fields");
+
+    /* A fix that goes away takes its position with it. */
+    CHECK(observore_gps_apply(&p1,
+          "$GNGGA,123519,4807.038,N,01131.000,E,0,00,99.9,,,,,,*5B"),
+          "losing the fix is understood");
+    CHECK(!p1.have_pos, "and the old position does not outlive it");
 
     /* Sentences this build does not read are not errors. */
     CHECK(!observore_gps_apply(&g, "$GNVTG,,,,,,,,,N*2E"), "VTG is ignored");

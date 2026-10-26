@@ -39,7 +39,7 @@ static int32_t le24s(const uint8_t *p)
 /* The same rule the drone decoder applies, for the same reason: zero/zero is
  * a real place in the Gulf of Guinea, and a node that has no fix sends
  * zeroes. Repeating it as a position would be a confident lie. */
-static bool position_usable(int32_t lat_e7, int32_t lon_e7)
+bool observore_peer_position_usable(int32_t lat_e7, int32_t lon_e7)
 {
     if (lat_e7 == 0 && lon_e7 == 0) {
         return false;
@@ -86,7 +86,7 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
     if (flags & FLAG_POSITION) {
         int32_t lat = le24s(&payload[12]) * COARSE_SHIFT;
         int32_t lon = le24s(&payload[15]) * COARSE_SHIFT;
-        if (position_usable(lat, lon)) {
+        if (observore_peer_position_usable(lat, lon)) {
             out->lat_e7 = lat;
             out->lon_e7 = lon;
             out->have_pos = true;
@@ -165,7 +165,8 @@ size_t observore_peer_build_tagged(const observore_peer_warning_t *w,
     if (!w || !out) {
         return 0;
     }
-    bool pos = w->have_pos && position_usable(w->lat_e7, w->lon_e7);
+    bool pos = w->have_pos &&
+               observore_peer_position_usable(w->lat_e7, w->lon_e7);
     size_t need = BASE_LEN + (pos ? POSITION_LEN : 0) +
                   (tag ? OBSERVORE_PEER_TAG_LEN : 0);
     if (cap < need) {

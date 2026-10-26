@@ -167,6 +167,61 @@ static bool apply_rmc(observore_gps_t *g, const char *s)
     return true;
 }
 
+/* NMEA carries a coordinate as degrees and decimal *minutes* glued together
+ * -- ddmm.mmmm for a latitude, dddmm.mmmm for a longitude -- which is the
+ * detail that makes a naive atof() wrong by up to 40% of a degree rather
+ * than slightly wrong. 5557.1980 is 55 degrees and 57.198 minutes, which is
+ * 55.9533 degrees, not 55.571980.
+ *
+ * Integer throughout, in degrees times ten million, to match what the mesh
+ * format carries and because this chip has no floating point to spare. The
+ * intermediate is 64-bit: minutes scaled to ten million reach 5.9e8, and the
+ * division by sixty has to happen before it is narrowed.
+ *
+ * Returns false on anything it cannot read whole, which is what a module
+ * with no fix sends -- GGA with empty position fields is normal indoors and
+ * is not an error. */
+static bool nmea_coord(const char *s, int deg_digits, char hemi,
+                       int32_t *out_e7)
+{
+    int i = 0;
+    for (i = 0; s[i] >= '0' && s[i] <= '9'; i++) { }
+    /* Degrees and whole minutes must both be present; the fraction need not
+     * be, and some modules send more digits of it than others. */
+    if (i < deg_digits + 2) {
+        return false;
+    }
+    int32_t deg = 0;
+    for (int d = 0; d < deg_digits; d++) {
+        deg = deg * 10 + (s[d] - '0');
+    }
+    int64_t min_e7 = 0;
+    for (int d = deg_digits; d < i; d++) {
+        min_e7 = min_e7 * 10 + (s[d] - '0');
+    }
+    min_e7 *= 10000000;
+    if (s[i] == '.') {
+        int64_t scale = 1000000;
+        for (int d = i + 1; s[d] >= '0' && s[d] <= '9'; d++) {
+            if (scale > 0) {
+                min_e7 += (int64_t)(s[d] - '0') * scale;
+                scale /= 10;
+            }
+        }
+    }
+    int64_t e7 = (int64_t)deg * 10000000 + min_e7 / 60;
+    if (hemi == 'S' || hemi == 'W') {
+        e7 = -e7;
+    } else if (hemi != 'N' && hemi != 'E') {
+        return false;
+    }
+    if (e7 > 1800000000LL || e7 < -1800000000LL) {
+        return false;
+    }
+    *out_e7 = (int32_t)e7;
+    return true;
+}
+
 static bool apply_gga(observore_gps_t *g, const char *s)
 {
     char q[4], n[4];
@@ -178,6 +233,28 @@ static bool apply_gga(observore_gps_t *g, const char *s)
     if (field(s, 7, n, sizeof(n)) && n[0] != '\0') {
         int v = atoi(n);
         g->satellites = (uint8_t)((v < 0) ? 0 : (v > 255 ? 255 : v));
+    }
+
+    /* The position, which this parser read past for several releases: it
+     * was written to set a clock, and the coordinates were sitting in the
+     * same sentence the whole time (#132).
+     *
+     * Only with a fix. A module reports quality 0 while it is still
+     * searching and may still fill the fields with the last thing it
+     * believed, and a stale position broadcast as current is worse than
+     * none. */
+    char lat[16], ns[4], lon[16], ew[4];
+    g->have_pos = false;
+    if (g->fix_quality > 0 &&
+        field(s, 2, lat, sizeof(lat)) && field(s, 3, ns, sizeof(ns)) &&
+        field(s, 4, lon, sizeof(lon)) && field(s, 5, ew, sizeof(ew))) {
+        int32_t la = 0, lo = 0;
+        if (nmea_coord(lat, 2, ns[0], &la) &&
+            nmea_coord(lon, 3, ew[0], &lo)) {
+            g->lat_e7   = la;
+            g->lon_e7   = lo;
+            g->have_pos = true;
+        }
     }
     return true;
 }
@@ -328,10 +405,29 @@ static void gps_task(void *arg)
             next_summary = now + 60 * 1000000;
             observore_gps_t g = observore_gps_state();
             if (g.time_valid) {
-                ESP_LOGI(TAG, "%04d-%02d-%02d %02d:%02d:%02dZ, %u satellites, "
-                         "fix %u, %u sentences", g.year, g.mon, g.day,
-                         g.hour, g.min, g.sec, g.satellites, g.fix_quality,
-                         (unsigned)g.sentences);
+                /* With the position, now that one is read. The summary said
+                 * "fix 1" and nothing about where, which is no use to
+                 * somebody checking whether the coordinates are right --
+                 * and a wrong coordinate reads exactly like a right one
+                 * until it is printed next to a place you recognise. */
+                if (g.have_pos) {
+                    ESP_LOGI(TAG, "%04d-%02d-%02d %02d:%02d:%02dZ, "
+                             "%u satellites, fix %u, at %ld.%07ld, "
+                             "%ld.%07ld, %u sentences",
+                             g.year, g.mon, g.day, g.hour, g.min, g.sec,
+                             g.satellites, g.fix_quality,
+                             (long)(g.lat_e7 / 10000000),
+                             (long)labs(g.lat_e7 % 10000000),
+                             (long)(g.lon_e7 / 10000000),
+                             (long)labs(g.lon_e7 % 10000000),
+                             (unsigned)g.sentences);
+                } else {
+                    ESP_LOGI(TAG, "%04d-%02d-%02d %02d:%02d:%02dZ, "
+                             "%u satellites, fix %u, no position yet, "
+                             "%u sentences", g.year, g.mon, g.day,
+                             g.hour, g.min, g.sec, g.satellites,
+                             g.fix_quality, (unsigned)g.sentences);
+                }
             } else {
                 /* The antenna is named because an antenna fault and a basement
                  * look identical from a satellite count of zero, and they want

@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "observore_ble.h"
@@ -99,7 +100,33 @@ static int on_gap_event(struct ble_gap_event *event, void *arg)
                 warn.trusted = true;
             }
         }
-        observore_peer_note(&warn, now);
+        if (observore_peer_note(&warn, now)) {
+            /* Once per new warning, not per advert: a node repeats its burst
+             * and the table drops the duplicates, so this follows the table's
+             * judgement rather than the radio's. Said at all because a
+             * warning that only moves a counter is a warning nobody can act
+             * on, and because the position is the whole point of carrying
+             * one. */
+            if (warn.have_pos) {
+                ESP_LOGI(TAG, "warned by node %u: %s, seen %us before "
+                              "sending, from %ld.%07ld, %ld.%07ld%s",
+                         (unsigned)warn.node,
+                         observore_class_desc((observore_class_t)warn.cls)->name,
+                         (unsigned)warn.age_s,
+                         (long)(warn.lat_e7 / 10000000),
+                         (long)labs(warn.lat_e7 % 10000000),
+                         (long)(warn.lon_e7 / 10000000),
+                         (long)labs(warn.lon_e7 % 10000000),
+                         warn.trusted ? " (trusted)" : "");
+            } else {
+                ESP_LOGI(TAG, "warned by node %u: %s, seen %us before "
+                              "sending, no position%s",
+                         (unsigned)warn.node,
+                         observore_class_desc((observore_class_t)warn.cls)->name,
+                         (unsigned)warn.age_s,
+                         warn.trusted ? " (trusted)" : "");
+            }
+        }
     }
 
     observore_track_observe(&obs, now);

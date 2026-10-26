@@ -6,6 +6,7 @@
 #include "observore_battery.h"
 #include "observore_sd.h"
 #include "observore_sdlog.h"
+#include "observore_nodepos.h"
 #include "observore_census.h"
 #include "observore_monitors.h"
 #include "observore_peer.h"
@@ -1595,6 +1596,85 @@ static esp_err_t tz_set_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* The warnings themselves, not just how many.
+ *
+ * observore_peer_recent() existed, was host-tested, and had no caller in the
+ * firmware: a node could say "three neighbours are warning" and nothing could
+ * say what about, from where, or how long ago. Counting is not reporting, and
+ * a positioned warning is worth nothing if the position cannot be read back.
+ */
+static esp_err_t peers_handler(httpd_req_t *req)
+{
+    observore_peer_warning_t w[OBSERVORE_PEER_MAX];
+    int64_t now = esp_timer_get_time();
+    size_t n = observore_peer_recent(w, OBSERVORE_PEER_MAX, now);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr_chunk(req, "{\"ok\":true,\"warnings\":[");
+    for (size_t i = 0; i < n; i++) {
+        char item[256];
+        char pos[64] = "";
+        if (w[i].have_pos) {
+            snprintf(pos, sizeof(pos), ",\"lat_e7\":%ld,\"lon_e7\":%ld",
+                     (long)w[i].lat_e7, (long)w[i].lon_e7);
+        }
+        snprintf(item, sizeof(item),
+                 "%s{\"node\":%u,\"class\":\"%s\",\"seq\":%u"
+                 ",\"age_s\":%u,\"heard_s\":%lld,\"trusted\":%s"
+                 ",\"positioned\":%s%s}",
+                 i ? "," : "", (unsigned)w[i].node,
+                 observore_class_desc((observore_class_t)w[i].cls)->name,
+                 (unsigned)w[i].seq, (unsigned)w[i].age_s,
+                 (long long)((now - w[i].heard_us) / 1000000),
+                 w[i].trusted ? "true" : "false",
+                 w[i].have_pos ? "true" : "false", pos);
+        httpd_resp_sendstr_chunk(req, item);
+    }
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+static esp_err_t nodepos_get_handler(httpd_req_t *req)
+{
+    int32_t lat = 0, lon = 0;
+    char body[96];
+    if (observore_nodepos_get(&lat, &lon)) {
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"set\":true,\"lat_e7\":%ld,\"lon_e7\":%ld}",
+                 (long)lat, (long)lon);
+    } else {
+        snprintf(body, sizeof(body), "{\"ok\":true,\"set\":false}");
+    }
+    return send_json(req, body);
+}
+
+static esp_err_t nodepos_set_handler(httpd_req_t *req)
+{
+    char clear[8] = {0};
+    if (query_param(req, "clear", clear, sizeof(clear))) {
+        observore_nodepos_clear();
+        return ok(req);
+    }
+
+    char lat_s[20] = {0}, lon_s[20] = {0};
+    if (!query_param(req, "lat_e7", lat_s, sizeof(lat_s)) ||
+        !query_param(req, "lon_e7", lon_s, sizeof(lon_s))) {
+        /* The unit is named because degrees and degrees-times-ten-million
+         * look alike in a URL and one of them is wrong by seven orders of
+         * magnitude. 51.5074 is 515074000. */
+        return fail(req, "lat_e7 and lon_e7 are required, in degrees times "
+                         "ten million -- 51.5074 is 515074000. Or clear=1");
+    }
+    if (!observore_nodepos_set(strtol(lat_s, NULL, 10),
+                               strtol(lon_s, NULL, 10))) {
+        return fail(req, "not a usable position. Latitude within +-90 and "
+                         "longitude within +-180 degrees, times ten million, "
+                         "and not exactly 0,0");
+    }
+    return ok(req);
+}
+
 esp_err_t observore_web_start(void)
 {
     if (s_server) {
@@ -1640,6 +1720,9 @@ esp_err_t observore_web_start(void)
         {"/api/netcfg",    HTTP_POST, netcfg_set_handler, false},
         {"/api/notify",    HTTP_GET,  notify_get_handler, false},
         {"/api/notify",    HTTP_POST, notify_set_handler, false},
+        {"/api/peers",     HTTP_GET,  peers_handler,      false},
+        {"/api/nodepos",   HTTP_GET,  nodepos_get_handler, false},
+        {"/api/nodepos",   HTTP_POST, nodepos_set_handler, false},
     };
     const size_t n_routes = sizeof(routes) / sizeof(routes[0]);
 

@@ -36,6 +36,7 @@
 #include "observore_monitors.h"
 #include "observore_meshkey.h"
 #include "observore_peer.h"
+#include "observore_nodepos.h"
 #include "observore_netcfg.h"
 #include "observore_nvs.h"
 #include "observore_util.h"
@@ -517,12 +518,17 @@ static void mesh_warn(int64_t now_us)
         .cls   = (uint8_t)top[0].cls,
         .age_s = (uint16_t)(ago_us / 1000000),
     };
+    /* A position if the owner has given this node one. The format has
+     * carried the field since the first version and nothing ever filled it,
+     * so every warning sent until now said what was seen and not where. */
+    w.have_pos = observore_nodepos_get(&w.lat_e7, &w.lon_e7);
     if (observore_ble_warn(&w)) {
         /* Said once per burst, because an emission is the one thing about
          * this device that a person should be able to find in the log
          * afterwards. */
-        ESP_LOGI(TAG, "warned the neighbours: %s, seen %us ago",
-                 observore_class_desc(top[0].cls)->name, (unsigned)w.age_s);
+        ESP_LOGI(TAG, "warned the neighbours: %s, seen %us ago%s",
+                 observore_class_desc(top[0].cls)->name, (unsigned)w.age_s,
+                 w.have_pos ? ", with this node's position" : "");
     }
 
     uint32_t span = (uint32_t)(WARN_MAX_GAP_US - WARN_MIN_GAP_US);
@@ -629,6 +635,7 @@ void app_main(void)
     observore_display_init();
     observore_touch_init();
     observore_rotary_init();
+    observore_nodepos_init();
     observore_motion_init();
     observore_battery_init();
     /* After observore_ioexp_init, and the ordering is load-bearing: this
