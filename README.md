@@ -1003,6 +1003,16 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/xiao-esp32c5.defaults" \
 | `boards/waveshare-s3-lcd-185` | none | GPIO0 | round 1.85" 360x360 LCD with capacitive touch, clock and **accelerometer**. 31 columns, the narrowest here |
 | `boards/crowpanel-146-rotary` | GPIO48, WS2812 | GPIO41 *(the knob's push)* | round 1.46" 360x360 LCD, capacitive touch, and a **rotary knob that turns the page**. Octal PSRAM |
 
+The three plain-ESP32 boards hear less Bluetooth than the rest, and no
+setting closes the gap entirely. Measured with the boards inches apart: at
+the same scan duty cycle a 3.5" CYD recorded about a third of the BLE
+sightings an S3 did in the same minutes. Their profiles now scan with a
+wider window, which recovers roughly forty per cent of that at the cost of
+about a third of the Wi-Fi sniffer's frames — and still leaves them under
+half the S3's rate. If what you care about most is Bluetooth trackers,
+prefer one of the S3 or C5 boards; if it is Wi-Fi-side equipment, the
+difference does not apply. See #231 for the numbers.
+
 The XIAO C5 is the awkward one: its LED is on **the same pin** as the DevKitC's
 addressable pixel but is an ordinary LED, so getting the board wrong leaves it
 dark rather than obviously broken.
