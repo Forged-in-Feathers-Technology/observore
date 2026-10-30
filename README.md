@@ -184,10 +184,21 @@ observe it back, because nothing leaves the radio:
 | Wi-Fi access-point scan | **passive**, no probe requests |
 | Wi-Fi sniff | receive-only |
 | BLE warning bursts | **off unless built in** — see below |
+| — and the node's own position, if it has one | **off unless you set one** |
 
-That last row is the one exception, and it is off in every default build. See
-[Warning the neighbours](docs/mesh.md#warning-the-neighbours) for what it costs and how a
-build without it cannot do it at all.
+That last pair is the one exception, and the bursts are off in every default
+build. See [Warning the neighbours](docs/mesh.md#warning-the-neighbours) for
+what it costs and how a build without it cannot do it at all.
+
+A warning can carry where the node is, which is a second thing to decide
+rather than a detail of the first. It is sent only if you give the node a
+position (`POST /api/nodepos`) or fit it with a GPS, and only by a build that
+transmits at all — so it takes two deliberate choices, not one. Nothing is
+inferred from a timezone or an address, because a device that guessed its own
+location and broadcast it would be making that call for you. It goes out
+coarse, to about 2.8 metres, with no setting to make it finer: a node
+broadcasting its exact position would be offering a precision that only helps
+somebody looking for it.
 
 The Wi-Fi scan being passive matters as much as the BLE one. An active scan
 broadcasts probe requests carrying the device's own MAC on every channel, every
