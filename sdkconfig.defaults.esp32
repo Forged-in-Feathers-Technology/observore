@@ -30,3 +30,27 @@ CONFIG_SPI_MASTER_ISR_IN_IRAM=n
 CONFIG_SPI_MASTER_IN_IRAM=n
 CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
 CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+
+# A wider BLE scan window than the other targets get (#231).
+#
+# The classic ESP32 returns far less BLE per unit of duty cycle than the S3
+# does. Measured with the boards inches apart, over five minutes each, with
+# an untouched S3 captured alongside as a reference -- which mattered, because
+# the room drifted by a factor of two between two of the runs and the raw
+# counts alone said the wider window made things worse:
+#
+#   window/interval  duty   CYD sightings  S3 reference  ratio  Wi-Fi frames
+#    60/160 (stock)  37%          1614          5191     0.311       1086
+#    90/160          56%          2168          4968     0.436        776
+#   120/160          75%          2109          4502     0.468        436
+#
+# 90 is the knee. Going from 60 to 90 buys about forty per cent more BLE for
+# twenty-nine per cent of the sniffer; going on to 120 buys almost no further
+# BLE -- the raw count is flat -- and costs another forty-four per cent. A
+# single measurement at 120, which is where this started, would have chosen
+# the worse of the two.
+#
+# Target-level rather than per board, so a future classic-ESP32 profile gets
+# it without anybody remembering. The other targets keep the 60 ms default:
+# this is a correction for one chip's arbiter, not a change of policy.
+CONFIG_OBSERVORE_BLE_SCAN_WINDOW_MS=90

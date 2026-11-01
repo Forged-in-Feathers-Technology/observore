@@ -1107,6 +1107,10 @@ config OBSERVORE_BLE_SCAN_WINDOW_MS
         around 200.  The default trades roughly a third of BLE throughput for
         a sniffer that functions.
 
+        Those figures were taken on an S3. The classic ESP32 returns much
+        less BLE for the same duty cycle, so sdkconfig.defaults.esp32 raises
+        this to 90 and records its own measurements (#231).
+
 config OBSERVORE_CONSOLE_AUTH
     bool "Require the console password in uplink mode"
     default y
