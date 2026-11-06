@@ -104,7 +104,9 @@ that only runs when something has already gone wrong.
 The image is checked before it is trusted. Its descriptor is read from the
 first chunk, before anything reaches flash, and rejected unless it is the same
 project and a newer version. It is written to whichever OTA slot is not
-running, so the image that is working is never the one being overwritten.
+running, so the image that is working is never the one being overwritten. What
+that check does and does not establish is set out under
+[what an update trusts](#what-an-update-trusts).
 
 ### Rollback
 
@@ -275,12 +277,49 @@ which is the wrong trade on a device where an unexplained restart used to be
 indistinguishable from a quiet night. Raising the flash floor to 8 MB would
 double every slot, at the cost of no longer booting on a 4 MB board.
 
-**OTA itself is deliberately not implemented.** With no image signing and an
-unencrypted console, an update path reachable over the network turns "somebody
-on your LAN has the console password" into "somebody owns this device
-permanently", a real escalation on a device meant to detect surveillance. That
-waits on HTTPS and a decision about signing. Reserving the layout keeps the
-option open at its cheapest moment without opening the hole.
+### What an update trusts
+
+The worry that kept the update path out of the earliest releases was that it
+would turn "somebody on your LAN has the console password" into "somebody owns
+this device permanently", a real escalation on a device meant to detect
+surveillance. What closed it is the shape of the path rather than a promise:
+nothing sends the device an image. The device goes and fetches one, from places
+that were chosen when the firmware was built.
+
+**Pull only, from two hosts fixed at build time.** The version comes from the
+manifest at `OBSERVORE_UPDATE_URL`, the same `boards.json` the web flasher
+reads. The image comes from `OBSERVORE_UPDATE_ASSET_BASE`, joined with that
+version and the board's own name as `<base>/<version>/observore-<board>.bin`.
+The manifest supplies only the version segment, so it cannot move the device to
+another host. A build that tracks its own releases changes both options. The
+check runs by itself once a day, and nothing installs unless someone asks.
+
+**Both requests are HTTPS**, checked against the certificate bundle compiled
+into the image. The release host answers the download with a redirect to wherever
+it stores the file, and the same client follows that over HTTPS as well.
+
+**Asking takes the console login, or a hand on the device.** `/api/update/check`
+and `/api/update` are not public routes, so over a network they need a console
+session (unless a build turned `OBSERVORE_CONSOLE_AUTH` off), and on the
+device's own access point the WPA2 password stands in for the login. A board
+with a screen can also be asked from the screen: one tap checks, and installing
+takes a second tap to confirm the first.
+
+**No route accepts an image.** The only code that writes an update to flash is
+the downloader, and it is reached only through the address built above. Nothing
+in the console takes an upload.
+
+**Before anything is written**, the descriptor in the first chunk of the
+download has to name this same project and a version that is newer than the one
+running. Otherwise the download is abandoned and the device restarts on the
+image it already had. The check is not on the board: the file name the device
+asks for is what selects it. These checks say an image is for this project and
+newer, they do not say who built it, and no signature is checked.
+
+So what an update trusts is those two hosts and the certificate bundle. Over the
+network or from the screen, the console password (or a hand on the device) can
+install only a newer release that the build-time hosts are serving, never an
+image the person asking picked.
 
 ### The coredump partition, and what it cost
 
