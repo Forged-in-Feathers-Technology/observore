@@ -64,16 +64,16 @@ itself, so an unreadable answer is treated as no answer. A build made after a
 tag is ahead of that tag, so a device running `v0.5.0-3-gce8e56e` is not
 offered `v0.5.0` as an upgrade.
 
-The board matters as much as the version. Three of the ten boards here are
+The board matters as much as the version. Three of the eleven boards here are
 ESP32-C5s and three are the same classic ESP32 behind different glass, and none
 of those images are interchangeable, which is why the installer offers a picker
 rather than deciding from the chip. A device updating itself has the same
 problem and nobody to ask, so it carries the answer: `xiao-esp32s3`,
 `devkit-esp32c5`, `xiao-esp32c5`, `xiao-esp32c6`, `cyd-2432s028r-st7789`,
-`cyd-2432s028r-ili9341`, `cyd-3248s035r-st7796`, `nm-cyd-c5` or
-`waveshare-s3-amoled-143`. CI asserts that each board's build resolves to its own
-name, checked against the `sdkconfig` the build actually produced rather than
-by re-deriving the layering.
+`cyd-2432s028r-ili9341`, `cyd-3248s035r-st7796`, `waveshare-s3-amoled-143`,
+`waveshare-s3-lcd-185`, `crowpanel-146-rotary` or `nm-cyd-c5`. CI asserts that
+each board's build resolves to its own name, checked against the `sdkconfig` the
+build actually produced rather than by re-deriving the layering.
 
 Nothing is downloaded by the check. Installing is a separate and deliberate
 act: the console grows an **Install update** button when there is something to
@@ -104,7 +104,9 @@ that only runs when something has already gone wrong.
 The image is checked before it is trusted. Its descriptor is read from the
 first chunk, before anything reaches flash, and rejected unless it is the same
 project and a newer version. It is written to whichever OTA slot is not
-running, so the image that is working is never the one being overwritten.
+running, so the image that is working is never the one being overwritten. What
+that check does and does not establish is set out under
+[what an update trusts](#what-an-update-trusts).
 
 ### Rollback
 
@@ -177,14 +179,17 @@ The order matters and is easy to get backwards:
 - **`gh release create --draft` does not push the tag:** the build never
   triggers, and the only clue is an `untagged-<hash>` URL on the release page.
   Push the tag; the workflow makes the draft.
-- **Publishing before the build finishes deploys a broken page:** `pages.yml`
-  triggers on `release: published`, while the release workflow is what uploads
-  the binaries. Publish first and the site goes live pointing at assets that
-  do not exist. Draft, then build, then publish.
-- **The `github-pages` environment must allow the tag:** deployments are
-  restricted by ref, and a release-triggered run has a tag ref rather than a
-  branch one. A `tag: v*` policy is what lets it deploy at all; without it the
-  deploy job fails before running a single step.
+- **Publishing before the build finishes deploys a broken page:** publishing
+  triggers `release-pages.yml`, while the release workflow is what uploads the
+  binaries. Publish first and the site goes live pointing at assets that do not
+  exist. Draft, then build, then publish.
+- **Publishing does not deploy from the tag:** `release-pages.yml` catches the
+  published release and asks `pages.yml` to run on `main`, passing the tag in as
+  an input so the firmware it serves still comes from the release. That
+  indirection exists because two deployments made from a tag reported success
+  and left the previous release live, while every deployment from `main` took.
+  A green deploy is therefore not the evidence that a release is live. Fetch the
+  site and read the version it serves.
 
 ### Upgrading to v0.14.0
 
@@ -275,12 +280,49 @@ which is the wrong trade on a device where an unexplained restart used to be
 indistinguishable from a quiet night. Raising the flash floor to 8 MB would
 double every slot, at the cost of no longer booting on a 4 MB board.
 
-**OTA itself is deliberately not implemented.** With no image signing and an
-unencrypted console, an update path reachable over the network turns "somebody
-on your LAN has the console password" into "somebody owns this device
-permanently", a real escalation on a device meant to detect surveillance. That
-waits on HTTPS and a decision about signing. Reserving the layout keeps the
-option open at its cheapest moment without opening the hole.
+### What an update trusts
+
+The worry that kept the update path out of the earliest releases was that it
+would turn "somebody on your LAN has the console password" into "somebody owns
+this device permanently", a real escalation on a device meant to detect
+surveillance. What closed it is the shape of the path rather than a promise:
+nothing sends the device an image. The device goes and fetches one, from places
+that were chosen when the firmware was built.
+
+**Pull only, from two hosts fixed at build time.** The version comes from the
+manifest at `OBSERVORE_UPDATE_URL`, the same `boards.json` the web flasher
+reads. The image comes from `OBSERVORE_UPDATE_ASSET_BASE`, joined with that
+version and the board's own name as `<base>/<version>/observore-<board>.bin`.
+The manifest supplies only the version segment, so it cannot move the device to
+another host. A build that tracks its own releases changes both options. The
+check runs by itself once a day, and nothing installs unless someone asks.
+
+**Both requests are HTTPS**, checked against the certificate bundle compiled
+into the image. The release host answers the download with a redirect to wherever
+it stores the file, and the same client follows that over HTTPS as well.
+
+**Asking takes the console login, or a hand on the device.** `/api/update/check`
+and `/api/update` are not public routes, so over a network they need a console
+session (unless a build turned `OBSERVORE_CONSOLE_AUTH` off), and on the
+device's own access point the WPA2 password stands in for the login. A board
+with a screen can also be asked from the screen: one tap checks, and installing
+takes a second tap to confirm the first.
+
+**No route accepts an image.** The only code that writes an update to flash is
+the downloader, and it is reached only through the address built above. Nothing
+in the console takes an upload.
+
+**Before anything is written**, the descriptor in the first chunk of the
+download has to name this same project and a version that is newer than the one
+running. Otherwise the download is abandoned and the device restarts on the
+image it already had. The check is not on the board: the file name the device
+asks for is what selects it. These checks say an image is for this project and
+newer, they do not say who built it, and no signature is checked.
+
+So what an update trusts is those two hosts and the certificate bundle. Over the
+network or from the screen, the console password (or a hand on the device) can
+install only a newer release that the build-time hosts are serving, never an
+image the person asking picked.
 
 ### The coredump partition, and what it cost
 
@@ -301,11 +343,17 @@ into whichever slot is *not* running, so a mismatched pair is a trap: an image
 that fits the slot you tested would fail on the other, half the time.
 
 **64 KB is left spare above the coredump** rather than given back to the
-slots. [#185](https://github.com/Forged-in-Feathers-Technology/observore/issues/185)
-needs an `nvs_keys` partition if NVS encryption is ever enabled, and a
-partition table change cannot reach an existing device over the air — the
-browser flasher writes the table and OTA does not. The cable upgrade should be
-spent once.
+slots. It was kept for an `nvs_keys` partition, on the reading that NVS
+encryption ([#185](https://github.com/Forged-in-Feathers-Technology/observore/issues/185))
+would need one, and a partition table change cannot reach an existing device
+over the air — the browser flasher writes the table and OTA does not. The cable
+upgrade should be spent once.
+
+The encryption did not need it. On the S3, C5 and C6 its keys are derived from
+an eFuse key through the HMAC peripheral instead of being stored in a
+partition, so it reached existing devices over the air with the table
+untouched. The 64 KB stays spare for whatever does need a table change,
+flash encryption proper among them.
 
 **Devices still on the old table are safe.** `esp_core_dump` finds its
 partition by name at runtime, so a board without one simply never writes a
