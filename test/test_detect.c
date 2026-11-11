@@ -4176,6 +4176,142 @@ static void test_every_scene_stays_bounded(void)
     printf("sweep: %lu scenes, largest stranger total %u\n", scenes,
            largest_stranger);
 
+    /* The same question for a base the sweep above never builds: a local sum
+     * in which a counted class scores less than its weight, because the census
+     * dampened the device. The counting mask still says the class is counted
+     * (dampened is not quieted), so a stranger may attach to it, and the base it
+     * lands on can be 1 or 2. In the real tracker every class a warning can
+     * score is protected and the census never dampens it, so this is the rule
+     * held to its invariant on its own rather than through that coupling: for
+     * ANY base, strangers alone never change the level. */
+    {
+        unsigned long d_scenes = 0, d_level = 0, d_total = 0, d_stranger = 0;
+        unsigned d_largest = 0;
+        bool d_printed = false;
+
+        for (unsigned mix = 0; mix < 2187u * 18u; mix++) {
+            unsigned m = mix;
+            unsigned state[7];   /* 0 absent, 1 full weight, 2 dampened */
+            for (int k = 0; k < 7; k++) {
+                state[k] = m % 3;
+                m /= 3;
+            }
+            unsigned cam = m % 2; m /= 2;
+            unsigned fleet = m % 3; m /= 3;
+            unsigned follower = m % 3;
+
+            uint32_t mask = 0;
+            unsigned base = 0;
+            for (int k = 0; k < 7; k++) {
+                if (state[k]) {
+                    unsigned pts = observore_class_points(eligible[k]);
+                    mask |= CLS_BIT(eligible[k]);
+                    base += state[k] == 2 ? observore_census_dampen((uint16_t)pts)
+                                          : pts;
+                }
+            }
+            if (cam) {
+                mask |= CLS_BIT(OBSERVORE_CLASS_CAMERA);
+                base += observore_class_points(OBSERVORE_CLASS_CAMERA);
+            }
+            if (fleet) {
+                unsigned pts = observore_class_points(OBSERVORE_CLASS_FLEET_TELEMATICS);
+                mask |= CLS_BIT(OBSERVORE_CLASS_FLEET_TELEMATICS);
+                base += fleet == 2 ? observore_census_dampen((uint16_t)pts) : pts;
+            }
+            if (follower) {
+                mask |= CLS_BIT(OBSERVORE_CLASS_FOLLOWER);
+                base += follower;
+            }
+            if (base > OBSERVORE_SCORE_MAX) {
+                base = OBSERVORE_SCORE_MAX;
+            }
+
+            /* One stranger per eligible class, then eight on one class, then
+             * all seven classes at once: every shape a stranger can take. */
+            for (int set = 0; set < 7 + 7 + 1; set++) {
+                bound_say_t say[OBSERVORE_PEER_MAX];
+                size_t n = 0;
+                if (set < 7) {
+                    say[n++] = (bound_say_t){0x4001, eligible[set], false};
+                } else if (set < 14) {
+                    for (int i = 0; i < 8; i++) {
+                        say[n++] = (bound_say_t){(uint16_t)(0x4010 + i),
+                                                 eligible[set - 7], false};
+                    }
+                } else {
+                    for (int k = 0; k < 7; k++) {
+                        say[n++] = (bound_say_t){(uint16_t)(0x4020 + k),
+                                                 eligible[k], false};
+                    }
+                }
+                observore_peer_weight_t r;
+                bound_weigh(say, n, mask, 0, (uint16_t)base, &r);
+                d_scenes++;
+                bool bad = false;
+                if (level_of_score(base + r.total) != level_of_score(base)) {
+                    d_level++;
+                    bad = true;
+                }
+                if (r.total > OBSERVORE_PEER_TOTAL_CAP) { d_total++; bad = true; }
+                if (r.stranger > OBSERVORE_PEER_STRANGER_CAP) {
+                    d_stranger++;
+                    bad = true;
+                }
+                if (r.stranger > d_largest) { d_largest = r.stranger; }
+                if (bad && !d_printed) {
+                    d_printed = true;
+                    printf("first failing dampened scene: mix %u set %d base %u "
+                           "mask %x -> total %u stranger %u\n", mix, set, base,
+                           (unsigned)mask, r.total, r.stranger);
+                }
+            }
+        }
+        CHECK(d_level == 0,
+              "dampened sweep: strangers changed the level in %lu scenes",
+              d_level);
+        CHECK(d_total == 0 && d_stranger == 0,
+              "dampened sweep: a stranger or peer cap was broken (%lu, %lu)",
+              d_total, d_stranger);
+        printf("dampened sweep: %lu scenes, largest stranger total %u\n",
+               d_scenes, d_largest);
+    }
+
+    /* The three scenes found in review, by name. Each is a counted class whose
+     * local score was halved by the census, with one stranger voice per class. */
+    {
+        const uint32_t both = CLS_BIT(OBSERVORE_CLASS_TRACKER) |
+                              CLS_BIT(OBSERVORE_CLASS_DRONE);
+        bound_say_t two[2] = {
+            {0x4001, OBSERVORE_CLASS_TRACKER, false},
+            {0x4002, OBSERVORE_CLASS_DRONE, false},
+        };
+        bound_weigh(two, 2, both, 0, 2, &pw);   /* tracker 1 + drone 1 */
+        CHECK(pw.stranger == 0 && level_of_score(2 + pw.total) == OBSERVORE_LEVEL_CLEAR,
+              "two dampened classes at 2 stay clear under two strangers "
+              "(got +%u)", pw.stranger);
+
+        bound_say_t one[1] = {{0x4001, OBSERVORE_CLASS_TRACKER, false}};
+        bound_weigh(one, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER) |
+                                CLS_BIT(OBSERVORE_CLASS_CAMERA),
+                    0, 2, &pw);                 /* tracker 1 + camera 1 */
+        CHECK(level_of_score(2 + pw.total) == OBSERVORE_LEVEL_CLEAR,
+              "a dampened tracker and a camera at 2 stay clear under a "
+              "stranger (got +%u)", pw.stranger);
+
+        bound_weigh(one, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 1, &pw);
+        CHECK(pw.stranger == 1 && level_of_score(1 + pw.total) == OBSERVORE_LEVEL_CLEAR,
+              "a lone dampened tracker takes its point and stays clear");
+
+        /* Inside caution the room is what is left of caution, not of the
+         * number's distance from clear: 3 plus a stranger is 4, still caution,
+         * and 5 plus anything stays put. */
+        bound_weigh(one, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 5, &pw);
+        CHECK(pw.stranger == 0,
+              "a stranger adds nothing at the top of caution (got +%u)",
+              pw.stranger);
+    }
+
     observore_track_init();
     observore_monitors_init();
     observore_peer_init();

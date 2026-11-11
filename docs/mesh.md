@@ -294,7 +294,10 @@ class together are worth 1 however many node ids they invent, all classes
 together are worth at most 2, and they only attach to a class this node already
 counts. They can never change the level: in practice a stranger adds at most
 1, because a second counted class already puts the board at alert and there is
-no room left under it.
+no room left under it. The rule does not lean on that. Strangers are only ever
+given the room left in the level the score is already in, so even a counted
+class that scored below its weight cannot be lifted over a level boundary by
+them.
 
 **"Counts" means a device of that class is in the current sum.** A device the
 census has quieted does not confirm a stranger's warning, because it is not

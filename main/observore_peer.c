@@ -530,14 +530,32 @@ static unsigned umin(unsigned a, unsigned b)
     return a < b ? a : b;
 }
 
-/* Room left under the alert line for evidence that must not escalate by
- * itself: a lone trusted voice, or any stranger. Zero once the number is
- * already at the top of caution or above. */
+/* Room left under the alert line for a lone trusted voice, which is allowed to
+ * lift the board to caution and no further. Zero once the number is already at
+ * the top of caution or above. */
 static unsigned alert_room(uint32_t running)
 {
     return running < (uint32_t)(OBSERVORE_SCORE_ALERT - 1)
                ? (unsigned)(OBSERVORE_SCORE_ALERT - 1) - (unsigned)running
                : 0;
+}
+
+/* Room left in the level band the running number is already in, for evidence
+ * that must not change the level at all: a stranger. Under caution that is the
+ * space up to caution - 1, in caution the space up to alert - 1, and zero from
+ * alert up. The bound belongs here rather than in whichever class table feeds
+ * the base, so it holds whatever the local sum did to that base -- a device the
+ * census dampened scores under its class weight, and the counting mask still
+ * says the class is counted. */
+static unsigned band_room(uint32_t running)
+{
+    if (running >= (uint32_t)OBSERVORE_SCORE_ALERT) {
+        return 0;
+    }
+    uint32_t top = running >= (uint32_t)OBSERVORE_SCORE_CAUTION
+                       ? (uint32_t)(OBSERVORE_SCORE_ALERT - 1)
+                       : (uint32_t)(OBSERVORE_SCORE_CAUTION - 1);
+    return (unsigned)(top - running);
 }
 
 /* Hand `alloc` points to the trusted senders of one class, lowest node id
@@ -721,8 +739,9 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
     }
 
     /* Pass 3: strangers, one voice per class, under their own cap and the
-     * room below alert. They attach only to classes counted here, so this
-     * can move the number inside caution and cannot change the level. */
+     * room left in the level band the number is already in. They attach only
+     * to classes counted here, and the band clamp means this can move the
+     * number inside a level and can never change the level, from any base. */
     for (size_t k = 0; k < no; k++) {
         unsigned c = order[k];
         if (rep[c] < 0) {
@@ -733,7 +752,7 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
         unsigned alloc = umin(umin(OBSERVORE_PEER_STRANGER_POINTS,
                                    cap_c - spent[c]),
                               umin(umin(remaining, stranger_left),
-                                   alert_room(running)));
+                                   band_room(running)));
         observore_peer_share_t *s = &out->share[rep[c]];
         s->points = (uint8_t)alloc;
         if (alloc == OBSERVORE_PEER_STRANGER_POINTS) {

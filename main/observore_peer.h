@@ -30,10 +30,9 @@
  * add at most OBSERVORE_PEER_STRANGER_POINTS to a class this node already
  * counts; all strangers together are one voice per class, however many ids
  * they invent; their total is capped at OBSERVORE_PEER_STRANGER_CAP; and the
- * cap leaves them short of alert, so they cannot change the level. A trusted
- * node, one that proved the household secret, adds more, within its own
- * bounds. Either way the device says what it heard and whose it was, and a
- * person decides.
+ * rule never lets them change the level. A trusted node, one that proved the
+ * household secret, adds more, within its own bounds. Either way the device
+ * says what it heard and whose it was, and a person decides.
  *
  * ## The wire format
  *
@@ -160,12 +159,16 @@
  * worth two. Three plus two is still below alert, which is the same shape as
  * OBSERVORE_FOLLOWER_SCORE_CAP: a stranger may draw attention and may not
  * escalate. A stranger only attaches to a class this node already counts, and
- * only classes worth caution or more are eligible, so the local base is at
- * least 3 whenever a stranger adds anything: the number moves inside caution
- * and the level cannot change. What the asserts cannot cover is the mix of
- * local evidence a stranger lands on (a tracker and a fleet device are already
- * 5), so the rule also clamps strangers to whatever room is left under alert
- * when it runs.
+ * only classes worth caution or more are eligible. That does not make the local
+ * base at least 3: a counted class that the census dampened scores half its
+ * weight (floored at 1) and is still counted, so the base a stranger lands on
+ * can be anywhere. The asserts cannot cover that, so the rule enforces the
+ * invariant itself: whatever the base, strangers are given only the room left
+ * in the level band the running number is already in -- up to caution - 1 from
+ * clear, up to alert - 1 from caution, nothing from alert. The number can move
+ * inside a level and the level cannot change. Today every eligible class is
+ * protected, so the census never dampens one and the base is at least 3 in
+ * practice; the rule does not depend on that.
  *
  * A class is worth at most its own local weight to peers (and never more than
  * the class cap): a friend's warning stands in for one sighting, not for a
