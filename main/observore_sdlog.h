@@ -1,5 +1,6 @@
 #pragma once
 
+#include "observore_peer.h"
 #include "observore_types.h"
 
 /* The detection log, on a card, as CSV.
@@ -34,6 +35,20 @@ void observore_sdlog_init(void);
 /* Append one detection. Safe to call when there is no card, no slot, or
  * logging is off: it does nothing. */
 void observore_sdlog_note(const observore_event_t *e);
+
+/* Append one report from a trusted peer. Safe to call with no card, no slot
+ * or logging off: it does nothing.
+ *
+ * Trusted shares only, and this function enforces that as well as its caller
+ * (it ignores an untrusted or NULL share). A stranger's warning is never
+ * written: the source is one anybody can broadcast, and a card that fills with
+ * what strangers say would crowd out what the device itself saw.
+ *
+ * The row has 13 columns like every other, with the mac left empty because a
+ * peer report has no address of its own and an invented one would be read as a
+ * device; the source and evidence columns say "peer", the label says "peer
+ * report", and the detail names the node and the points it added. */
+void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us);
 
 /* How many records have been written since boot, and how many were lost
  * because the card would not take them. */

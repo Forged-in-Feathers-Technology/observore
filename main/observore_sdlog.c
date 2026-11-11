@@ -221,6 +221,40 @@ void observore_sdlog_note(const observore_event_t *e)
     s_written++;
 }
 
+void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us)
+{
+    if (!s_ready || !s || !s->trusted) {
+        return;
+    }
+    FILE *f = file_for_now();
+    if (!f) {
+        s_dropped++;
+        return;
+    }
+
+    char when[32] = "";
+    observore_clock_iso(now_us, when, sizeof(when));
+
+    char raw[48];
+    char detail[sizeof(raw) * 2 + 4];
+    snprintf(raw, sizeof(raw), "node %04X trusted +%u %s",
+             (unsigned)s->node, (unsigned)s->points,
+             s->seen_here ? "seen here" : "not seen here");
+    observore_csv_field(detail, sizeof(detail), raw);
+
+    int n = fprintf(f, "%s,%lld,%s,,0,peer,,0,peer,peer report,%s,,1\n",
+                    when, (long long)(now_us / 1000000),
+                    observore_class_name((observore_class_t)s->cls), detail);
+    if (n < 0) {
+        s_dropped++;
+        return;
+    }
+    /* Flushed for the same reason as a detection: see observore_sdlog_note(). */
+    fflush(f);
+    fsync(fileno(f));
+    s_written++;
+}
+
 void observore_sdlog_counts(uint32_t *written, uint32_t *dropped)
 {
     if (written) *written = s_written;
@@ -231,6 +265,11 @@ void observore_sdlog_counts(uint32_t *written, uint32_t *dropped)
 
 void observore_sdlog_init(void) {}
 void observore_sdlog_note(const observore_event_t *e) { (void)e; }
+void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us)
+{
+    (void)s;
+    (void)now_us;
+}
 void observore_sdlog_counts(uint32_t *w, uint32_t *d)
 {
     if (w) *w = 0;

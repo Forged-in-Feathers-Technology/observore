@@ -268,6 +268,11 @@ static observore_status_t publish(void)
         observore_peer_share_text(&s_pw.share[s_started[i]], s_peer_text,
                                   sizeof(s_peer_text));
         ESP_LOGW(TAG, "peer report: %s", s_peer_text);
+        /* The card gets a friend's report and never a stranger's: a source
+         * anyone can broadcast must not be able to fill it. */
+        if (s_pw.share[s_started[i]].trusted) {
+            observore_sdlog_peer(&s_pw.share[s_started[i]], now);
+        }
     }
 
     if (st.level != s_last_level) {

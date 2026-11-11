@@ -830,6 +830,39 @@ static esp_err_t history_handler(httpd_req_t *req)
             break;
         }
     }
+
+    /* What peers added during this boot, after the persisted history and only
+     * when that was written whole. A body that filled on the record leaves
+     * peer_events out rather than cutting the record short: a source strangers
+     * can feed must never push a real detection out of this listing. The
+     * closing "]}" below then closes whichever array is open, so the document
+     * is valid either way. */
+    if (!observore_jb_full(&jb)) {
+        observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX];
+        size_t ne = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+        observore_jb_printf(&jb, "],\"peer_events\":[");
+        for (size_t i = 0; i < ne && !observore_jb_full(&jb); i++) {
+            const observore_peer_event_t *p = &ev[i];
+            char first[24] = "", last[24] = "";
+            observore_clock_iso(p->first_us, first, sizeof(first));
+            observore_clock_iso(p->last_us, last, sizeof(last));
+            observore_jb_printf(&jb,
+                "%s{\"node\":%u,\"trusted\":%s,\"class\":\"%s\","
+                "\"points\":%u,\"seen_here\":%s,\"voices\":%u,"
+                "\"first_s\":%lld,\"last_s\":%lld,"
+                "\"first_seen\":\"%s\",\"last_seen\":\"%s\","
+                "\"open\":%s,\"this_boot\":true}",
+                i ? "," : "", (unsigned)p->share.node,
+                p->share.trusted ? "true" : "false",
+                observore_class_name((observore_class_t)p->share.cls),
+                (unsigned)p->share.points,
+                p->share.seen_here ? "true" : "false",
+                (unsigned)p->share.voices,
+                (long long)(p->first_us / 1000000),
+                (long long)(p->last_us / 1000000), first, last,
+                p->open ? "true" : "false");
+        }
+    }
     observore_jb_close(&jb, "]}");
     return send_json(req, s_body);
 }
