@@ -2469,6 +2469,92 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                note, sizeof(note)) > 0 &&
               strcmp(note, "(1 quieted as household)") == 0,
           "one quieted device reads in the singular: %s", note);
+
+    /* What other nodes added leads the note: a push reading "caution" with
+     * nothing local in the findings has to say a friend raised it, and a
+     * stranger's point has to name the node it came from. */
+    char big[OBSERVORE_DIGEST_NOTE_LEN];
+    observore_digest_note(&(observore_digest_notes_t){.peer_trusted_points = 3},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(+3 from trusted peers)") == 0,
+          "trusted peer points are named: %s", big);
+    observore_digest_note(
+        &(observore_digest_notes_t){.peer_stranger_points = 1,
+                                    .peer_stranger_nodes = 1,
+                                    .peer_stranger_node = {0x3A7F}},
+        big, sizeof(big));
+    CHECK(strcmp(big, "(+1 from stranger node 3A7F)") == 0,
+          "a stranger's point names the node: %s", big);
+    observore_digest_note(
+        &(observore_digest_notes_t){.peer_stranger_points = 2,
+                                    .peer_stranger_nodes = 2,
+                                    .peer_stranger_node = {0x3A7F, 0x1B2C}},
+        big, sizeof(big));
+    CHECK(strcmp(big, "(+2 from stranger nodes 1B2C and 3A7F)") == 0,
+          "two stranger voices are named, ascending whatever the order: %s",
+          big);
+    observore_digest_note(
+        &(observore_digest_notes_t){.peer_trusted_points = 3,
+                                    .peer_stranger_points = 1,
+                                    .peer_stranger_nodes = 1,
+                                    .peer_stranger_node = {0x3A7F},
+                                    .monitors_off = 1,
+                                    .census_quieted = 2},
+        big, sizeof(big));
+    CHECK(strcmp(big, "(+3 from trusted peers, +1 from stranger node 3A7F, "
+                      "1 monitor off, 2 quieted as household)") == 0,
+          "peer parts lead the existing ones: %s", big);
+
+    /* Exactly 0 writes no "+0" part, and an empty set writes nothing. */
+    CHECK(observore_digest_note(&(observore_digest_notes_t){0}, big,
+                                sizeof(big)) == 0 && big[0] == '\0',
+          "no peer points and nothing suppressed is an empty note");
+    CHECK(observore_digest_note(
+              &(observore_digest_notes_t){.peer_stranger_nodes = 1,
+                                          .peer_stranger_node = {0x3A7F}},
+              big, sizeof(big)) == 0 && big[0] == '\0',
+          "a named node with no points writes no +0 part");
+    CHECK(observore_digest_note(NULL, big, sizeof(big)) == 0,
+          "and NULL still writes nothing");
+
+    /* The worst case fits whole and ends with its closing bracket. */
+    size_t wn = observore_digest_note(
+        &(observore_digest_notes_t){.peer_trusted_points = 6,
+                                    .peer_stranger_points = 2,
+                                    .peer_stranger_nodes = 2,
+                                    .peer_stranger_node = {0xFFFF, 0xFFFE},
+                                    .monitors_off = 14,
+                                    .census_quieted = 192},
+        big, sizeof(big));
+    printf("  worst-case note: %zu characters\n", wn);
+    CHECK(strcmp(big, "(+6 from trusted peers, +2 from stranger nodes FFFE "
+                      "and FFFF, 14 monitors off, 192 quieted as household)") == 0,
+          "the worst case reads whole: %s", big);
+    CHECK(wn == 104 && big[wn - 1] == ')' && wn < sizeof(big),
+          "and is 104 characters, inside its buffer, ending with ')': %zu", wn);
+
+    /* The digest leads with the whole note: it is no longer passed through a
+     * 64-byte local, so the long one is not cut at 63 characters. */
+    observore_digest_build(e, 2, "caution",
+                           &(observore_digest_notes_t){.peer_trusted_points = 3},
+                           title, sizeof(title), body, sizeof(body));
+    CHECK(strncmp(body, "(+3 from trusted peers)\n", 24) == 0,
+          "a digest of a friend-raised level leads with the peer note: %s",
+          body);
+    observore_digest_build(
+        e, 2, "alert",
+        &(observore_digest_notes_t){.peer_trusted_points = 6,
+                                    .peer_stranger_points = 2,
+                                    .peer_stranger_nodes = 2,
+                                    .peer_stranger_node = {0xFFFF, 0xFFFE},
+                                    .monitors_off = 14,
+                                    .census_quieted = 192},
+        title, sizeof(title), body, sizeof(body));
+    CHECK(strncmp(body, big, wn) == 0 && body[wn] == '\n',
+          "the digest body leads with the whole worst-case note and a "
+          "newline: %s", body);
+    CHECK(strstr(body, "bodycam") != NULL,
+          "and the findings still follow it");
 }
 
 static void test_a_drone_says_where_it_is_and_where_its_pilot_is(void)

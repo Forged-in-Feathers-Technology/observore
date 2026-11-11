@@ -368,12 +368,46 @@ static size_t census(const observore_digest_entry_t *e, size_t count,
     return n;
 }
 
-/* The parenthetical that says what is not in the findings.
+/* Append one part to the note: "(" before the first, ", " before the rest.
+ * `used` is the length so far, always below len, so the buffer stays
+ * terminated and a part that does not fit is cut rather than overrun. */
+static void note_part(char *buf, size_t len, size_t *used, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+
+static void note_part(char *buf, size_t len, size_t *used, const char *fmt, ...)
+{
+    size_t room = len - *used;
+    int n = snprintf(buf + *used, room, "%s", *used ? ", " : "(");
+    if (n < 0) {
+        return;
+    }
+    if ((size_t)n >= room) {
+        *used = len - 1;
+        return;
+    }
+    *used += (size_t)n;
+    room = len - *used;
+
+    va_list ap;
+    va_start(ap, fmt);
+    n = vsnprintf(buf + *used, room, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        buf[*used] = '\0';
+        return;
+    }
+    *used += ((size_t)n >= room) ? room - 1 : (size_t)n;
+}
+
+/* The parenthetical that says what is not in the findings, and what other
+ * nodes added to the picture.
  *
  * Its own function because two messages need it: the digest, where it leads
  * the body, and a bare level change, which has no findings at all and would
  * otherwise be the one message that omits the caveat -- a device reporting
  * "alert" while it has been told not to look for half of what it can see.
+ * The same two messages are the ones that would otherwise say "caution" with
+ * nothing local in the findings when a friend's warning raised the level.
  */
 size_t observore_digest_note(const observore_digest_notes_t *notes,
                              char *buf, size_t len)
@@ -382,22 +416,61 @@ size_t observore_digest_note(const observore_digest_notes_t *notes,
         return 0;
     }
     buf[0] = '\0';
-    int off = notes ? notes->monitors_off : 0;
-    int quiet = notes ? notes->census_quieted : 0;
-    int n = 0;
-    if (off > 0 && quiet > 0) {
-        n = snprintf(buf, len, "(%d monitor%s off, %d quieted as household)",
-                     off, off == 1 ? "" : "s", quiet);
-    } else if (off > 0) {
-        n = snprintf(buf, len, "(%d monitor%s off)", off, off == 1 ? "" : "s");
-    } else if (quiet > 0) {
-        n = snprintf(buf, len, "(%d quieted as household)", quiet);
-    }
-    if (n <= 0) {
-        buf[0] = '\0';
+    if (!notes) {
         return 0;
     }
-    return ((size_t)n >= len) ? len - 1 : (size_t)n;
+
+    /* Peer parts first: they explain a rise, and a buffer cut short should
+     * lose the household count before it loses the reason the level moved. */
+    size_t used = 0;
+    if (notes->peer_trusted_points > 0) {
+        note_part(buf, len, &used, "+%d from trusted peers",
+                  notes->peer_trusted_points);
+    }
+    if (notes->peer_stranger_points > 0) {
+        int count = notes->peer_stranger_nodes;
+        if (count > OBSERVORE_DIGEST_STRANGER_NODES) {
+            count = OBSERVORE_DIGEST_STRANGER_NODES;
+        }
+        uint16_t node[OBSERVORE_DIGEST_STRANGER_NODES];
+        for (int i = 0; i < count; i++) {
+            node[i] = notes->peer_stranger_node[i];
+        }
+        /* Ascending whatever order the caller passed, so the same two
+         * strangers read the same way every time. */
+        if (count == 2 && node[0] > node[1]) {
+            uint16_t t = node[0];
+            node[0] = node[1];
+            node[1] = t;
+        }
+        if (count >= 2) {
+            note_part(buf, len, &used, "+%d from stranger nodes %04X and %04X",
+                      notes->peer_stranger_points, (unsigned)node[0],
+                      (unsigned)node[1]);
+        } else if (count == 1) {
+            note_part(buf, len, &used, "+%d from stranger node %04X",
+                      notes->peer_stranger_points, (unsigned)node[0]);
+        } else {
+            note_part(buf, len, &used, "+%d from strangers",
+                      notes->peer_stranger_points);
+        }
+    }
+    if (notes->monitors_off > 0) {
+        note_part(buf, len, &used, "%d monitor%s off", notes->monitors_off,
+                  notes->monitors_off == 1 ? "" : "s");
+    }
+    if (notes->census_quieted > 0) {
+        note_part(buf, len, &used, "%d quieted as household",
+                  notes->census_quieted);
+    }
+    if (used == 0) {
+        return 0;
+    }
+    if (used + 1 < len) {
+        buf[used++] = ')';
+        buf[used] = '\0';
+    }
+    return used;
 }
 
 size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
@@ -440,11 +513,11 @@ size_t observore_digest_build(observore_digest_entry_t *entries, size_t count,
      * for that. It reads better too: the caveat frames what follows rather
      * than arriving after the reader has drawn conclusions. */
     size_t written = 0, used = 0;
-    char note[64];
-    if (observore_digest_note(notes, note, sizeof(note)) > 0) {
-        used = (size_t)snprintf(body, body_len, "%s\n", note);
-        if (used >= body_len) {
-            used = body_len - 1;
+    if (observore_digest_note(notes, body, body_len) > 0) {
+        used = strlen(body);
+        if (used + 1 < body_len) {
+            body[used++] = '\n';
+            body[used] = '\0';
         }
     }
     const size_t after_note = used;
