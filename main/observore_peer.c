@@ -5,6 +5,32 @@
 #include "observore_detect.h"
 #include "observore_types.h"
 
+/* The table is written from the BLE host task and read from the main loop, the
+ * HTTP server and the display, and all of those run on two cores. A reader
+ * that catches a warning half-written could pair a stranger's class with a
+ * friend's trust flag for one pass, which matters now that trust carries
+ * score. So every access takes a recursive lock, the same arrangement as the
+ * device table. The host build has no tasks and needs no lock, which keeps
+ * this file free of RTOS includes there.
+ *
+ * Lock order is the tracker's lock first, then this one; nothing in this file
+ * calls into the tracker. Every critical section is a bounded loop over at
+ * most OBSERVORE_PEER_MAX entries and a struct copy. */
+#ifdef OBSERVORE_HOST_TEST
+#define PEER_READY()  1
+#define PEER_LOCK()   do {} while (0)
+#define PEER_UNLOCK() do {} while (0)
+#else
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t s_lock;
+/* Before observore_peer_init() has run there is no lock to take, and an empty
+ * answer is the right one: no warnings have been heard. */
+#define PEER_READY()  (s_lock != NULL)
+#define PEER_LOCK()   xSemaphoreTakeRecursive(s_lock, portMAX_DELAY)
+#define PEER_UNLOCK() xSemaphoreGiveRecursive(s_lock)
+#endif
+
 #define FLAG_POSITION 0x01
 #define FLAG_TAG      0x02
 
@@ -93,11 +119,13 @@ bool observore_peer_parse(const uint8_t *payload, size_t len,
         }
     }
 
-    /* A tag is parsed for its length and then ignored. There is no key
-     * management yet, so nothing can be verified, and a tag that cannot be
-     * checked must not be mistaken for one that has been: `trusted` stays
-     * false. Claiming otherwise is how an unsigned warning would end up
-     * carrying the weight of a signed one. */
+    /* A tag is parsed for its length and no more, and `trusted` is always
+     * left false here. Whether a tag is genuine is decided at the receive
+     * site, observore_ble.c, which asks observore_meshkey_verify() to check
+     * it over the span observore_peer_tag_span() returns and only then sets
+     * the flag. The parser is pure and host-tested and has no key, so it can
+     * never be the thing that vouches for a warning: a tag nobody has checked
+     * must not be mistaken for one that has been. */
     out->trusted = false;
     return true;
 }
@@ -256,8 +284,20 @@ size_t observore_peer_advert_tagged(const observore_peer_warning_t *w,
 
 void observore_peer_init(void)
 {
+#ifndef OBSERVORE_HOST_TEST
+    /* Once, at boot, before the BLE task starts; the tests call this many
+     * times and the mutex must not be recreated under a task that holds it. */
+    if (!s_lock) {
+        s_lock = xSemaphoreCreateRecursiveMutex();
+    }
+    if (!s_lock) {
+        return;
+    }
+#endif
+    PEER_LOCK();
     s_count = 0;
     memset(s_tab, 0, sizeof(s_tab));
+    PEER_UNLOCK();
 }
 
 static bool expired(const observore_peer_warning_t *w, int64_t now_us)
@@ -272,18 +312,60 @@ static bool seq_newer(uint16_t seq, uint16_t last)
     return ahead != 0 && ahead <= OBSERVORE_PEER_SEQ_WINDOW;
 }
 
-bool observore_peer_note(const observore_peer_warning_t *w, int64_t now_us)
+/* Which entry to give up when the table is full, or `s_count` for none.
+ *
+ * An expired entry first, of either kind, so a stale warning never costs a
+ * live one its place. Then the oldest stranger: strangers are the cheap
+ * thing to lose. A trusted entry is given up only to admit another trusted
+ * warning, and a stranger never evicts a live trusted one -- nine invented
+ * ids must not be able to push every friend out of the table. */
+static size_t victim_for(const observore_peer_warning_t *w, int64_t now_us)
 {
-    if (!w) {
-        return false;
-    }
-
-    /* One entry per node: the latest thing a neighbour said, not a log of
-     * everything it has ever said. A node repeating itself must not be able
-     * to fill the table and push other nodes out, which is the cheapest
-     * attack there is on a structure like this. */
+    size_t pick = s_count;
     for (size_t i = 0; i < s_count; i++) {
-        if (s_tab[i].node != w->node) {
+        if (expired(&s_tab[i], now_us) &&
+            (pick == s_count || s_tab[i].heard_us < s_tab[pick].heard_us)) {
+            pick = i;
+        }
+    }
+    if (pick != s_count) {
+        return pick;
+    }
+    for (size_t i = 0; i < s_count; i++) {
+        if (!s_tab[i].trusted &&
+            (pick == s_count || s_tab[i].heard_us < s_tab[pick].heard_us)) {
+            pick = i;
+        }
+    }
+    if (pick != s_count || !w->trusted) {
+        return pick;
+    }
+    for (size_t i = 0; i < s_count; i++) {
+        if (pick == s_count || s_tab[i].heard_us < s_tab[pick].heard_us) {
+            pick = i;
+        }
+    }
+    return pick;
+}
+
+/* Called with the lock held. */
+static bool note_locked(const observore_peer_warning_t *w, int64_t now_us)
+{
+    /* One entry per node and per kind of trust: the latest thing a neighbour
+     * said, not a log of everything it has ever said. A node repeating itself
+     * must not be able to fill the table and push other nodes out, which is
+     * the cheapest attack there is on a structure like this.
+     *
+     * Trust is part of the key because the node id is not authenticated: a
+     * stranger can send a friend's id. Keyed on the id alone, that would
+     * overwrite the friend's entry, or -- with a sequence number far ahead of
+     * the friend's -- make every warning the friend sent next look like a
+     * replay. Keyed on both, the stranger gets an entry and a sequence window
+     * of its own and the friend's are untouched. A friend whose tag failed
+     * once (a key mismatch, or a send that went out unsigned) is therefore one
+     * node with two entries until the older one's hold ends. */
+    for (size_t i = 0; i < s_count; i++) {
+        if (s_tab[i].node != w->node || s_tab[i].trusted != w->trusted) {
             continue;
         }
         if (!expired(&s_tab[i], now_us) && !seq_newer(w->seq, s_tab[i].seq)) {
@@ -301,25 +383,35 @@ bool observore_peer_note(const observore_peer_warning_t *w, int64_t now_us)
         return true;
     }
 
-    /* Full: the oldest goes. Preferring an expired entry first, so a stale
-     * warning never costs a live one its place. */
-    size_t oldest = 0;
-    for (size_t i = 1; i < s_count; i++) {
-        if (s_tab[i].heard_us < s_tab[oldest].heard_us) {
-            oldest = i;
-        }
+    /* Full. See victim_for() for who goes; a stranger who finds only live
+     * friends is refused rather than let in. */
+    size_t v = victim_for(w, now_us);
+    if (v == s_count) {
+        return false;
     }
-    s_tab[oldest] = *w;
-    s_tab[oldest].heard_us = now_us;
+    s_tab[v] = *w;
+    s_tab[v].heard_us = now_us;
     return true;
+}
+
+bool observore_peer_note(const observore_peer_warning_t *w, int64_t now_us)
+{
+    if (!w || !PEER_READY()) {
+        return false;
+    }
+    PEER_LOCK();
+    bool kept = note_locked(w, now_us);
+    PEER_UNLOCK();
+    return kept;
 }
 
 size_t observore_peer_recent(observore_peer_warning_t *out, size_t max,
                              int64_t now_us)
 {
-    if (!out || max == 0) {
+    if (!out || max == 0 || !PEER_READY()) {
         return 0;
     }
+    PEER_LOCK();
     size_t n = 0;
     for (size_t i = 0; i < s_count && n < max; i++) {
         if (expired(&s_tab[i], now_us)) {
@@ -335,33 +427,52 @@ size_t observore_peer_recent(observore_peer_warning_t *out, size_t max,
         out[at] = s_tab[i];
         n++;
     }
+    PEER_UNLOCK();
     return n;
 }
 
 int observore_peer_trusted(int64_t now_us)
 {
+    if (!PEER_READY()) {
+        return 0;
+    }
+    PEER_LOCK();
     int n = 0;
     for (size_t i = 0; i < s_count; i++) {
         if (!expired(&s_tab[i], now_us) && s_tab[i].trusted) {
             n++;
         }
     }
+    PEER_UNLOCK();
     return n;
 }
 
 void observore_peer_counts(int64_t now_us, int *nodes, int *warnings)
 {
     int live = 0;
-    for (size_t i = 0; i < s_count; i++) {
-        if (!expired(&s_tab[i], now_us)) {
+    int distinct = 0;
+    if (PEER_READY()) {
+        PEER_LOCK();
+        for (size_t i = 0; i < s_count; i++) {
+            if (expired(&s_tab[i], now_us)) {
+                continue;
+            }
             live++;
+            /* Distinct ids: a friend heard both signed and unsigned is one
+             * node with two standing warnings, and reporting it as two nodes
+             * would overstate who is in range. */
+            bool seen = false;
+            for (size_t j = 0; j < i && !seen; j++) {
+                seen = !expired(&s_tab[j], now_us) &&
+                       s_tab[j].node == s_tab[i].node;
+            }
+            if (!seen) {
+                distinct++;
+            }
         }
+        PEER_UNLOCK();
     }
-    /* One entry per node, so these are the same number -- reported as two
-     * because they will stop being the same if a node is ever allowed more
-     * than one standing warning, and a caller should not have to find that
-     * out by the number changing meaning. */
-    if (nodes)    { *nodes = live; }
+    if (nodes)    { *nodes = distinct; }
     if (warnings) { *warnings = live; }
 }
 
@@ -639,6 +750,15 @@ void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
                               uint32_t monitors_off_mask, uint16_t base_score,
                               observore_peer_weight_t *out)
 {
+    if (!out) {
+        return;
+    }
+    if (!PEER_READY()) {
+        memset(out, 0, sizeof(*out));
+        return;
+    }
+    PEER_LOCK();
     observore_peer_weigh(s_tab, s_count, counting_mask, monitors_off_mask,
                          base_score, now_us, out);
+    PEER_UNLOCK();
 }

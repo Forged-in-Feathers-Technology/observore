@@ -3009,6 +3009,280 @@ static void test_a_trusted_warning_raises_the_score(void)
     peer_scene_reset();
 }
 
+static void test_a_flood_of_strangers_is_one_voice(void)
+{
+    banner("a flood of strangers is one voice");
+
+    observore_status_t st;
+
+    /* One stranger about the Flipper's class is the baseline: 3 -> 4. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x5000, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 4 && st.peer_stranger_points == 1,
+          "one stranger is one point, got %u (+%u)", st.score,
+          st.peer_stranger_points);
+
+    /* Fifty invented ids, a second apart, give exactly the same answer, and
+     * so do seven. Untrusted ids cost nothing to make up, so numbers of them
+     * must not be worth more than one. */
+    int counts[] = {50, 7};
+    for (size_t k = 0; k < sizeof(counts) / sizeof(counts[0]); k++) {
+        observore_peer_init();
+        for (int i = 0; i < counts[k]; i++) {
+            peer_say((uint16_t)(0x6000 + i), OBSERVORE_CLASS_HUNTER, 1, 0, false,
+                     SECS(10 + i));
+        }
+        observore_track_status(&st, SECS(11 + counts[k]));
+        CHECK(st.score == 4 && st.level == OBSERVORE_LEVEL_CAUTION &&
+                  st.peer_stranger_points == 1 && st.peer_points == 1,
+              "%d strangers add what one does, got %u (+%u)", counts[k],
+              st.score, st.peer_points);
+    }
+
+    /* A flood about a class nothing here counts puts nothing on the board. */
+    peer_scene_reset();
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x6000 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, false,
+                 SECS(10 + i));
+    }
+    observore_track_status(&st, SECS(61));
+    CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR,
+          "a flood about an unseen bodycam adds nothing, got %u", st.score);
+
+    /* A flood naming every class that can take part, with only the Flipper
+     * here: only the hunter share is attached to something counted. */
+    static const observore_class_t eligible[] = {
+        OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+        OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_ALPR, OBSERVORE_CLASS_BODYCAM,
+        OBSERVORE_CLASS_DEAUTH, OBSERVORE_CLASS_HUNTER,
+    };
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x7000 + i), eligible[i % 7], 1, 0, false,
+                 SECS(10 + i));
+    }
+    observore_track_status(&st, SECS(61));
+    CHECK(st.peer_stranger_points == 1 && st.score == 4,
+          "a flood naming every class adds one, got %u (+%u)", st.score,
+          st.peer_stranger_points);
+
+    /* A real threat is still reported through a flood: the strangers are
+     * noise around it, not a way to hide it. */
+    peer_scene_reset();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t obs = {
+        .mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -40,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+    CHECK(observore_track_observe(&obs, SECS(5)), "the body camera is seen");
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x8000 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, false,
+                 SECS(10 + i));
+    }
+    observore_track_status(&st, SECS(61));
+    observore_event_t list[4];
+    size_t listed = observore_track_snapshot(list, 4);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT && st.device_count == 1,
+          "a real bodycam still alerts through a flood, got %u", st.score);
+    CHECK(listed == 1 && list[0].cls == OBSERVORE_CLASS_BODYCAM,
+          "and is listed, got %zu rows", listed);
+
+    /* The pure rule: strangers across three counted classes total two, never
+     * three, and the last class in class order is the one that is cut. */
+    observore_peer_warning_t ws[3];
+    memset(ws, 0, sizeof(ws));
+    ws[0].node = 0x9001; ws[0].cls = OBSERVORE_CLASS_HUNTER;
+    ws[1].node = 0x9002; ws[1].cls = OBSERVORE_CLASS_DRONE;
+    ws[2].node = 0x9003; ws[2].cls = OBSERVORE_CLASS_TRACKER;
+    for (int i = 0; i < 3; i++) {
+        ws[i].heard_us = SECS(10);
+    }
+    uint32_t three = (1u << OBSERVORE_CLASS_TRACKER) |
+                     (1u << OBSERVORE_CLASS_DRONE) |
+                     (1u << OBSERVORE_CLASS_HUNTER);
+    observore_peer_weight_t pw;
+    observore_peer_weigh(ws, 3, three, 0, 0, SECS(11), &pw);
+    CHECK(pw.total == OBSERVORE_PEER_STRANGER_CAP && pw.stranger == 2 &&
+              pw.trusted == 0,
+          "three counted classes give strangers exactly two, got %u", pw.total);
+    CHECK(pw.share[2].points == 1 && pw.share[1].points == 1 &&
+              pw.share[0].points == 0 &&
+              pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED,
+          "the last class in order (hunter) is limited to nothing: %u/%u/%u",
+          pw.share[0].points, pw.share[1].points, pw.share[2].points);
+
+    /* Which stranger speaks for a class is the lowest node id, so the same
+     * eight warnings pick the same node in either order. */
+    observore_peer_warning_t eight[8];
+    uint32_t hunter_only = 1u << OBSERVORE_CLASS_HUNTER;
+    for (int dir = 0; dir < 2; dir++) {
+        memset(eight, 0, sizeof(eight));
+        for (int i = 0; i < 8; i++) {
+            eight[i].node = (uint16_t)(dir == 0 ? 0xA008 - i : 0xA001 + i);
+            eight[i].cls = OBSERVORE_CLASS_HUNTER;
+            eight[i].heard_us = SECS(10);
+        }
+        observore_peer_weigh(eight, 8, hunter_only, 0, 3, SECS(11), &pw);
+        int rep = -1;
+        for (int i = 0; i < 8; i++) {
+            if (pw.share[i].node == 0xA001) {
+                rep = i;
+            }
+        }
+        CHECK(rep >= 0 && pw.share[rep].voices == 8 && pw.share[rep].points == 1,
+              "the lowest id speaks for all eight (order %d), voices %u points %u",
+              dir, rep >= 0 ? pw.share[rep].voices : 0,
+              rep >= 0 ? pw.share[rep].points : 0);
+        int folded = 0;
+        for (int i = 0; i < 8; i++) {
+            if (i != rep && pw.share[i].points == 0 &&
+                pw.share[i].why == OBSERVORE_PEER_WHY_FOLDED) {
+                folded++;
+            }
+        }
+        CHECK(folded == 7 && pw.total == 1 && pw.stranger == 1,
+              "and the other seven are folded with nothing (order %d), got %d",
+              dir, folded);
+    }
+
+    /* Two strangers with the same id: the first listed speaks. */
+    memset(ws, 0, sizeof(ws));
+    for (int i = 0; i < 2; i++) {
+        ws[i].node = 0xB000;
+        ws[i].cls = OBSERVORE_CLASS_HUNTER;
+        ws[i].heard_us = SECS(10);
+    }
+    observore_peer_weigh(ws, 2, hunter_only, 0, 3, SECS(11), &pw);
+    CHECK(pw.share[0].points == 1 && pw.share[0].voices == 2 &&
+              pw.share[1].why == OBSERVORE_PEER_WHY_FOLDED,
+          "a tie in node id goes to the lower index");
+
+    peer_scene_reset();
+}
+
+static void test_a_stranger_cannot_push_a_friend_out(void)
+{
+    banner("a stranger cannot push a friend out");
+
+    observore_status_t st;
+    observore_peer_warning_t got[OBSERVORE_PEER_MAX];
+
+    /* A stranger copying a friend's id, with a sequence far ahead, must not
+     * replace the friend's entry or poison its sequence window. */
+    peer_scene_reset();
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 5, 0, true, SECS(10)),
+          "the friend is kept");
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 30005, 0, false, SECS(11)),
+          "a stranger with the same id is kept, as a stranger");
+    CHECK(observore_peer_trusted(SECS(12)) == 1,
+          "and the friend's entry is still trusted");
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 6, 0, true, SECS(13)),
+          "the friend's next warning is not taken for a replay");
+    int nodes = -1, warnings = -1;
+    observore_peer_counts(SECS(14), &nodes, &warnings);
+    CHECK(nodes == 1 && warnings == 2,
+          "one id heard twice is one node with two warnings, got %d/%d", nodes,
+          warnings);
+    size_t n = observore_peer_recent(got, OBSERVORE_PEER_MAX, SECS(14));
+    bool friend_ok = false;
+    for (size_t i = 0; i < n; i++) {
+        if (got[i].trusted && got[i].cls == OBSERVORE_CLASS_BODYCAM &&
+            got[i].seq == 6) {
+            friend_ok = true;
+        }
+    }
+    CHECK(friend_ok, "the friend's latest warning is what stands");
+
+    /* Twenty invented ids leave two friends in the table and counting. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    peer_say(0x3A80, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(11));
+    for (int i = 0; i < 20; i++) {
+        peer_say((uint16_t)(0xC000 + i), OBSERVORE_CLASS_HUNTER, 1, 0, false,
+                 SECS(20 + i));
+    }
+    CHECK(observore_peer_trusted(SECS(45)) == 2,
+          "invented ids do not displace the friends");
+    observore_track_status(&st, SECS(45));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "and the two friends still alert, got %u", st.score);
+
+    /* Eight live friends: a stranger is refused, a ninth friend gets in. */
+    peer_scene_reset();
+    for (int i = 0; i < 8; i++) {
+        peer_say((uint16_t)(0x3B00 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, true,
+                 SECS(10 + i));
+    }
+    CHECK(!peer_say(0xC100, OBSERVORE_CLASS_BODYCAM, 1, 0, false, SECS(20)),
+          "a stranger finding only friends is refused");
+    CHECK(observore_peer_trusted(SECS(21)) == 8, "all eight friends stand");
+    CHECK(peer_say(0x3B08, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(22)),
+          "a ninth friend is kept");
+    CHECK(observore_peer_trusted(SECS(23)) == 8, "at the cost of the oldest friend");
+
+    /* An expired entry goes before any live one, even for a stranger. */
+    peer_scene_reset();
+    peer_say(0x3B00, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(1));
+    for (int i = 1; i < 8; i++) {
+        peer_say((uint16_t)(0x3B00 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, true,
+                 SECS(100 + i));
+    }
+    int64_t late = SECS(1) + (int64_t)OBSERVORE_PEER_TTL_S * 1000000 + SECS(9);
+    CHECK(peer_say(0xC100, OBSERVORE_CLASS_BODYCAM, 1, 0, false, late),
+          "a stranger takes the place of an expired entry");
+    CHECK(observore_peer_trusted(late) == 7, "and no live friend was lost");
+
+    /* A repeat renews the hold and never adds a second share. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 2, 0, true, SECS(200)),
+          "the next sequence is kept");
+    observore_track_status(&st, SECS(201));
+    CHECK(st.peer_points == 3, "a repeat is still one share, got %u", st.peer_points);
+    observore_track_status(&st, SECS(450));
+    CHECK(st.peer_points == 3,
+          "and it holds from the renewal, not the first hearing, got %u",
+          st.peer_points);
+    CHECK(!peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 2, 0, true, SECS(210)),
+          "the same sequence again is refused");
+
+    /* The age boundaries. Age 254 heard at 10 s has 46 s of hold: it counts
+     * at 55 s and not at 56 s. Age 255 never counts. Age 0 counts to 309 s.
+     * In between the share is the full value: a cut-off, not a decay. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 254, true, SECS(10));
+    observore_track_status(&st, SECS(10));
+    CHECK(st.peer_points == 3, "age 254 counts when heard, got %u", st.peer_points);
+    observore_track_status(&st, SECS(55));
+    CHECK(st.peer_points == 3, "and at 55 s, got %u", st.peer_points);
+    observore_track_status(&st, SECS(56));
+    CHECK(st.peer_points == 0 && st.score == 0, "and not at 56 s, got %u",
+          st.peer_points);
+
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 255, true, SECS(10));
+    observore_track_status(&st, SECS(10));
+    CHECK(st.peer_points == 0, "age 255 never counts, got %u", st.peer_points);
+    observore_track_status(&st, SECS(11));
+    CHECK(st.peer_points == 0, "not a second later either");
+
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(160));
+    CHECK(st.peer_points == 3, "halfway through the hold it is the full 3, got %u",
+          st.peer_points);
+    observore_track_status(&st, SECS(309));
+    CHECK(st.peer_points == 3, "age 0 counts at 309 s, got %u", st.peer_points);
+    observore_track_status(&st, SECS(310));
+    CHECK(st.peer_points == 0, "and not at 310 s, got %u", st.peer_points);
+
+    peer_scene_reset();
+}
+
 static void test_bcd(void)
 {
     banner("the clock chip speaks BCD and nothing else here does");
@@ -6388,6 +6662,8 @@ int main(void)
     test_a_drone_says_where_it_is_and_where_its_pilot_is();
     test_a_warning_from_a_stranger_can_raise_but_never_quiet();
     test_a_trusted_warning_raises_the_score();
+    test_a_flood_of_strangers_is_one_voice();
+    test_a_stranger_cannot_push_a_friend_out();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

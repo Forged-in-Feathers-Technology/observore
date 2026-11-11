@@ -25,10 +25,15 @@
  * adversary standing up ten fake nodes can produce noise, never blindness,
  * and noise is recoverable in a way that silent suppression is not.
  *
- * In this slice it holds by construction, because nothing here suppresses
- * anything and a warning contributes **zero** to the score. What it does is
- * get reported, which is the honest first step: the device says what it
- * heard and whose it was, and a person decides.
+ * It holds by construction, because nothing here suppresses anything and a
+ * warning is only ever added to the score, after the local sum. A stranger can
+ * add at most OBSERVORE_PEER_STRANGER_POINTS to a class this node already
+ * counts; all strangers together are one voice per class, however many ids
+ * they invent; their total is capped at OBSERVORE_PEER_STRANGER_CAP; and the
+ * cap leaves them short of alert, so they cannot change the level. A trusted
+ * node, one that proved the household secret, adds more, within its own
+ * bounds. Either way the device says what it heard and whose it was, and a
+ * person decides.
  *
  * ## The wire format
  *
@@ -113,7 +118,14 @@
  * crowd of senders cannot push the table around. Five minutes because a
  * warning is about now: one older than that describes a situation that has
  * moved, and keeping it would let a single sighting look like a standing
- * alarm. */
+ * alarm.
+ *
+ * For scoring the effective hold is shorter: OBSERVORE_PEER_TTL_S less the age
+ * the sender put in the warning, and an age of 255 counts nothing at all. A
+ * sender re-announces a device for up to half an hour after it last saw it,
+ * with the age clamped at 255, and without this every receiver would hold the
+ * points for a threat that left long ago. That is fixed on the receiving side
+ * only; the wire and the sender are unchanged. */
 #define OBSERVORE_PEER_MAX      8
 #define OBSERVORE_PEER_TTL_S  300
 
@@ -283,10 +295,11 @@ uint16_t observore_peer_node_id(const uint8_t mac[6]);
  * round trip is the only check that actually pins the wire format, because
  * every other test of the parser feeds it bytes a person typed.
  *
- * `w->trusted` is ignored. There is no key management, so nothing here can
- * sign anything, and emitting a tag this device cannot produce would invite a
- * receiver to believe it. The flag exists so the format need not change when
- * keys arrive.
+ * `w->trusted` is ignored, and so is any signing: this function never signs
+ * anything. A warning that should carry a tag goes through
+ * observore_peer_build_tagged(), which appends a tag that
+ * observore_meshkey_tag() computed over the span, and emitting a tag this
+ * device cannot produce would invite a receiver to believe it.
  *
  * Returns the length written, or 0 if it would not fit. */
 size_t observore_peer_build(const observore_peer_warning_t *w,
@@ -341,7 +354,15 @@ size_t observore_peer_advert_tagged(const observore_peer_warning_t *w,
 void observore_peer_init(void);
 
 /* Record a warning, or drop it as a replay or a duplicate. Returns true when
- * it was new and has been kept. */
+ * it was new and has been kept.
+ *
+ * An entry is keyed on the node and its trust together, so a stranger who
+ * sends a friend's id gets an entry and a sequence window of its own and
+ * cannot overwrite the friend's or make its next warnings look like replays.
+ * When the table is full the slot given up is the oldest expired entry of
+ * either kind, else the oldest stranger, else (only for a trusted newcomer)
+ * the oldest trusted entry; a stranger who finds only live friends is refused
+ * and the call returns false. */
 bool observore_peer_note(const observore_peer_warning_t *w, int64_t now_us);
 
 /* Warnings heard recently, newest first, excluding anything aged out. */
@@ -357,8 +378,9 @@ size_t observore_peer_recent(observore_peer_warning_t *out, size_t max,
  * trusted means the nodes disagree about the secret. */
 int observore_peer_trusted(int64_t now_us);
 
-/* How many distinct nodes have warned recently, and how many warnings stand.
- * Either pointer may be NULL. */
+/* How many distinct node ids have warned recently, and how many warnings
+ * stand. A node heard both signed and unsigned is one node with two warnings,
+ * so the two numbers can differ. Either pointer may be NULL. */
 void observore_peer_counts(int64_t now_us, int *nodes, int *warnings);
 
 /* Why a warning did or did not add points. COUNTED means it received the full
