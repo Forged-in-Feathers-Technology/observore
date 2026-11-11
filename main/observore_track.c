@@ -643,6 +643,53 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
     OBSERVORE_UNLOCK();
 }
 
+/* What counts locally right now: the classes with a device that is classified,
+ * whose monitor is on and that the census has not quieted, and the local score
+ * those devices make before any warning is added.
+ *
+ * For the callers that must weigh a warning the way the score does without
+ * asking for the whole status: they get the one definition of counting, from
+ * the one walk of the table, rather than rebuilding it from a snapshot (which
+ * lists rows, not what counts). Either pointer may be NULL. Takes the track
+ * lock itself and writes nothing else. */
+void observore_track_local(uint32_t *counting_mask, uint16_t *base_score)
+{
+    OBSERVORE_LOCK();
+    uint32_t mask = 0;
+    uint32_t sum = local_sum(NULL, &mask);
+    OBSERVORE_UNLOCK();
+    if (counting_mask) {
+        *counting_mask = mask;
+    }
+    if (base_score) {
+        *base_score = (sum > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
+                                                  : (uint16_t)sum;
+    }
+}
+
+/* Every warning's share of the score, exactly as the score counted it.
+ *
+ * Runs the same local walk and hands observore_peer_weigh_now() the same
+ * arguments observore_track_status() does, so a share a surface lists and the
+ * points the score carries come from one definition of counting; the same
+ * argument census_says() makes for quieting. The shares are written straight
+ * into the caller's struct under the peer lock, never copied from the warning
+ * table onto this stack. Lock order is this lock, then the peer lock. */
+void observore_track_peer_weight(observore_peer_weight_t *out, int64_t now_us)
+{
+    if (!out) {
+        return;
+    }
+    OBSERVORE_LOCK();
+    uint32_t counting = 0;
+    uint32_t sum = local_sum(NULL, &counting);
+    uint16_t base = (sum > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
+                                                : (uint16_t)sum;
+    observore_peer_weigh_now(now_us, counting, observore_monitors_off_mask(),
+                             base, out);
+    OBSERVORE_UNLOCK();
+}
+
 /* One collector for all three views.  `want`: 1 classified, 0 unclassified,
  * -1 either.  Entries are kept in sorted order as they are found, bounded by
  * `max` -- the previous shape collected all 192 slots and then insertion-sorted

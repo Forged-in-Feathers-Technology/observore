@@ -256,6 +256,23 @@ void observore_track_tick(int64_t now_us);
 
 void observore_track_status(observore_status_t *out, int64_t now_us);
 
+/* The two halves of the status that a warning's surface needs on its own.
+ *
+ * observore_track_local() gives the classes that count here right now (bit c
+ * for class c) and the local score before any warning is added. It is what a
+ * caller needs to ask the pure rule, observore_peer_weigh(), a question about
+ * a warning set of its own.
+ *
+ * observore_track_peer_weight() gives every warning's share of the score, the
+ * numbers the status carries as peer_points, from the same walk and the same
+ * arguments, so a listing and the score cannot disagree. Callers: the console
+ * and the publish loop (/api/peers, the "peer report" log line) and the glass.
+ * Both take the tracker's lock and then the peer lock, in that order, and
+ * nothing in the peer module calls back into the tracker. Neither copies the
+ * warning table onto the caller's stack; the shares are written into `out`. */
+void observore_track_local(uint32_t *counting_mask, uint16_t *base_score);
+void observore_track_peer_weight(observore_peer_weight_t *out, int64_t now_us);
+
 /* Snapshot the device table, most recently seen first.  Returns the number of
  * entries written.  Only classified devices are returned -- the unclassified
  * ones exist purely to feed the follower heuristic. */
