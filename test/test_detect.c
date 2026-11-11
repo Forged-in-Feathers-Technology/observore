@@ -3613,6 +3613,488 @@ static void test_no_warning_lowers_a_score(void)
     peer_scene_reset();
 }
 
+/* One warning as the pure rule is handed it. */
+typedef struct {
+    uint16_t node;
+    observore_class_t cls;
+    bool trusted;
+} bound_say_t;
+
+#define BOUND_NOW SECS(100)
+
+/* Weigh a set of fresh warnings (heard just now, age zero) against a board
+ * described only by the classes counting, the monitors off and the local sum. */
+static void bound_weigh(const bound_say_t *say, size_t n, uint32_t mask,
+                        uint32_t off, uint16_t base,
+                        observore_peer_weight_t *out)
+{
+    observore_peer_warning_t w[OBSERVORE_PEER_MAX];
+    memset(w, 0, sizeof(w));
+    if (n > OBSERVORE_PEER_MAX) {
+        n = OBSERVORE_PEER_MAX;
+    }
+    for (size_t i = 0; i < n; i++) {
+        w[i].node = say[i].node;
+        w[i].cls = (uint8_t)say[i].cls;
+        w[i].trusted = say[i].trusted;
+        w[i].heard_us = BOUND_NOW;
+    }
+    observore_peer_weigh(w, n, mask, off, base, BOUND_NOW, out);
+}
+
+#define CLS_BIT(c) (1u << (unsigned)(c))
+
+static void test_every_scene_stays_bounded(void)
+{
+    banner("every scene stays bounded");
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_peer_init();
+
+    static const observore_class_t eligible[7] = {
+        OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+        OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_HUNTER, OBSERVORE_CLASS_ALPR,
+        OBSERVORE_CLASS_BODYCAM, OBSERVORE_CLASS_DEAUTH,
+    };
+    observore_peer_weight_t pw;
+
+    /* The classes that can take part at all, found through the rule because
+     * the helper that decides is private to it. A lone fresh friend with
+     * nothing here adds the weight of the class up to three, and for every
+     * other class adds nothing and says why. Followers (4) and tailing (6)
+     * are the two heavy classes left out on purpose: they are guesses about
+     * unidentified devices, and a guess must not be amplified by the mesh. */
+    for (int c = 0; c < OBSERVORE_CLASS_MAX; c++) {
+        bool in = false;
+        for (size_t k = 0; k < 7; k++) {
+            in = in || eligible[k] == (observore_class_t)c;
+        }
+        bound_say_t one = {0x3A7F, (observore_class_t)c, true};
+        bound_weigh(&one, 1, 0, 0, 0, &pw);
+        if (in) {
+            CHECK(pw.total == 3 && pw.share[0].points == 3 &&
+                      pw.share[0].why == OBSERVORE_PEER_WHY_COUNTED,
+                  "a lone friend about %s adds 3, got %u",
+                  observore_class_name((observore_class_t)c), pw.total);
+        } else {
+            CHECK(pw.total == 0 &&
+                      pw.share[0].why == OBSERVORE_PEER_WHY_CLASS_NOT_SCORED,
+                  "a friend about %s adds nothing because the class is not "
+                  "scored, got %u (why %u)",
+                  observore_class_name((observore_class_t)c), pw.total,
+                  pw.share[0].why);
+        }
+    }
+
+    /* The worked scenes. */
+    {
+        bound_say_t s[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 3, &pw);
+        CHECK(pw.total == 1 && pw.stranger == 1 &&
+                  pw.share[0].why == OBSERVORE_PEER_WHY_COUNTED,
+              "S1: a stranger about a counted hunter adds 1, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s, 1, 0, 0, 0, &pw);
+        CHECK(pw.total == 3 && pw.trusted == 3, "S2: one friend adds 3, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true},
+                           {0x3A80, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s, 2, 0, 0, 0, &pw);
+        CHECK(pw.total == 6 && pw.share[0].points == 3 && pw.share[1].points == 3,
+              "S3: two friends about a bodycam reach 6, got %u", pw.total);
+    }
+
+    /* A class stops at its own weight: two friends about a 3-weight class
+     * add 3, caution, whichever of the four it is. Only the 6-weight classes
+     * reach alert from peers alone. */
+    static const observore_class_t three[4] = {
+        OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+        OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_HUNTER,
+    };
+    for (int k = 0; k < 4; k++) {
+        bound_say_t s[] = {{0x3A7F, three[k], true}, {0x3A80, three[k], true}};
+        bound_weigh(s, 2, 0, 0, 0, &pw);
+        CHECK(pw.total == 3 && level_of_score(pw.total) == OBSERVORE_LEVEL_CAUTION,
+              "S3b: two friends about %s stop at its own weight and stay at "
+              "caution, got %u", observore_class_name(three[k]), pw.total);
+        CHECK(pw.share[0].points == 3 && pw.share[1].points == 0 &&
+                  pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S3b: the second friend about %s is limited to nothing",
+              observore_class_name(three[k]));
+    }
+    static const observore_class_t six[3] = {
+        OBSERVORE_CLASS_ALPR, OBSERVORE_CLASS_BODYCAM, OBSERVORE_CLASS_DEAUTH,
+    };
+    for (int k = 0; k < 3; k++) {
+        bound_say_t s[] = {{0x3A7F, six[k], true}, {0x3A80, six[k], true}};
+        bound_weigh(s, 2, 0, 0, 0, &pw);
+        CHECK(pw.total == 6 && level_of_score(pw.total) == OBSERVORE_LEVEL_ALERT,
+              "two friends about %s reach alert from peers alone, got %u",
+              observore_class_name(six[k]), pw.total);
+    }
+
+    /* S3c: a friend's bodycam and a different friend's drone. */
+    bound_say_t s3c[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true},
+                         {0x3A80, OBSERVORE_CLASS_DRONE, true}};
+    bound_weigh(s3c, 2, 0, 0, 0, &pw);
+    CHECK(pw.total == 5 && pw.share[0].points == 3 && pw.share[1].points == 2 &&
+              pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+          "S3c: a bodycam and a drone from two friends total 5, drone limited, got %u",
+          pw.total);
+    {
+        bound_say_t s[8];
+        for (int i = 0; i < 8; i++) {
+            s[i] = (bound_say_t){(uint16_t)(0x3B00 + i), OBSERVORE_CLASS_BODYCAM, true};
+        }
+        bound_weigh(s, 8, 0, 0, 0, &pw);
+        CHECK(pw.total == 6, "S3d: eight friends still total 6, got %u", pw.total);
+    }
+    {
+        bound_say_t both[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true},
+                              {0x4001, OBSERVORE_CLASS_BODYCAM, false}};
+        bound_weigh(both, 2, CLS_BIT(OBSERVORE_CLASS_BODYCAM), 0, 8, &pw);
+        CHECK(pw.total == 3 && pw.share[1].points == 0 &&
+                  pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S4: at 8 a friend confirms a bodycam and the stranger has no "
+              "room, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 5, &pw);
+        CHECK(pw.total == 0, "S5: a stranger at 5 adds nothing, got %u", pw.total);
+        bound_say_t both[] = {{0x3A7F, OBSERVORE_CLASS_HUNTER, true},
+                              {0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(both, 2, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 5, &pw);
+        CHECK(pw.total == 0 && pw.share[0].points == 0 &&
+                  pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S5b: a friend and a stranger about a hunter at 5 add nothing "
+              "and the friend is limited, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s, 1, 0, 0, 2, &pw);
+        CHECK(pw.total == 3, "S6: at 2 a lone friend adds 3, got %u", pw.total);
+        bound_say_t s7[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s7, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 4, &pw);
+        CHECK(pw.total == 1 && pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S7: at 4 a friend about an unseen bodycam adds 1 and is "
+              "limited, got %u", pw.total);
+        bound_say_t s8[] = {{0x4001, OBSERVORE_CLASS_TRACKER, false}};
+        bound_weigh(s8, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 5, &pw);
+        CHECK(pw.total == 0, "S8: a stranger about a tracker at 5 adds nothing, got %u",
+              pw.total);
+    }
+    {
+        bound_say_t s[7];
+        for (int i = 0; i < 7; i++) {
+            s[i] = (bound_say_t){(uint16_t)(0x4100 + i), eligible[i], false};
+        }
+        bound_weigh(s, 7, 0, 0, 0, &pw);
+        bool all_unseen = pw.n == 7;
+        for (int i = 0; i < 7; i++) {
+            all_unseen = all_unseen &&
+                         pw.share[i].why == OBSERVORE_PEER_WHY_NOT_SEEN_HERE;
+        }
+        CHECK(pw.total == 0 && all_unseen,
+              "S9: strangers on all seven classes add nothing when none is "
+              "seen here, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_HUNTER, true}};
+        bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 3, &pw);
+        CHECK(pw.total == 2 && level_of_score(3 + pw.total) == OBSERVORE_LEVEL_CAUTION,
+              "S10: a friend confirming a Flipper adds 2 and stays below "
+              "alert, got %u", pw.total);
+    }
+
+    /* S11: classes are spent heaviest first, then by id, so two alpr and two
+     * bodycam from friends leave the alpr with all of it. */
+    bound_say_t s11[] = {{0x3A01, OBSERVORE_CLASS_BODYCAM, true},
+                         {0x3A02, OBSERVORE_CLASS_BODYCAM, true},
+                         {0x3A03, OBSERVORE_CLASS_ALPR, true},
+                         {0x3A04, OBSERVORE_CLASS_ALPR, true}};
+    bound_weigh(s11, 4, 0, 0, 0, &pw);
+    CHECK(pw.total == 6 && pw.share[2].points == 3 && pw.share[3].points == 3 &&
+              pw.share[0].points == 0 && pw.share[1].points == 0 &&
+              pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED &&
+              pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+          "S11: two alpr and two bodycam total 6, alpr 6 and bodycam limited "
+          "to 0, got %u", pw.total);
+
+    /* The same sets reversed give the same per-node result. */
+    {
+        bound_say_t rev11[4], rev3c[2];
+        for (int i = 0; i < 4; i++) {
+            rev11[i] = s11[3 - i];
+        }
+        rev3c[0] = s3c[1];
+        rev3c[1] = s3c[0];
+        observore_peer_weight_t fwd, bwd;
+        bound_weigh(s11, 4, 0, 0, 0, &fwd);
+        bound_weigh(rev11, 4, 0, 0, 0, &bwd);
+        bool same = fwd.total == bwd.total;
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                if (fwd.share[i].node == bwd.share[j].node) {
+                    same = same && fwd.share[i].points == bwd.share[j].points &&
+                           fwd.share[i].why == bwd.share[j].why;
+                }
+            }
+        }
+        CHECK(same, "S11 reversed gives the same points for every node");
+        bound_weigh(s3c, 2, 0, 0, 0, &fwd);
+        bound_weigh(rev3c, 2, 0, 0, 0, &bwd);
+        same = fwd.total == bwd.total;
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 2; j++) {
+                if (fwd.share[i].node == bwd.share[j].node) {
+                    same = same && fwd.share[i].points == bwd.share[j].points &&
+                           fwd.share[i].why == bwd.share[j].why;
+                }
+            }
+        }
+        CHECK(same, "S3c reversed gives the same points for every node");
+    }
+
+    /* The alert room: a lone friend about a bodycam nobody here has seen
+     * fills what is left under alert and no more. */
+    {
+        static const unsigned want[5] = {3, 2, 1, 0, 0};
+        for (unsigned b = 2; b <= 6; b++) {
+            bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+            bound_weigh(s, 1, 0, 0, (uint16_t)b, &pw);
+            CHECK(pw.total == want[b - 2],
+                  "alert room: a lone friend at base %u adds %u, got %u", b,
+                  want[b - 2], pw.total);
+        }
+        /* The stranger room is the same line, with a one-point voice. */
+        static const unsigned want_s[4] = {1, 1, 0, 0};
+        for (unsigned b = 3; b <= 6; b++) {
+            bound_say_t s[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+            bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, (uint16_t)b, &pw);
+            CHECK(pw.total == want_s[b - 3],
+                  "stranger room: a stranger on a hunter at base %u adds %u, got %u",
+                  b, want_s[b - 3], pw.total);
+        }
+    }
+
+    /* Every reason a warning can give is produced, and named. */
+    {
+        observore_peer_warning_t w;
+        memset(&w, 0, sizeof(w));
+        w.node = 0x3A7F;
+        w.cls = OBSERVORE_CLASS_BODYCAM;
+        w.trusted = true;
+        w.heard_us = BOUND_NOW;
+        w.age_s = OBSERVORE_PEER_STALE_AGE_S;
+        observore_peer_weigh(&w, 1, 0, 0, 0, BOUND_NOW, &pw);
+        CHECK(pw.total == 0 && pw.share[0].why == OBSERVORE_PEER_WHY_STALE,
+              "an age of 255 is stale");
+
+        static const observore_class_t unscored[] = {
+            OBSERVORE_CLASS_CAMERA, OBSERVORE_CLASS_FLEET_TELEMATICS,
+            OBSERVORE_CLASS_ACCESSORY, OBSERVORE_CLASS_FOLLOWER,
+            OBSERVORE_CLASS_TAILING, OBSERVORE_CLASS_UNKNOWN,
+            OBSERVORE_CLASS_PEER_DETECTOR, OBSERVORE_CLASS_FIXTURE,
+        };
+        for (size_t k = 0; k < sizeof(unscored) / sizeof(unscored[0]); k++) {
+            bound_say_t s[] = {{0x3A7F, unscored[k], true}};
+            bound_weigh(s, 1, CLS_BIT(unscored[k]), 0, 4, &pw);
+            CHECK(pw.total == 0 &&
+                      pw.share[0].why == OBSERVORE_PEER_WHY_CLASS_NOT_SCORED,
+                  "%s is not a scored class", observore_class_name(unscored[k]));
+        }
+
+        bound_say_t f[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(f, 1, CLS_BIT(OBSERVORE_CLASS_BODYCAM),
+                    CLS_BIT(OBSERVORE_CLASS_BODYCAM), 0, &pw);
+        CHECK(pw.total == 0 && pw.share[0].why == OBSERVORE_PEER_WHY_MONITOR_OFF,
+              "a friend about a class whose monitor is off here adds nothing "
+              "because the monitor is off here");
+        bound_say_t st[] = {{0x4001, OBSERVORE_CLASS_BODYCAM, false}};
+        bound_weigh(st, 1, CLS_BIT(OBSERVORE_CLASS_BODYCAM),
+                    CLS_BIT(OBSERVORE_CLASS_BODYCAM), 0, &pw);
+        CHECK(pw.total == 0 && pw.share[0].why == OBSERVORE_PEER_WHY_MONITOR_OFF,
+              "and so does a stranger");
+
+        bound_say_t ns[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(ns, 1, 0, 0, 0, &pw);
+        CHECK(pw.share[0].why == OBSERVORE_PEER_WHY_NOT_SEEN_HERE,
+              "a stranger about a class not seen here is 'not seen here'");
+
+        bound_say_t fo[] = {{0x4002, OBSERVORE_CLASS_HUNTER, false},
+                            {0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(fo, 2, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 3, &pw);
+        CHECK(pw.share[0].why == OBSERVORE_PEER_WHY_FOLDED &&
+                  pw.share[1].why == OBSERVORE_PEER_WHY_COUNTED &&
+                  pw.share[1].voices == 2 && pw.total == 1,
+              "a second stranger on a class is folded into the first voice");
+
+        CHECK(pw.share[1].points == 1, "counted is the full stranger point");
+        bound_say_t lim[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(lim, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 5, &pw);
+        CHECK(pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED, "and limited when cut");
+
+        CHECK(strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_COUNTED), "counted") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_STALE), "stale") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_CLASS_NOT_SCORED),
+                         "class not scored") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_MONITOR_OFF),
+                         "monitor off here") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_NOT_SEEN_HERE),
+                         "not seen here") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_FOLDED), "folded") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_LIMITED), "limited") == 0,
+              "the seven reasons carry the words the surfaces print");
+        CHECK(strcmp(observore_peer_why_name((observore_peer_why_t)99), "?") == 0,
+              "and anything else is a question mark");
+    }
+
+    /* The sweep: every local board that can be built from the classes that
+     * matter, against every warning set worth asking about. Deterministic and
+     * small enough to run in a couple of seconds. The local sum and the
+     * counting mask are made the way the tracker makes them, so every scene
+     * is one the real tracker could be in. */
+    enum { SETS_PER_CLASS = 5, SETS = 7 * SETS_PER_CLASS + 2 };
+    unsigned long scenes = 0;
+    unsigned largest_stranger = 0;
+    unsigned long v_score = 0, v_level = 0, v_total = 0, v_stranger = 0,
+                  v_caution = 0;
+    bool printed_first = false;
+
+    for (unsigned mix = 0; mix < 2187u * 12u; mix++) {
+        unsigned m = mix;
+        unsigned count[7];
+        for (int k = 0; k < 7; k++) {
+            count[k] = m % 3;
+            m /= 3;
+        }
+        unsigned cam = m % 2; m /= 2;
+        unsigned fleet = m % 2; m /= 2;
+        unsigned follower = m % 3;   /* what the class contributes, 0..2 */
+
+        uint32_t mask = 0;
+        unsigned base = 0;
+        for (int k = 0; k < 7; k++) {
+            if (count[k]) {
+                mask |= CLS_BIT(eligible[k]);
+                base += count[k] * observore_class_points(eligible[k]);
+            }
+        }
+        if (cam) {
+            mask |= CLS_BIT(OBSERVORE_CLASS_CAMERA);
+            base += observore_class_points(OBSERVORE_CLASS_CAMERA);
+        }
+        if (fleet) {
+            mask |= CLS_BIT(OBSERVORE_CLASS_FLEET_TELEMATICS);
+            base += observore_class_points(OBSERVORE_CLASS_FLEET_TELEMATICS);
+        }
+        if (follower) {
+            mask |= CLS_BIT(OBSERVORE_CLASS_FOLLOWER);
+            base += follower;
+        }
+        if (base > OBSERVORE_SCORE_MAX) {
+            base = OBSERVORE_SCORE_MAX;
+        }
+
+        for (int set = 0; set < SETS; set++) {
+            bound_say_t say[OBSERVORE_PEER_MAX];
+            size_t n = 0;
+            bool stranger_only = true;
+            bool two_trusted_in_a_class = false;
+            if (set < 7 * SETS_PER_CLASS) {
+                observore_class_t c = eligible[set / SETS_PER_CLASS];
+                switch (set % SETS_PER_CLASS) {
+                case 0:   /* one stranger */
+                    say[n++] = (bound_say_t){0x4001, c, false};
+                    break;
+                case 1:   /* eight strangers */
+                    for (int i = 0; i < 8; i++) {
+                        say[n++] = (bound_say_t){(uint16_t)(0x4010 + i), c, false};
+                    }
+                    break;
+                case 2:   /* one friend */
+                    say[n++] = (bound_say_t){0x3A7F, c, true};
+                    stranger_only = false;
+                    break;
+                case 3:   /* two friends */
+                    say[n++] = (bound_say_t){0x3A7F, c, true};
+                    say[n++] = (bound_say_t){0x3A80, c, true};
+                    stranger_only = false;
+                    two_trusted_in_a_class = true;
+                    break;
+                default:  /* a friend and a stranger */
+                    say[n++] = (bound_say_t){0x3A7F, c, true};
+                    say[n++] = (bound_say_t){0x4001, c, false};
+                    stranger_only = false;
+                    break;
+                }
+            } else if (set == 7 * SETS_PER_CLASS) {
+                for (int k = 0; k < 7; k++) {
+                    say[n++] = (bound_say_t){(uint16_t)(0x4020 + k), eligible[k], false};
+                }
+            } else {
+                for (int k = 0; k < 7; k++) {
+                    say[n++] = (bound_say_t){(uint16_t)(0x3A00 + k), eligible[k], true};
+                }
+                stranger_only = false;
+            }
+
+            observore_peer_weight_t r;
+            bound_weigh(say, n, mask, 0, (uint16_t)base, &r);
+            scenes++;
+            unsigned score = base + r.total;
+            observore_level_t lvl = level_of_score(score);
+            observore_level_t base_lvl = level_of_score(base);
+            bool bad = false;
+
+            if (score < base) { v_score++; bad = true; }
+            if (stranger_only && lvl != base_lvl) { v_level++; bad = true; }
+            if (r.total > OBSERVORE_PEER_TOTAL_CAP) { v_total++; bad = true; }
+            if (r.stranger > OBSERVORE_PEER_STRANGER_CAP) { v_stranger++; bad = true; }
+            if (!two_trusted_in_a_class &&
+                lvl > (base_lvl > OBSERVORE_LEVEL_CAUTION ? base_lvl
+                                                          : OBSERVORE_LEVEL_CAUTION)) {
+                v_caution++;
+                bad = true;
+            }
+            if (r.stranger > largest_stranger) {
+                largest_stranger = r.stranger;
+            }
+            if (bad && !printed_first) {
+                printed_first = true;
+                printf("first failing scene: mix %u set %d base %u mask %x -> "
+                       "total %u trusted %u stranger %u\n",
+                       mix, set, base, (unsigned)mask, r.total, r.trusted,
+                       r.stranger);
+            }
+        }
+    }
+    CHECK(v_score == 0, "sweep: a warning lowered a score in %lu scenes", v_score);
+    CHECK(v_level == 0, "sweep: strangers changed the level in %lu scenes", v_level);
+    CHECK(v_total == 0, "sweep: peers added more than %d in %lu scenes",
+          OBSERVORE_PEER_TOTAL_CAP, v_total);
+    CHECK(v_stranger == 0, "sweep: strangers added more than %d in %lu scenes",
+          OBSERVORE_PEER_STRANGER_CAP, v_stranger);
+    CHECK(v_caution == 0,
+          "sweep: a set with no class holding two friends went past caution "
+          "in %lu scenes", v_caution);
+    CHECK(largest_stranger == 1,
+          "the largest stranger total is %u, and the docs say 1: a second "
+          "counted class already puts the board at alert, so a weight change "
+          "that breaks this needs docs/mesh.md updated", largest_stranger);
+    printf("sweep: %lu scenes, largest stranger total %u\n", scenes,
+           largest_stranger);
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_peer_init();
+}
+
 static void test_bcd(void)
 {
     banner("the clock chip speaks BCD and nothing else here does");
@@ -6995,6 +7477,7 @@ int main(void)
     test_a_flood_of_strangers_is_one_voice();
     test_a_stranger_cannot_push_a_friend_out();
     test_no_warning_lowers_a_score();
+    test_every_scene_stays_bounded();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();
