@@ -2867,16 +2867,146 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
           "and is not mistaken for one of ours: '%s'", pev.detail);
 
     /* The asymmetry, asserted rather than assumed. Nothing in this module
-     * can quiet anything: there is no suppression path, and a warning
-     * contributes nothing to the score. A stranger can raise attention and
-     * can never cause silence -- which is what makes an open mesh survivable,
-     * because a Sybil flood produces noise rather than blindness. */
+     * can quiet anything: there is no suppression path. A stranger can raise
+     * attention and can never cause silence -- which is what makes an open
+     * mesh survivable, because a Sybil flood produces noise rather than
+     * blindness. Here nothing is seen locally, and a stranger's warning only
+     * ever adds to a class this node already counts, so it adds nothing. */
     observore_track_init();
     observore_monitors_init();
     observore_status_t st;
     observore_track_status(&st, SECS(26));
     CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR,
-          "warnings heard from strangers do not move the score, got %u", st.score);
+          "strangers' warnings about things not seen here add nothing, got %u",
+          st.score);
+
+    /* The warnings above are still standing; clear them so they cannot add a
+     * point to a bodycam or drone scored by a later test. */
+    observore_peer_init();
+}
+
+/* A warning the way the table sees it: built to wire bytes and read back, so
+ * every scene starts where a neighbour's advert would. `trusted` is set after
+ * parsing, which is exactly what the receive path does once the household tag
+ * verifies; the key module is not host-built. */
+static bool peer_say(uint16_t node, observore_class_t cls, uint16_t seq,
+                     uint16_t age_s, bool trusted, int64_t now_us)
+{
+    observore_peer_warning_t src;
+    memset(&src, 0, sizeof(src));
+    src.node = node;
+    src.cls = (uint8_t)cls;
+    src.seq = seq;
+    src.age_s = age_s;
+    uint8_t buf[32];
+    size_t len = observore_peer_build(&src, buf, sizeof(buf));
+    observore_peer_warning_t w;
+    if (len == 0 || !observore_peer_parse(buf, len, &w)) {
+        return false;
+    }
+    w.trusted = trusted;
+    return observore_peer_note(&w, now_us);
+}
+
+static void peer_scene_reset(void)
+{
+    observore_track_init();
+    observore_monitors_init();
+    observore_peer_init();
+}
+
+/* A Flipper Zero in range: hunter gear, worth caution on its own. */
+static void see_flipper(int64_t now_us)
+{
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x01, 0x02};
+    const uint8_t mac[6] = {0x0C, 0xFA, 0x22, 0x01, 0x02, 0x03};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = sizeof(flip)};
+    CHECK(observore_track_observe(&o, now_us), "the Flipper is seen");
+}
+
+static void test_a_trusted_warning_raises_the_score(void)
+{
+    banner("a trusted warning raises the score");
+
+    observore_status_t st;
+    observore_event_t list[4];
+
+    /* S2: nothing local, one friend says bodycam. Caution, not alert, and the
+     * warning is not a sighting: no device appears. */
+    peer_scene_reset();
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10)),
+          "a trusted warning is kept");
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 3 && st.level == OBSERVORE_LEVEL_CAUTION,
+          "one friend about a bodycam is caution, got %u", st.score);
+    CHECK(st.peer_points == 3 && st.peer_trusted_points == 3 &&
+              st.peer_stranger_points == 0,
+          "and says where it came from: %u/%u/%u", st.peer_points,
+          st.peer_trusted_points, st.peer_stranger_points);
+    CHECK(st.device_count == 0, "a warning never creates a device, got %u",
+          st.device_count);
+    CHECK(observore_track_snapshot(list, 4) == 0, "and lists nothing");
+
+    /* S3: a second distinct friend agrees. Alert, and no more after that. */
+    CHECK(peer_say(0x3A80, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(12)),
+          "a second friend is kept");
+    observore_track_status(&st, SECS(13));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "two friends about a bodycam is alert, got %u", st.score);
+    CHECK(peer_say(0x3A81, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(14)),
+          "a third friend is kept");
+    observore_track_status(&st, SECS(15));
+    CHECK(st.score == 6 && st.peer_points == 6,
+          "and a third adds nothing, got %u (%u from peers)", st.score,
+          st.peer_points);
+
+    /* S3b (a class stops at its own weight): two friends about a hunter, with
+     * nothing here, reach caution and not alert. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    peer_say(0x3A80, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 3 && st.level == OBSERVORE_LEVEL_CAUTION &&
+              st.peer_trusted_points == 3,
+          "two friends about a hunter stop at its weight, got %u", st.score);
+
+    /* S10: a Flipper here (3). One friend confirming it is caution, not
+     * alert; a second distinct friend makes it alert. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    observore_track_status(&st, SECS(6));
+    CHECK(st.score == 3 && st.level == OBSERVORE_LEVEL_CAUTION,
+          "a Flipper alone is caution, got %u", st.score);
+    peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 5 && st.level == OBSERVORE_LEVEL_CAUTION &&
+              st.peer_trusted_points == 2,
+          "one friend confirming it stays below alert, got %u (+%u)", st.score,
+          st.peer_trusted_points);
+    peer_say(0x3A80, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(12));
+    observore_track_status(&st, SECS(13));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "a second friend makes it alert, got %u", st.score);
+
+    /* S1: a stranger about a class this node counts adds one point, and a
+     * lone Flipper goes from 3 to 4: still caution. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x4433, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 4 && st.level == OBSERVORE_LEVEL_CAUTION &&
+              st.peer_stranger_points == 1 && st.peer_trusted_points == 0,
+          "a stranger adds one to what is seen here, got %u", st.score);
+
+    /* S9: the same stranger about a class nothing here counts adds nothing. */
+    peer_scene_reset();
+    peer_say(0x4433, OBSERVORE_CLASS_BODYCAM, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR && st.peer_points == 0,
+          "a stranger cannot put a class on the board alone, got %u", st.score);
+
+    peer_scene_reset();
 }
 
 static void test_bcd(void)
@@ -6257,6 +6387,7 @@ int main(void)
     test_a_digest_admits_what_it_is_not_looking_for();
     test_a_drone_says_where_it_is_and_where_its_pilot_is();
     test_a_warning_from_a_stranger_can_raise_but_never_quiet();
+    test_a_trusted_warning_raises_the_score();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

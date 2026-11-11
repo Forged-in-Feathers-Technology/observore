@@ -370,3 +370,275 @@ size_t observore_peer_advert(const observore_peer_warning_t *w,
 {
     return observore_peer_advert_tagged(w, NULL, out, cap);
 }
+
+const char *observore_peer_why_name(observore_peer_why_t why)
+{
+    switch (why) {
+    case OBSERVORE_PEER_WHY_COUNTED:          return "counted";
+    case OBSERVORE_PEER_WHY_STALE:            return "stale";
+    case OBSERVORE_PEER_WHY_CLASS_NOT_SCORED: return "class not scored";
+    case OBSERVORE_PEER_WHY_MONITOR_OFF:      return "monitor off here";
+    case OBSERVORE_PEER_WHY_NOT_SEEN_HERE:    return "not seen here";
+    case OBSERVORE_PEER_WHY_FOLDED:           return "folded";
+    case OBSERVORE_PEER_WHY_LIMITED:          return "limited";
+    }
+    return "?";
+}
+
+/* Whether a warning about this class may add points at all.
+ *
+ * The line is the caution weight: a class that this node itself scores below
+ * caution (a camera, fleet telematics, an accessory) is reported and barely
+ * scored on purpose, and a neighbour's report of it must not out-weigh that.
+ * Followers are unidentified by definition and capped for that reason, so the
+ * mesh cannot be a way round the cap. Tailing is a fact about the sender's
+ * own journey between places, which is not this node's journey, and it was
+ * rebuilt three times to stop it alerting falsely; it stays advisory.
+ *
+ * A class added later defaults to ineligible unless it is weighted at caution
+ * or more, which is the safe direction. Private on purpose: the only caller
+ * is the rule below, and the eligible set is pinned through that rule. */
+static bool peer_eligible(observore_class_t c)
+{
+    return (unsigned)c < OBSERVORE_CLASS_MAX &&
+           observore_class_points(c) >= OBSERVORE_SCORE_CAUTION &&
+           c != OBSERVORE_CLASS_FOLLOWER && c != OBSERVORE_CLASS_TAILING;
+}
+
+static unsigned umin(unsigned a, unsigned b)
+{
+    return a < b ? a : b;
+}
+
+/* Room left under the alert line for evidence that must not escalate by
+ * itself: a lone trusted voice, or any stranger. Zero once the number is
+ * already at the top of caution or above. */
+static unsigned alert_room(uint32_t running)
+{
+    return running < (uint32_t)(OBSERVORE_SCORE_ALERT - 1)
+               ? (unsigned)(OBSERVORE_SCORE_ALERT - 1) - (unsigned)running
+               : 0;
+}
+
+/* Hand `alloc` points to the trusted senders of one class, lowest node id
+ * first, each at most OBSERVORE_PEER_TRUSTED_POINTS. Lowest first so the same
+ * set of warnings gives the same shares whichever order the table holds them
+ * in. A sender that received its whole value is COUNTED; the rest stay
+ * LIMITED, with whatever they got. */
+static void credit_trusted(const observore_peer_warning_t *w, size_t n,
+                           observore_peer_weight_t *out, const bool *cand,
+                           unsigned cls, unsigned alloc, unsigned full)
+{
+    bool done[OBSERVORE_PEER_MAX] = {false};
+    unsigned left = alloc;
+    for (;;) {
+        int pick = -1;
+        for (size_t i = 0; i < n; i++) {
+            if (!cand[i] || done[i] || !w[i].trusted || w[i].cls != cls) {
+                continue;
+            }
+            if (pick < 0 || w[i].node < w[pick].node) {
+                pick = (int)i;
+            }
+        }
+        if (pick < 0) {
+            return;
+        }
+        done[pick] = true;
+        unsigned give = umin(OBSERVORE_PEER_TRUSTED_POINTS, left);
+        left -= give;
+        out->share[pick].points = (uint8_t)give;
+        if (give == full) {
+            out->share[pick].why = OBSERVORE_PEER_WHY_COUNTED;
+        }
+    }
+}
+
+void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
+                          uint32_t counting_mask, uint32_t monitors_off_mask,
+                          uint16_t base_score, int64_t now_us,
+                          observore_peer_weight_t *out)
+{
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (!w) {
+        nw = 0;
+    }
+    size_t n = nw < OBSERVORE_PEER_MAX ? nw : OBSERVORE_PEER_MAX;
+    out->n = (uint8_t)n;
+
+    bool cand[OBSERVORE_PEER_MAX] = {false};
+    unsigned nt[OBSERVORE_CLASS_MAX] = {0};     /* trusted candidates      */
+    unsigned ns[OBSERVORE_CLASS_MAX] = {0};     /* stranger candidates     */
+    int rep[OBSERVORE_CLASS_MAX];               /* the one stranger voice  */
+    unsigned spent[OBSERVORE_CLASS_MAX] = {0};  /* points given per class  */
+    for (size_t c = 0; c < OBSERVORE_CLASS_MAX; c++) {
+        rep[c] = -1;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        observore_peer_share_t *s = &out->share[i];
+        int64_t elapsed_us = now_us - w[i].heard_us;
+        if (elapsed_us < 0) {
+            elapsed_us = 0;
+        }
+        int64_t eff_s = (int64_t)w[i].age_s + elapsed_us / 1000000;
+
+        s->node = w[i].node;
+        s->cls = w[i].cls;
+        s->trusted = w[i].trusted;
+        s->seen_here = w[i].cls < OBSERVORE_CLASS_MAX &&
+                       ((counting_mask >> w[i].cls) & 1u);
+        s->voices = 1;
+        s->age_s = (uint16_t)(eff_s > 65535 ? 65535 : eff_s);
+
+        /* A cut-off and never a decay: the share is the full value until the
+         * hold ends. Compared in microseconds so nothing rounds. */
+        bool fresh = w[i].age_s < OBSERVORE_PEER_STALE_AGE_S &&
+                     elapsed_us + (int64_t)w[i].age_s * 1000000 <
+                         (int64_t)OBSERVORE_PEER_TTL_S * 1000000;
+        if (!fresh) {
+            s->why = OBSERVORE_PEER_WHY_STALE;
+        } else if (!peer_eligible((observore_class_t)w[i].cls)) {
+            s->why = OBSERVORE_PEER_WHY_CLASS_NOT_SCORED;
+        } else if ((monitors_off_mask >> w[i].cls) & 1u) {
+            /* A monitor switched off here stays off through the mesh. The
+             * owner said stop reporting this class, and
+             * observore_monitors.h promises that no automatic source, a mesh
+             * peer included, overrides that -- so even a friend's warning
+             * adds nothing, and is still listed so the silence is visible. */
+            s->why = OBSERVORE_PEER_WHY_MONITOR_OFF;
+        } else if (!w[i].trusted && !s->seen_here) {
+            /* A stranger can add weight to what this node already sees and
+             * can never put a class on the board alone. */
+            s->why = OBSERVORE_PEER_WHY_NOT_SEEN_HERE;
+        } else {
+            cand[i] = true;
+            s->why = OBSERVORE_PEER_WHY_LIMITED;
+            if (w[i].trusted) {
+                nt[w[i].cls]++;
+            } else {
+                ns[w[i].cls]++;
+                /* Strangers fold to one voice per class: the lowest node id,
+                 * the lowest index on a tie, so the same warnings pick the
+                 * same node whichever order they arrived in. */
+                if (rep[w[i].cls] < 0 ||
+                    w[i].node < w[rep[w[i].cls]].node) {
+                    rep[w[i].cls] = (int)i;
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (cand[i] && !w[i].trusted) {
+            if ((int)i == rep[w[i].cls]) {
+                out->share[i].voices = (uint8_t)ns[w[i].cls];
+            } else {
+                out->share[i].why = OBSERVORE_PEER_WHY_FOLDED;
+            }
+        }
+    }
+
+    /* The order every pass spends the shared budgets in: heaviest class
+     * first, then class id. Derived from the one class table. */
+    uint8_t order[OBSERVORE_CLASS_MAX];
+    size_t no = 0;
+    for (int wt = OBSERVORE_PEER_CLASS_CAP; wt >= OBSERVORE_SCORE_CAUTION; wt--) {
+        for (size_t c = 0; c < OBSERVORE_CLASS_MAX; c++) {
+            if (peer_eligible((observore_class_t)c) &&
+                umin(observore_class_points((observore_class_t)c),
+                     OBSERVORE_PEER_CLASS_CAP) == (unsigned)wt) {
+                order[no++] = (uint8_t)c;
+            }
+        }
+    }
+
+    uint32_t running = base_score;
+    unsigned remaining = OBSERVORE_PEER_TOTAL_CAP;
+    unsigned stranger_left = OBSERVORE_PEER_STRANGER_CAP;
+
+    /* Pass 1: trusted voices that are allowed to reach alert -- two or more
+     * friends agreeing, or one friend confirming a class that alerts on its
+     * own here. Never more than the class is worth (cap_c). */
+    for (size_t k = 0; k < no; k++) {
+        unsigned c = order[k];
+        unsigned cap_c = umin(OBSERVORE_PEER_CLASS_CAP,
+                              observore_class_points((observore_class_t)c));
+        bool seen = (counting_mask >> c) & 1u;
+        if (nt[c] == 0 ||
+            !(nt[c] >= 2 || (seen && cap_c >= OBSERVORE_SCORE_ALERT))) {
+            continue;
+        }
+        unsigned alloc = umin(umin(nt[c] * OBSERVORE_PEER_TRUSTED_POINTS, cap_c),
+                              remaining);
+        credit_trusted(w, n, out, cand, c, alloc,
+                       umin(OBSERVORE_PEER_TRUSTED_POINTS, cap_c));
+        running += alloc;
+        remaining -= alloc;
+        spent[c] += alloc;
+    }
+
+    /* Pass 2: one trusted voice that must stay below alert -- about a class
+     * this node does not see, or confirming one that is worth less than alert
+     * by itself. It can lift the board to caution and no further. */
+    for (size_t k = 0; k < no; k++) {
+        unsigned c = order[k];
+        unsigned cap_c = umin(OBSERVORE_PEER_CLASS_CAP,
+                              observore_class_points((observore_class_t)c));
+        bool seen = (counting_mask >> c) & 1u;
+        if (nt[c] != 1 || (seen && cap_c >= OBSERVORE_SCORE_ALERT)) {
+            continue;
+        }
+        unsigned alloc = umin(umin(OBSERVORE_PEER_TRUSTED_POINTS, cap_c),
+                              umin(remaining, alert_room(running)));
+        credit_trusted(w, n, out, cand, c, alloc,
+                       umin(OBSERVORE_PEER_TRUSTED_POINTS, cap_c));
+        running += alloc;
+        remaining -= alloc;
+        spent[c] += alloc;
+    }
+
+    /* Pass 3: strangers, one voice per class, under their own cap and the
+     * room below alert. They attach only to classes counted here, so this
+     * can move the number inside caution and cannot change the level. */
+    for (size_t k = 0; k < no; k++) {
+        unsigned c = order[k];
+        if (rep[c] < 0) {
+            continue;
+        }
+        unsigned cap_c = umin(OBSERVORE_PEER_CLASS_CAP,
+                              observore_class_points((observore_class_t)c));
+        unsigned alloc = umin(umin(OBSERVORE_PEER_STRANGER_POINTS,
+                                   cap_c - spent[c]),
+                              umin(umin(remaining, stranger_left),
+                                   alert_room(running)));
+        observore_peer_share_t *s = &out->share[rep[c]];
+        s->points = (uint8_t)alloc;
+        if (alloc == OBSERVORE_PEER_STRANGER_POINTS) {
+            s->why = OBSERVORE_PEER_WHY_COUNTED;
+        }
+        running += alloc;
+        remaining -= alloc;
+        stranger_left -= alloc;
+        spent[c] += alloc;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        out->total = (uint8_t)(out->total + out->share[i].points);
+        if (out->share[i].trusted) {
+            out->trusted = (uint8_t)(out->trusted + out->share[i].points);
+        } else {
+            out->stranger = (uint8_t)(out->stranger + out->share[i].points);
+        }
+    }
+}
+
+void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
+                              uint32_t monitors_off_mask, uint16_t base_score,
+                              observore_peer_weight_t *out)
+{
+    observore_peer_weigh(s_tab, s_count, counting_mask, monitors_off_mask,
+                         base_score, now_us, out);
+}

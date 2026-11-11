@@ -1,6 +1,7 @@
 #pragma once
 
 #include "observore_detect.h"
+#include "observore_peer.h"
 
 /* Sizing.
  *
@@ -161,6 +162,14 @@ _Static_assert(OBSERVORE_FOLLOWER_SCORE_CAP + OBSERVORE_SCORE_CAUTION <
                "unidentified devices must not be able to carry an identified "
                "one over the line into alert");
 
+/* The same invariant for the mesh: all strangers together, on top of the whole
+ * follower class, still fall short of an alert. The mix of local evidence a
+ * stranger lands on cannot be asserted here, so observore_peer_weigh() also
+ * clamps strangers to the room that is left under alert when it runs. */
+_Static_assert(OBSERVORE_FOLLOWER_SCORE_CAP + OBSERVORE_PEER_STRANGER_CAP <
+                   OBSERVORE_SCORE_ALERT,
+               "strangers plus followers stay out of alert");
+
 typedef struct {
     uint16_t      score;
     observore_level_t level;
@@ -185,6 +194,18 @@ typedef struct {
      * the fix both times was not a better rule but a visible one. */
     int           census_quieted;
     int           census_dampened;
+    /* How much other nodes' warnings added to `score`, and from whom.
+     *
+     * Carried in the status for the same reason `monitors_off` and
+     * `census_quieted` are: a verdict that another node has added to must be
+     * able to say so, or a score that is high for a reason nobody can find in
+     * the device list reads as a fault. `peer_points` is the whole addition,
+     * split into what trusted nodes and what strangers contributed. Per-sender
+     * detail is deliberately not in this struct, which lives on small task
+     * stacks; observore_peer_weigh_now() has it. */
+    uint8_t       peer_points;
+    uint8_t       peer_trusted_points;
+    uint8_t       peer_stranger_points;
 } observore_status_t;
 
 void observore_track_init(void);

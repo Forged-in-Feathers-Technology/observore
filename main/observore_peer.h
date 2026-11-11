@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "observore_detect.h"
+
 /* Warnings from other Observore nodes.
  *
  * This half only listens (#132). The device already scans BLE continuously,
@@ -123,6 +125,75 @@
  * within half the space ahead counts as newer. The alternative, a plain
  * greater-than, silences a node permanently the first time it wraps. */
 #define OBSERVORE_PEER_SEQ_WINDOW 32767
+
+/* What a warning is worth to the score.
+ *
+ * The score is a sum over what is in front of the device, and a neighbour's
+ * warning is not a sighting here: it names a class, not a device, and nothing
+ * on this node saw it. So peer points are a second, separate term added after
+ * the local sum, never a row in the device table, and they are bounded in
+ * every direction by the numbers below. Because they are only ever added, no
+ * warning can lower a score.
+ *
+ * Trusted is 3 and there is no freedom in the number. One friend must reach
+ * caution (at least 3), must not reach alert on their own (below 6), and two
+ * agreeing friends must (twice the value at least 6): only 3 does all three,
+ * and the asserts below fail the build if anything is retuned out of that
+ * corner. A single trusted node is a household node that may be lost or
+ * misbehaving; two that agree are a household that is telling you something.
+ *
+ * Strangers are 1, capped at 2 across every class. An address on the air costs
+ * nothing to invent, so all strangers about one class are treated as a single
+ * voice worth one point however many ids appear, and all classes together are
+ * worth two. Three plus two is still below alert, which is the same shape as
+ * OBSERVORE_FOLLOWER_SCORE_CAP: a stranger may draw attention and may not
+ * escalate. A stranger only attaches to a class this node already counts, and
+ * only classes worth caution or more are eligible, so the local base is at
+ * least 3 whenever a stranger adds anything: the number moves inside caution
+ * and the level cannot change. What the asserts cannot cover is the mix of
+ * local evidence a stranger lands on (a tracker and a fleet device are already
+ * 5), so the rule also clamps strangers to whatever room is left under alert
+ * when it runs.
+ *
+ * A class is worth at most its own local weight to peers (and never more than
+ * the class cap): a friend's warning stands in for one sighting, not for a
+ * crowd of them. Two friends warning about a tracker that this node cannot
+ * see reach caution, not alert; only the classes that alert locally can
+ * alert from peers alone. The total cap says peers together are worth at most
+ * one alert, so many classes from many nodes cannot inflate the number.
+ *
+ * A warning counts for the rest of its hold and then vanishes: there is no
+ * fading, because the score has no accumulator to bleed. The hold is the table
+ * lifetime less the age the sender put in the warning, and an age of 255 is
+ * what a sender clamps to when it has been re-announcing something for a long
+ * time, so it counts for nothing. */
+#define OBSERVORE_PEER_TRUSTED_POINTS  3
+#define OBSERVORE_PEER_STRANGER_POINTS 1
+#define OBSERVORE_PEER_STRANGER_CAP    2
+#define OBSERVORE_PEER_CLASS_CAP       6
+#define OBSERVORE_PEER_TOTAL_CAP       6
+#define OBSERVORE_PEER_STALE_AGE_S   255
+
+_Static_assert(OBSERVORE_PEER_TRUSTED_POINTS >= OBSERVORE_SCORE_CAUTION,
+               "one trusted node must be able to lift the board to caution");
+_Static_assert(OBSERVORE_PEER_TRUSTED_POINTS < OBSERVORE_SCORE_ALERT,
+               "one trusted node must not be able to alert on its own");
+_Static_assert(2 * OBSERVORE_PEER_TRUSTED_POINTS >= OBSERVORE_SCORE_ALERT,
+               "two agreeing trusted nodes must be able to alert");
+_Static_assert(OBSERVORE_SCORE_CAUTION + OBSERVORE_PEER_STRANGER_CAP <
+                   OBSERVORE_SCORE_ALERT,
+               "strangers must not be able to carry a capability class into "
+               "alert");
+_Static_assert(OBSERVORE_PEER_STRANGER_POINTS <= OBSERVORE_PEER_STRANGER_CAP,
+               "one stranger must fit under the stranger cap");
+_Static_assert(OBSERVORE_PEER_TOTAL_CAP == OBSERVORE_SCORE_ALERT,
+               "peers together are worth at most one alert");
+_Static_assert(OBSERVORE_PEER_CLASS_CAP <= OBSERVORE_PEER_TOTAL_CAP,
+               "one class must not outweigh all peers together");
+_Static_assert(OBSERVORE_PEER_STALE_AGE_S < OBSERVORE_PEER_TTL_S,
+               "a stale-on-arrival age must fall inside the table lifetime");
+_Static_assert(OBSERVORE_CLASS_MAX <= 32,
+               "the counting and monitor masks hold one bit per class");
 
 typedef struct {
     uint16_t node;       /* who said it */
@@ -289,3 +360,60 @@ int observore_peer_trusted(int64_t now_us);
 /* How many distinct nodes have warned recently, and how many warnings stand.
  * Either pointer may be NULL. */
 void observore_peer_counts(int64_t now_us, int *nodes, int *warnings);
+
+/* Why a warning did or did not add points. COUNTED means it received the full
+ * value its sender is worth; LIMITED means a cap or the room under alert cut
+ * it, down to nothing if need be. FOLDED is a stranger beyond the one voice a
+ * class allows. MONITOR_OFF is a warning about a class whose monitor is
+ * switched off on this node: it stays off through the mesh, so even a friend's
+ * warning adds nothing, and it is still listed so that the silence is visible.
+ * Spelled out here because every surface prints these words. */
+typedef enum {
+    OBSERVORE_PEER_WHY_COUNTED = 0,
+    OBSERVORE_PEER_WHY_STALE,
+    OBSERVORE_PEER_WHY_CLASS_NOT_SCORED,
+    OBSERVORE_PEER_WHY_MONITOR_OFF,
+    OBSERVORE_PEER_WHY_NOT_SEEN_HERE,
+    OBSERVORE_PEER_WHY_FOLDED,
+    OBSERVORE_PEER_WHY_LIMITED,
+} observore_peer_why_t;
+
+/* One warning's part in the score. */
+typedef struct {
+    uint16_t node;
+    uint8_t  cls;
+    bool     trusted;
+    bool     seen_here;    /* a device of this class is counting here now   */
+    uint8_t  voices;       /* stranger representative: warnings folded in   */
+    uint8_t  points;       /* what this warning actually added              */
+    uint8_t  why;          /* an observore_peer_why_t                       */
+    uint16_t age_s;        /* wire age plus whole seconds since heard       */
+} observore_peer_share_t;
+
+typedef struct {
+    uint8_t total, trusted, stranger, n;
+    observore_peer_share_t share[OBSERVORE_PEER_MAX];
+} observore_peer_weight_t;
+
+/* The words the surfaces print for a reason: "counted", "stale",
+ * "class not scored", "monitor off here", "not seen here", "folded",
+ * "limited", and "?" for anything out of range. */
+const char *observore_peer_why_name(observore_peer_why_t why);
+
+/* What a set of warnings adds to a score. Pure: it reads nothing but its
+ * arguments and the class table, and it only ever adds.
+ *
+ * `counting_mask` has bit c set when a device of class c is counting in the
+ * local sum right now; `monitors_off_mask` has bit c set when that monitor is
+ * switched off; `base_score` is the local sum the points are added to.
+ * share[i] describes w[i] for i below out->n, where n is min(nw,
+ * OBSERVORE_PEER_MAX). */
+void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
+                          uint32_t counting_mask, uint32_t monitors_off_mask,
+                          uint16_t base_score, int64_t now_us,
+                          observore_peer_weight_t *out);
+
+/* The same over the live table, without copying it onto the caller's stack. */
+void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
+                              uint32_t monitors_off_mask, uint16_t base_score,
+                              observore_peer_weight_t *out);
