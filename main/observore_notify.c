@@ -515,12 +515,34 @@ void observore_notify_pump(void)
      * than from the monitors alone. The census decides what is furniture in
      * the same pass that computes the score, so the number of devices it
      * quieted this time round exists nowhere else. */
+    int64_t now = esp_timer_get_time();
     observore_status_t st;
-    observore_track_status(&st, esp_timer_get_time());
+    observore_track_status(&st, now);
+
+    /* What other nodes added, from one snapshot so a note never carries
+     * stranger points without the nodes behind them. Static, not on the
+     * stack: this runs on the main task, which has little to spare, and
+     * observore_status_t deliberately carries no per-sender detail. Each
+     * stranger voice that counts adds at least one point and all strangers
+     * stop at the stranger cap, so the note has a slot for every one. */
+    static observore_peer_weight_t s_note_pw;
+    _Static_assert(OBSERVORE_PEER_STRANGER_CAP <= OBSERVORE_DIGEST_STRANGER_NODES,
+                   "every stranger voice that counts has a slot in the note");
+    observore_track_peer_weight(&s_note_pw, now);
     observore_digest_notes_t notes = {
-        .monitors_off   = st.monitors_off,
-        .census_quieted = st.census_quieted,
+        .monitors_off         = st.monitors_off,
+        .census_quieted       = st.census_quieted,
+        .peer_trusted_points  = s_note_pw.trusted,
+        .peer_stranger_points = s_note_pw.stranger,
     };
+    for (size_t i = 0; i < s_note_pw.n && i < OBSERVORE_PEER_MAX &&
+                       notes.peer_stranger_nodes < OBSERVORE_DIGEST_STRANGER_NODES;
+         i++) {
+        if (!s_note_pw.share[i].trusted && s_note_pw.share[i].points > 0) {
+            notes.peer_stranger_node[notes.peer_stranger_nodes++] =
+                s_note_pw.share[i].node;
+        }
+    }
 
     if (count == 0 && headline[0] == '\0') {
         /* Nothing detected, but a release appeared. Worth one message: a device
@@ -539,7 +561,7 @@ void observore_notify_pump(void)
          * being suppressed has to be added here too: a level change reported
          * by a device that is not looking for everything, or that is holding
          * things back as furniture, must say so. */
-        char note[64];
+        static char note[OBSERVORE_DIGEST_NOTE_LEN];
         if (observore_digest_note(&notes, note, sizeof(note)) > 0) {
             snprintf(body, sizeof(body),
                      "Threat level is now %s, score %u. %s",

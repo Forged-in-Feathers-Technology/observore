@@ -83,6 +83,8 @@
 #include "observore_wifi.h"
 #include "observore_ble.h"
 #include "observore_census.h"
+#include "observore_peer.h"
+#include "observore_track.h"
 #include "observore_touchcal.h"
 #include "observore_touch.h"
 #include "observore_rotary.h"
@@ -568,6 +570,10 @@ static observore_status_t s_snap_st;
 static observore_event_t  s_snap_top[SNAP_MAX];
 static size_t             s_snap_n;
 static int64_t            s_snap_now_us;
+/* What other nodes' warnings added to the score, as of the same moment. A
+ * static, not a local: the drawing task has about a kilobyte of stack to
+ * spare and this is nearly a hundred bytes. */
+static observore_peer_weight_t s_snap_peer;
 static bool               s_have_snap;
 static bool               s_dirty;
 
@@ -1544,6 +1550,72 @@ static const char *ago(int64_t us, char *buf, size_t len)
     return buf;
 }
 
+/* Which of the snapshot's peer shares get a row on the watch page, in the
+ * order they are drawn: a trusted warning about something not seen here first,
+ * because nothing else on the glass would show it, then a trusted one about
+ * something that is here, then the stranger voice, then a trusted warning that
+ * added nothing because its monitor is switched off here. Within each group
+ * the larger contribution comes first, and equal ones keep the table's order.
+ * Returns how many rows, at most OBSERVORE_PEER_MAX.
+ *
+ * Warnings that added nothing and are not that last kind get no row: a
+ * stranger's folded duplicates, a class that does not score, a stale report.
+ * The console lists them all; the glass has fifteen rows. */
+static size_t peer_row_order(uint8_t *order)
+{
+    const observore_peer_weight_t *pw = &s_snap_peer;
+    uint8_t group[OBSERVORE_PEER_MAX];
+    size_t m = 0;
+    for (size_t i = 0; i < pw->n && i < OBSERVORE_PEER_MAX; i++) {
+        const observore_peer_share_t *sh = &pw->share[i];
+        uint8_t g;
+        if (sh->points > 0) {
+            g = sh->trusted ? (sh->seen_here ? 1 : 0) : 2;
+        } else if (sh->trusted &&
+                   sh->why == OBSERVORE_PEER_WHY_MONITOR_OFF) {
+            g = 3;
+        } else {
+            continue;
+        }
+        size_t at = m++;
+        while (at > 0 &&
+               (group[at - 1] > g ||
+                (group[at - 1] == g &&
+                 pw->share[order[at - 1]].points < sh->points))) {
+            order[at] = order[at - 1];
+            group[at] = group[at - 1];
+            at--;
+        }
+        order[at] = (uint8_t)i;
+        group[at] = g;
+    }
+    return m;
+}
+
+/* One peer row as text, at most 39 characters so that forty columns hold it.
+ * Peer rows have no address, which is why they never join the list of rows a
+ * tap can act on. */
+static void peer_row_text(const observore_peer_share_t *sh, char *text,
+                          size_t len)
+{
+    const char *cls = observore_class_name((observore_class_t)sh->cls);
+    if (sh->points == 0) {
+        snprintf(text, len, "%-8.8s node %04X trusted, monitor off", cls,
+                 (unsigned)sh->node);
+    } else if (sh->trusted) {
+        snprintf(text, len, "%-8.8s +%u node %04X trusted%s", cls,
+                 (unsigned)sh->points, (unsigned)sh->node,
+                 sh->seen_here ? "" : ", not here");
+    } else {
+        snprintf(text, len, "%-8.8s +%u node %04X stranger", cls,
+                 (unsigned)sh->points, (unsigned)sh->node);
+        if (sh->voices > 1) {
+            size_t at = strlen(text);
+            snprintf(text + at, len - at, ", %u nodes", (unsigned)sh->voices);
+        }
+    }
+}
+
 /* The watch page: what the device sees. Unchanged in substance from the
  * screen this board has had since it gained one. */
 static void draw_watch(const observore_status_t *st,
@@ -1618,7 +1690,14 @@ static void draw_watch(const observore_status_t *st,
          * the glyph and a following digit cannot share a literal. */
         BAR_ADD("   " OBSERVORE_GLYPH_MESH "%d", nodes);
     }
-    if (st->monitors_off == 0 && st->census_quieted == 0) {
+    /* A score that another node raised says so here, in the one place a
+     * person at the device cannot miss. A red band with nothing on the screen
+     * to explain it is a device its owner learns to stop believing. */
+    if (st->peer_points > 0) {
+        BAR_ADD("   +%u peer", (unsigned)st->peer_points);
+    }
+    if (st->monitors_off == 0 && st->census_quieted == 0 &&
+        st->peer_points == 0) {
         BAR_ADD("   %lu sightings", (unsigned long)st->total_sightings);
     }
 #undef BAR_ADD
@@ -1640,7 +1719,14 @@ static void draw_watch(const observore_status_t *st,
         s_row_finding[r] = -1;
     }
 #endif
-    for (size_t i = 0; i < n && row < last_row; i++, row++) {
+    /* Up to two rows are kept back for what other nodes said, so a crowd of
+     * local findings cannot push them off the glass. The same lesson as the
+     * tracker's ordering: a busy room must not hide the one report that
+     * explains the colour of the band. */
+    uint8_t peer_order[OBSERVORE_PEER_MAX];
+    const size_t peer_n = peer_row_order(peer_order);
+    const int findings_last = last_row - (peer_n < 2 ? (int)peer_n : 2);
+    for (size_t i = 0; i < n && row < findings_last; i++, row++) {
         char mac[OBSERVORE_MAC_STR_LEN];
         observore_mac_str(top[i].mac, mac);
         const char *who = top[i].detail[0] ? top[i].detail
@@ -1703,8 +1789,19 @@ static void draw_watch(const observore_status_t *st,
 #endif
         line(row, text, fg, C_BLACK);
     }
-    if (n == 0) {
+    if (n == 0 && peer_n == 0) {
         line(row++, "  nothing classified", C_GREY, C_BLACK);
+    } else if (n == 0) {
+        /* The band is not empty because of anything this node saw, and the
+         * rows below say whose word it is. */
+        line(row++, "  nothing seen here", C_GREY, C_BLACK);
+    }
+    /* Peer rows are never written to the list of rows a tap can act on:
+     * there is no address to ignore and no suppression path for a peer. */
+    for (size_t k = 0; k < peer_n && row < last_row; k++, row++) {
+        const observore_peer_share_t *sh = &s_snap_peer.share[peer_order[k]];
+        peer_row_text(sh, text, sizeof(text));
+        line(row, text, sh->points > 0 ? C_WHITE : C_GREY, C_BLACK);
     }
     for (; row < last_row; row++) {
         line(row, "", C_WHITE, C_BLACK);
@@ -2212,6 +2309,78 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         snprintf(text, sizeof(text), " mesh     listen only, never transmits");
     }
     line(r++, text, C_WHITE, C_BLACK);
+
+    /* What other nodes' warnings are adding to the score, and where it comes
+     * from. Said even when the answer is nothing, because a listen-only node
+     * that has heard no one and one that has heard everyone look the same
+     * until this line says which. */
+    {
+        int heard = 0;
+        observore_peer_counts(now_us, NULL, &heard);
+        if (heard == 0) {
+            line(r++, " peers    none heard", C_WHITE, C_BLACK);
+        } else {
+            snprintf(text, sizeof(text), " peers    +%u (%u trusted, %u stranger)",
+                     (unsigned)st->peer_points,
+                     (unsigned)st->peer_trusted_points,
+                     (unsigned)st->peer_stranger_points);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+
+        /* The detail lines only where the rows below them still fit. The
+         * shortest panel has fifteen rows and this page already uses them, and
+         * the console address and the update line matter more than a second
+         * peers line: five rows follow (census, addresses, heap, console,
+         * update) before the bar. On a taller panel everything is shown. */
+        const int below = 5;
+        const int limit = ROWS - BAR_LAST;
+        int off = 0;
+        uint16_t sn[OBSERVORE_PEER_MAX];
+        size_t nsn = 0;
+        for (size_t i = 0; i < s_snap_peer.n && i < OBSERVORE_PEER_MAX; i++) {
+            const observore_peer_share_t *sh = &s_snap_peer.share[i];
+            if (sh->why == OBSERVORE_PEER_WHY_MONITOR_OFF) {
+                off++;
+            }
+            if (!sh->trusted && sh->points > 0) {
+                /* Ascending, and once per node: two classes can share the
+                 * representative. */
+                size_t at = 0;
+                while (at < nsn && sn[at] < sh->node) {
+                    at++;
+                }
+                if (at < nsn && sn[at] == sh->node) {
+                    continue;
+                }
+                for (size_t k = nsn; k > at; k--) {
+                    sn[k] = sn[k - 1];
+                }
+                sn[at] = sh->node;
+                nsn++;
+            }
+        }
+        /* A warning about a class switched off here added nothing from
+         * anyone, and this is where the glass says so. */
+        if (off > 0 && r + below < limit) {
+            snprintf(text, sizeof(text), " peers    %u not counted, monitor off",
+                     (unsigned)off);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+        /* The watch page keeps two rows for peers and friends fill them
+         * first, so this is the line that always names the node behind a
+         * stranger's point. */
+        if (st->peer_stranger_points > 0 && nsn > 0 && r + below < limit) {
+            if (nsn >= 2) {
+                snprintf(text, sizeof(text),
+                         " peers    stranger nodes %04X and %04X",
+                         (unsigned)sn[0], (unsigned)sn[1]);
+            } else {
+                snprintf(text, sizeof(text), " peers    stranger node %04X",
+                         (unsigned)sn[0]);
+            }
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+    }
 
     /* The census, on the glass.
      *
@@ -3072,8 +3241,14 @@ void observore_display_render(const observore_status_t *st,
     if (n > SNAP_MAX) {
         n = SNAP_MAX;
     }
+    /* Worked out before the display lock is taken: it takes the tracker's
+     * lock and the peer table's, and neither may be taken while holding this
+     * one. Only the main loop calls here, so one static is enough. */
+    static observore_peer_weight_t pw;
+    observore_track_peer_weight(&pw, now_us);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_snap_st = *st;
+    s_snap_peer = pw;
     memcpy(s_snap_top, top, n * sizeof(s_snap_top[0]));
     s_snap_n = n;
     s_snap_now_us = now_us;

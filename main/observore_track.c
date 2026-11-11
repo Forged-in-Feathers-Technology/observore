@@ -4,6 +4,7 @@
 #include "observore_census.h"
 #include "observore_mute.h"
 #include "observore_monitors.h"
+#include "observore_peer.h"
 #include "observore_track.h"
 
 #ifdef OBSERVORE_HOST_TEST
@@ -501,43 +502,31 @@ static observore_census_verdict_t census_says(const observore_event_t *e)
     return observore_census_verdict(id, s_census_day, e->cls);
 }
 
-/* The score is what is in front of the device, not a history of it.
+/* The local half of the score: a sum over the devices counting right now.
  *
- * It used to accumulate: every device added its points again every two
- * minutes, against a decay of one point a minute in total. Anything worth two
- * points or more therefore outran the decay on its own, so the score climbed
- * to its ceiling and stayed -- ninety-nine meant "something persistent has
- * been here a while", never "how much is here". A number permanently at
- * maximum is not read, and a level permanently at alert is not believed.
+ * One definition of "counting" for the score and for everything that has to
+ * agree with it, in the same way census_says() is one definition of quieting.
+ * `counting_mask` gets bit c set for every class with a device that is
+ * classified, whose monitor is on and that the census has not quieted -- a
+ * dampened device still counts, at half weight, because fewer points is not
+ * the same as gone. `out` may be NULL to compute the sum and the mask alone,
+ * which writes no counters.
  *
- * So it is a sum over what is currently tracked, computed when asked. It rises
- * when something arrives and falls when it leaves; the table's own thirty
- * minute expiry is what makes it fall, and is slow enough that nothing
- * flickers. Nothing to decay, no per-device cooldown, no accumulator to pin.
- *
- * Sustained presence is not lost, it has simply moved to where it belongs: a
- * device does not become a follower until it has been there five minutes, and
- * surviving an address rotation is what distinguishes it afterwards. Duration
- * decides what something IS; the score says what is here. */
-void observore_track_status(observore_status_t *out, int64_t now_us)
+ * Called with the lock held. */
+static uint32_t local_sum(observore_status_t *out, uint32_t *counting_mask)
 {
-    if (!out) {
-        return;
-    }
-    (void)now_us;
-    memset(out, 0, sizeof(*out));
-    OBSERVORE_LOCK();
-    out->total_sightings = s_total_sightings;
-
     uint32_t score = 0;
     uint16_t presence = 0;
+    uint32_t mask = 0;
     for (size_t i = 0; i < OBSERVORE_MAX_DEVICES; i++) {
         if (!s_devices[i].in_use || !s_devices[i].classified) {
             continue;
         }
         const observore_event_t *e = &s_devices[i].ev;
-        out->device_count++;
-        out->class_counts[e->cls]++;
+        if (out) {
+            out->device_count++;
+            out->class_counts[e->cls]++;
+        }
 
         /* A monitor that has been switched off contributes no score.
          *
@@ -558,9 +547,12 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
          * different claims (#132). */
         observore_census_verdict_t cv = census_says(e);
         if (cv == OBSERVORE_CENSUS_QUIET) {
-            out->census_quieted++;
+            if (out) {
+                out->census_quieted++;
+            }
             continue;
         }
+        mask |= 1u << (unsigned)e->cls;
 
         uint16_t points = e->points;
         /* A follower that has not yet survived a rotation is worth presence
@@ -572,7 +564,9 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
             points = OBSERVORE_FOLLOWER_PRESENT_POINTS;
         }
         if (cv == OBSERVORE_CENSUS_DAMPEN) {
-            out->census_dampened++;
+            if (out) {
+                out->census_dampened++;
+            }
             points = observore_census_dampen(points);
         }
         if (e->cls == OBSERVORE_CLASS_FOLLOWER) {
@@ -590,10 +584,109 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
         }
         score += points;
     }
+    if (counting_mask) {
+        *counting_mask = mask;
+    }
+    return score;
+}
+
+/* The score is what is in front of the device, not a history of it.
+ *
+ * It used to accumulate: every device added its points again every two
+ * minutes, against a decay of one point a minute in total. Anything worth two
+ * points or more therefore outran the decay on its own, so the score climbed
+ * to its ceiling and stayed -- ninety-nine meant "something persistent has
+ * been here a while", never "how much is here". A number permanently at
+ * maximum is not read, and a level permanently at alert is not believed.
+ *
+ * So it is a sum over what is currently tracked, computed when asked. It rises
+ * when something arrives and falls when it leaves; the table's own thirty
+ * minute expiry is what makes it fall, and is slow enough that nothing
+ * flickers. Nothing to decay, no per-device cooldown, no accumulator to pin.
+ *
+ * Sustained presence is not lost, it has simply moved to where it belongs: a
+ * device does not become a follower until it has been there five minutes, and
+ * surviving an address rotation is what distinguishes it afterwards. Duration
+ * decides what something IS; the score says what is here.
+ *
+ * Other nodes' warnings are a second term, added after the local sum and
+ * bounded by observore_peer_weigh(). They are never devices here, so they
+ * cannot be aged out with one, counted as one or ignored as one, and because
+ * they are only ever added, nothing a peer sends can lower this number. */
+void observore_track_status(observore_status_t *out, int64_t now_us)
+{
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    OBSERVORE_LOCK();
+    out->total_sightings = s_total_sightings;
+
+    uint32_t counting = 0;
+    uint32_t sum = local_sum(out, &counting);
+    uint16_t base = (sum > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
+                                                : (uint16_t)sum;
+
+    /* Lock order is this lock, then the peer lock; nothing in the peer module
+     * calls back into the tracker. */
+    observore_peer_weight_t pw;
+    observore_peer_weigh_now(now_us, counting, observore_monitors_off_mask(),
+                             base, &pw);
+    uint32_t score = sum + pw.total;
     out->score = (score > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
                                                : (uint16_t)score;
     out->level = level_for(out->score);
+    out->peer_points = pw.total;
+    out->peer_trusted_points = pw.trusted;
+    out->peer_stranger_points = pw.stranger;
     out->monitors_off = observore_monitors_off_count();
+    OBSERVORE_UNLOCK();
+}
+
+/* What counts locally right now: the classes with a device that is classified,
+ * whose monitor is on and that the census has not quieted, and the local score
+ * those devices make before any warning is added.
+ *
+ * For the callers that must weigh a warning the way the score does without
+ * asking for the whole status: they get the one definition of counting, from
+ * the one walk of the table, rather than rebuilding it from a snapshot (which
+ * lists rows, not what counts). Either pointer may be NULL. Takes the track
+ * lock itself and writes nothing else. */
+void observore_track_local(uint32_t *counting_mask, uint16_t *base_score)
+{
+    OBSERVORE_LOCK();
+    uint32_t mask = 0;
+    uint32_t sum = local_sum(NULL, &mask);
+    OBSERVORE_UNLOCK();
+    if (counting_mask) {
+        *counting_mask = mask;
+    }
+    if (base_score) {
+        *base_score = (sum > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
+                                                  : (uint16_t)sum;
+    }
+}
+
+/* Every warning's share of the score, exactly as the score counted it.
+ *
+ * Runs the same local walk and hands observore_peer_weigh_now() the same
+ * arguments observore_track_status() does, so a share a surface lists and the
+ * points the score carries come from one definition of counting; the same
+ * argument census_says() makes for quieting. The shares are written straight
+ * into the caller's struct under the peer lock, never copied from the warning
+ * table onto this stack. Lock order is this lock, then the peer lock. */
+void observore_track_peer_weight(observore_peer_weight_t *out, int64_t now_us)
+{
+    if (!out) {
+        return;
+    }
+    OBSERVORE_LOCK();
+    uint32_t counting = 0;
+    uint32_t sum = local_sum(NULL, &counting);
+    uint16_t base = (sum > OBSERVORE_SCORE_MAX) ? OBSERVORE_SCORE_MAX
+                                                : (uint16_t)sum;
+    observore_peer_weigh_now(now_us, counting, observore_monitors_off_mask(),
+                             base, out);
     OBSERVORE_UNLOCK();
 }
 

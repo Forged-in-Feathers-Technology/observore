@@ -252,10 +252,62 @@ static observore_status_t publish(void)
     observore_track_status(&st, now);
     observore_led_set_level(st.level);
 
+    /* What the peers added, written down once. Static, not on the stack: the
+     * main task has little of it to spare (see mesh_warn()), and a weight is
+     * 84 bytes. Each share that starts counting is logged when it starts, the
+     * same once-per-change rule a detection follows, so a score that rose
+     * because another node spoke has the node, its trust and the class in
+     * the log next to the rise. */
+    static observore_peer_weight_t s_pw;
+    static uint8_t s_started[OBSERVORE_PEER_MAX];
+    static char s_peer_text[96];     /* longest counting text: 65 characters */
+    observore_track_peer_weight(&s_pw, now);
+    size_t started = observore_peer_events_update(&s_pw, now, s_started,
+                                                  OBSERVORE_PEER_MAX);
+    for (size_t i = 0; i < started; i++) {
+        observore_peer_share_text(&s_pw.share[s_started[i]], s_peer_text,
+                                  sizeof(s_peer_text));
+        ESP_LOGW(TAG, "peer report: %s", s_peer_text);
+        /* The card gets a friend's report and never a stranger's: a source
+         * anyone can broadcast must not be able to fill it. */
+        if (s_pw.share[s_started[i]].trusted) {
+            observore_sdlog_peer(&s_pw.share[s_started[i]], now);
+        }
+    }
+
     if (st.level != s_last_level) {
-        ESP_LOGW(TAG, "%s -> %s (score %u, %u devices)",
-                 observore_level_name(s_last_level), observore_level_name(st.level),
-                 st.score, st.device_count);
+        if (st.peer_points > 0) {
+            /* Every counting share, whole. Each counts for at least one point
+             * and peer points stop at OBSERVORE_PEER_TOTAL_CAP, so at most
+             * that many texts follow; one text plus its separator is at most
+             * 67 characters, so 72 apiece holds them all and no node is cut
+             * off the line. The join still clamps and never overruns. */
+            static char s_peer_line[OBSERVORE_PEER_TOTAL_CAP * 72];
+            size_t used = 0;
+            s_peer_line[0] = '\0';
+            for (size_t i = 0; i < s_pw.n && i < OBSERVORE_PEER_MAX; i++) {
+                if (s_pw.share[i].points == 0) {
+                    continue;
+                }
+                if (used && used + 2 < sizeof(s_peer_line)) {
+                    s_peer_line[used++] = ';';
+                    s_peer_line[used++] = ' ';
+                    s_peer_line[used] = '\0';
+                }
+                used += observore_peer_share_text(&s_pw.share[i],
+                                                  &s_peer_line[used],
+                                                  sizeof(s_peer_line) - used);
+            }
+            ESP_LOGW(TAG, "%s -> %s (score %u, %u devices, %u from peers: %s)",
+                     observore_level_name(s_last_level),
+                     observore_level_name(st.level), st.score,
+                     st.device_count, (unsigned)st.peer_points, s_peer_line);
+        } else {
+            ESP_LOGW(TAG, "%s -> %s (score %u, %u devices)",
+                     observore_level_name(s_last_level),
+                     observore_level_name(st.level), st.score,
+                     st.device_count);
+        }
         observore_notify_level(s_last_level, st.level, st.score);
         /* Sound only on the way up, and only if somebody turned it on. */
         observore_audio_level(s_last_level, st.level);

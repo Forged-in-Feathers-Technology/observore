@@ -617,12 +617,15 @@ static bool match_ble_signature(const observore_observation_t *obs, observore_ev
          * right answer -- what is new is that the finding says what the
          * neighbour was warning about rather than only that it exists.
          *
-         * Nothing here raises the score. A warning from a node this device
-         * cannot authenticate may draw attention and may never quiet
-         * anything: that asymmetry is what keeps an open mesh survivable,
-         * because a crowd of invented nodes can then produce noise rather
-         * than blindness. The class's own points are for the peer being
-         * present, exactly as for any other detector in range. */
+         * The classifier gives a meshing node zero points as a peer-detector,
+         * and the weight a warning carries is added in
+         * observore_track_status() under the rule in observore_peer.h. A
+         * warning from a node this device cannot authenticate may draw
+         * attention and may never quiet anything: that asymmetry is what
+         * keeps an open mesh survivable, because a crowd of invented nodes
+         * can then produce noise rather than blindness. The class's own
+         * points are for the peer being present, exactly as for any other
+         * detector in range. */
         observore_peer_warning_t warn;
         if (company == COMPANY_NONPRODUCTION &&
             observore_peer_parse(payload, payload_len, &warn)) {

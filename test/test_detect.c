@@ -2469,6 +2469,92 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                note, sizeof(note)) > 0 &&
               strcmp(note, "(1 quieted as household)") == 0,
           "one quieted device reads in the singular: %s", note);
+
+    /* What other nodes added leads the note: a push reading "caution" with
+     * nothing local in the findings has to say a friend raised it, and a
+     * stranger's point has to name the node it came from. */
+    char big[OBSERVORE_DIGEST_NOTE_LEN];
+    observore_digest_note(&(observore_digest_notes_t){.peer_trusted_points = 3},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(+3 from trusted peers)") == 0,
+          "trusted peer points are named: %s", big);
+    observore_digest_note(
+        &(observore_digest_notes_t){.peer_stranger_points = 1,
+                                    .peer_stranger_nodes = 1,
+                                    .peer_stranger_node = {0x3A7F}},
+        big, sizeof(big));
+    CHECK(strcmp(big, "(+1 from stranger node 3A7F)") == 0,
+          "a stranger's point names the node: %s", big);
+    observore_digest_note(
+        &(observore_digest_notes_t){.peer_stranger_points = 2,
+                                    .peer_stranger_nodes = 2,
+                                    .peer_stranger_node = {0x3A7F, 0x1B2C}},
+        big, sizeof(big));
+    CHECK(strcmp(big, "(+2 from stranger nodes 1B2C and 3A7F)") == 0,
+          "two stranger voices are named, ascending whatever the order: %s",
+          big);
+    observore_digest_note(
+        &(observore_digest_notes_t){.peer_trusted_points = 3,
+                                    .peer_stranger_points = 1,
+                                    .peer_stranger_nodes = 1,
+                                    .peer_stranger_node = {0x3A7F},
+                                    .monitors_off = 1,
+                                    .census_quieted = 2},
+        big, sizeof(big));
+    CHECK(strcmp(big, "(+3 from trusted peers, +1 from stranger node 3A7F, "
+                      "1 monitor off, 2 quieted as household)") == 0,
+          "peer parts lead the existing ones: %s", big);
+
+    /* Exactly 0 writes no "+0" part, and an empty set writes nothing. */
+    CHECK(observore_digest_note(&(observore_digest_notes_t){0}, big,
+                                sizeof(big)) == 0 && big[0] == '\0',
+          "no peer points and nothing suppressed is an empty note");
+    CHECK(observore_digest_note(
+              &(observore_digest_notes_t){.peer_stranger_nodes = 1,
+                                          .peer_stranger_node = {0x3A7F}},
+              big, sizeof(big)) == 0 && big[0] == '\0',
+          "a named node with no points writes no +0 part");
+    CHECK(observore_digest_note(NULL, big, sizeof(big)) == 0,
+          "and NULL still writes nothing");
+
+    /* The worst case fits whole and ends with its closing bracket. */
+    size_t wn = observore_digest_note(
+        &(observore_digest_notes_t){.peer_trusted_points = 6,
+                                    .peer_stranger_points = 2,
+                                    .peer_stranger_nodes = 2,
+                                    .peer_stranger_node = {0xFFFF, 0xFFFE},
+                                    .monitors_off = 14,
+                                    .census_quieted = 192},
+        big, sizeof(big));
+    printf("  worst-case note: %zu characters\n", wn);
+    CHECK(strcmp(big, "(+6 from trusted peers, +2 from stranger nodes FFFE "
+                      "and FFFF, 14 monitors off, 192 quieted as household)") == 0,
+          "the worst case reads whole: %s", big);
+    CHECK(wn == 104 && big[wn - 1] == ')' && wn < sizeof(big),
+          "and is 104 characters, inside its buffer, ending with ')': %zu", wn);
+
+    /* The digest leads with the whole note: it is no longer passed through a
+     * 64-byte local, so the long one is not cut at 63 characters. */
+    observore_digest_build(e, 2, "caution",
+                           &(observore_digest_notes_t){.peer_trusted_points = 3},
+                           title, sizeof(title), body, sizeof(body));
+    CHECK(strncmp(body, "(+3 from trusted peers)\n", 24) == 0,
+          "a digest of a friend-raised level leads with the peer note: %s",
+          body);
+    observore_digest_build(
+        e, 2, "alert",
+        &(observore_digest_notes_t){.peer_trusted_points = 6,
+                                    .peer_stranger_points = 2,
+                                    .peer_stranger_nodes = 2,
+                                    .peer_stranger_node = {0xFFFF, 0xFFFE},
+                                    .monitors_off = 14,
+                                    .census_quieted = 192},
+        title, sizeof(title), body, sizeof(body));
+    CHECK(strncmp(body, big, wn) == 0 && body[wn] == '\n',
+          "the digest body leads with the whole worst-case note and a "
+          "newline: %s", body);
+    CHECK(strstr(body, "bodycam") != NULL,
+          "and the findings still follow it");
 }
 
 static void test_a_drone_says_where_it_is_and_where_its_pilot_is(void)
@@ -2867,16 +2953,1573 @@ static void test_a_warning_from_a_stranger_can_raise_but_never_quiet(void)
           "and is not mistaken for one of ours: '%s'", pev.detail);
 
     /* The asymmetry, asserted rather than assumed. Nothing in this module
-     * can quiet anything: there is no suppression path, and a warning
-     * contributes nothing to the score. A stranger can raise attention and
-     * can never cause silence -- which is what makes an open mesh survivable,
-     * because a Sybil flood produces noise rather than blindness. */
+     * can quiet anything: there is no suppression path. A stranger can raise
+     * attention and can never cause silence -- which is what makes an open
+     * mesh survivable, because a Sybil flood produces noise rather than
+     * blindness. Here nothing is seen locally, and a stranger's warning only
+     * ever adds to a class this node already counts, so it adds nothing. */
     observore_track_init();
     observore_monitors_init();
     observore_status_t st;
     observore_track_status(&st, SECS(26));
     CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR,
-          "warnings heard from strangers do not move the score, got %u", st.score);
+          "strangers' warnings about things not seen here add nothing, got %u",
+          st.score);
+
+    /* The warnings above are still standing; clear them so they cannot add a
+     * point to a bodycam or drone scored by a later test. */
+    observore_peer_init();
+}
+
+/* A warning the way the table sees it: built to wire bytes and read back, so
+ * every scene starts where a neighbour's advert would. `trusted` is set after
+ * parsing, which is exactly what the receive path does once the household tag
+ * verifies; the key module is not host-built. */
+static bool peer_say(uint16_t node, observore_class_t cls, uint16_t seq,
+                     uint16_t age_s, bool trusted, int64_t now_us)
+{
+    observore_peer_warning_t src;
+    memset(&src, 0, sizeof(src));
+    src.node = node;
+    src.cls = (uint8_t)cls;
+    src.seq = seq;
+    src.age_s = age_s;
+    uint8_t buf[32];
+    size_t len = observore_peer_build(&src, buf, sizeof(buf));
+    observore_peer_warning_t w;
+    if (len == 0 || !observore_peer_parse(buf, len, &w)) {
+        return false;
+    }
+    w.trusted = trusted;
+    return observore_peer_note(&w, now_us);
+}
+
+static void peer_scene_reset(void)
+{
+    observore_track_init();
+    observore_monitors_init();
+    observore_peer_init();
+}
+
+/* A Flipper Zero in range: hunter gear, worth caution on its own. */
+static void see_flipper(int64_t now_us)
+{
+    uint8_t flip[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0x29, 0x0E, 0x01, 0x02};
+    const uint8_t mac[6] = {0x0C, 0xFA, 0x22, 0x01, 0x02, 0x03};
+    observore_observation_t o = {.mac = mac, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+                                 .adv = flip, .adv_len = sizeof(flip)};
+    CHECK(observore_track_observe(&o, now_us), "the Flipper is seen");
+}
+
+static void test_a_trusted_warning_raises_the_score(void)
+{
+    banner("a trusted warning raises the score");
+
+    observore_status_t st;
+    observore_event_t list[4];
+
+    /* S2: nothing local, one friend says bodycam. Caution, not alert, and the
+     * warning is not a sighting: no device appears. */
+    peer_scene_reset();
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10)),
+          "a trusted warning is kept");
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 3 && st.level == OBSERVORE_LEVEL_CAUTION,
+          "one friend about a bodycam is caution, got %u", st.score);
+    CHECK(st.peer_points == 3 && st.peer_trusted_points == 3 &&
+              st.peer_stranger_points == 0,
+          "and says where it came from: %u/%u/%u", st.peer_points,
+          st.peer_trusted_points, st.peer_stranger_points);
+    CHECK(st.device_count == 0, "a warning never creates a device, got %u",
+          st.device_count);
+    CHECK(observore_track_snapshot(list, 4) == 0, "and lists nothing");
+
+    /* S3: a second distinct friend agrees. Alert, and no more after that. */
+    CHECK(peer_say(0x3A80, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(12)),
+          "a second friend is kept");
+    observore_track_status(&st, SECS(13));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "two friends about a bodycam is alert, got %u", st.score);
+    CHECK(peer_say(0x3A81, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(14)),
+          "a third friend is kept");
+    observore_track_status(&st, SECS(15));
+    CHECK(st.score == 6 && st.peer_points == 6,
+          "and a third adds nothing, got %u (%u from peers)", st.score,
+          st.peer_points);
+
+    /* S3b (a class stops at its own weight): two friends about a hunter, with
+     * nothing here, reach caution and not alert. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    peer_say(0x3A80, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 3 && st.level == OBSERVORE_LEVEL_CAUTION &&
+              st.peer_trusted_points == 3,
+          "two friends about a hunter stop at its weight, got %u", st.score);
+
+    /* S10: a Flipper here (3). One friend confirming it is caution, not
+     * alert; a second distinct friend makes it alert. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    observore_track_status(&st, SECS(6));
+    CHECK(st.score == 3 && st.level == OBSERVORE_LEVEL_CAUTION,
+          "a Flipper alone is caution, got %u", st.score);
+    peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 5 && st.level == OBSERVORE_LEVEL_CAUTION &&
+              st.peer_trusted_points == 2,
+          "one friend confirming it stays below alert, got %u (+%u)", st.score,
+          st.peer_trusted_points);
+    peer_say(0x3A80, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(12));
+    observore_track_status(&st, SECS(13));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "a second friend makes it alert, got %u", st.score);
+
+    /* S1: a stranger about a class this node counts adds one point, and a
+     * lone Flipper goes from 3 to 4: still caution. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x4433, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 4 && st.level == OBSERVORE_LEVEL_CAUTION &&
+              st.peer_stranger_points == 1 && st.peer_trusted_points == 0,
+          "a stranger adds one to what is seen here, got %u", st.score);
+
+    /* S9: the same stranger about a class nothing here counts adds nothing. */
+    peer_scene_reset();
+    peer_say(0x4433, OBSERVORE_CLASS_BODYCAM, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR && st.peer_points == 0,
+          "a stranger cannot put a class on the board alone, got %u", st.score);
+
+    peer_scene_reset();
+}
+
+static void test_a_flood_of_strangers_is_one_voice(void)
+{
+    banner("a flood of strangers is one voice");
+
+    observore_status_t st;
+
+    /* One stranger about the Flipper's class is the baseline: 3 -> 4. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x5000, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 4 && st.peer_stranger_points == 1,
+          "one stranger is one point, got %u (+%u)", st.score,
+          st.peer_stranger_points);
+
+    /* Fifty invented ids, a second apart, give exactly the same answer, and
+     * so do seven. Untrusted ids cost nothing to make up, so numbers of them
+     * must not be worth more than one. */
+    int counts[] = {50, 7};
+    for (size_t k = 0; k < sizeof(counts) / sizeof(counts[0]); k++) {
+        observore_peer_init();
+        for (int i = 0; i < counts[k]; i++) {
+            peer_say((uint16_t)(0x6000 + i), OBSERVORE_CLASS_HUNTER, 1, 0, false,
+                     SECS(10 + i));
+        }
+        observore_track_status(&st, SECS(11 + counts[k]));
+        CHECK(st.score == 4 && st.level == OBSERVORE_LEVEL_CAUTION &&
+                  st.peer_stranger_points == 1 && st.peer_points == 1,
+              "%d strangers add what one does, got %u (+%u)", counts[k],
+              st.score, st.peer_points);
+    }
+
+    /* A flood about a class nothing here counts puts nothing on the board. */
+    peer_scene_reset();
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x6000 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, false,
+                 SECS(10 + i));
+    }
+    observore_track_status(&st, SECS(61));
+    CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR,
+          "a flood about an unseen bodycam adds nothing, got %u", st.score);
+
+    /* A flood naming every class that can take part, with only the Flipper
+     * here: only the hunter share is attached to something counted. */
+    static const observore_class_t eligible[] = {
+        OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+        OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_ALPR, OBSERVORE_CLASS_BODYCAM,
+        OBSERVORE_CLASS_DEAUTH, OBSERVORE_CLASS_HUNTER,
+    };
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x7000 + i), eligible[i % 7], 1, 0, false,
+                 SECS(10 + i));
+    }
+    observore_track_status(&st, SECS(61));
+    CHECK(st.peer_stranger_points == 1 && st.score == 4,
+          "a flood naming every class adds one, got %u (+%u)", st.score,
+          st.peer_stranger_points);
+
+    /* A real threat is still reported through a flood: the strangers are
+     * noise around it, not a way to hide it. */
+    peer_scene_reset();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t obs = {
+        .mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -40,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+    CHECK(observore_track_observe(&obs, SECS(5)), "the body camera is seen");
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x8000 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, false,
+                 SECS(10 + i));
+    }
+    observore_track_status(&st, SECS(61));
+    observore_event_t list[4];
+    size_t listed = observore_track_snapshot(list, 4);
+    CHECK(st.level == OBSERVORE_LEVEL_ALERT && st.device_count == 1,
+          "a real bodycam still alerts through a flood, got %u", st.score);
+    CHECK(listed == 1 && list[0].cls == OBSERVORE_CLASS_BODYCAM,
+          "and is listed, got %zu rows", listed);
+
+    /* The pure rule: strangers across three counted classes total two, never
+     * three, and the last class in class order is the one that is cut. */
+    observore_peer_warning_t ws[3];
+    memset(ws, 0, sizeof(ws));
+    ws[0].node = 0x9001; ws[0].cls = OBSERVORE_CLASS_HUNTER;
+    ws[1].node = 0x9002; ws[1].cls = OBSERVORE_CLASS_DRONE;
+    ws[2].node = 0x9003; ws[2].cls = OBSERVORE_CLASS_TRACKER;
+    for (int i = 0; i < 3; i++) {
+        ws[i].heard_us = SECS(10);
+    }
+    uint32_t three = (1u << OBSERVORE_CLASS_TRACKER) |
+                     (1u << OBSERVORE_CLASS_DRONE) |
+                     (1u << OBSERVORE_CLASS_HUNTER);
+    observore_peer_weight_t pw;
+    observore_peer_weigh(ws, 3, three, 0, 0, SECS(11), &pw);
+    CHECK(pw.total == OBSERVORE_PEER_STRANGER_CAP && pw.stranger == 2 &&
+              pw.trusted == 0,
+          "three counted classes give strangers exactly two, got %u", pw.total);
+    CHECK(pw.share[2].points == 1 && pw.share[1].points == 1 &&
+              pw.share[0].points == 0 &&
+              pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED,
+          "the last class in order (hunter) is limited to nothing: %u/%u/%u",
+          pw.share[0].points, pw.share[1].points, pw.share[2].points);
+
+    /* Which stranger speaks for a class is the lowest node id, so the same
+     * eight warnings pick the same node in either order. */
+    observore_peer_warning_t eight[8];
+    uint32_t hunter_only = 1u << OBSERVORE_CLASS_HUNTER;
+    for (int dir = 0; dir < 2; dir++) {
+        memset(eight, 0, sizeof(eight));
+        for (int i = 0; i < 8; i++) {
+            eight[i].node = (uint16_t)(dir == 0 ? 0xA008 - i : 0xA001 + i);
+            eight[i].cls = OBSERVORE_CLASS_HUNTER;
+            eight[i].heard_us = SECS(10);
+        }
+        observore_peer_weigh(eight, 8, hunter_only, 0, 3, SECS(11), &pw);
+        int rep = -1;
+        for (int i = 0; i < 8; i++) {
+            if (pw.share[i].node == 0xA001) {
+                rep = i;
+            }
+        }
+        CHECK(rep >= 0 && pw.share[rep].voices == 8 && pw.share[rep].points == 1,
+              "the lowest id speaks for all eight (order %d), voices %u points %u",
+              dir, rep >= 0 ? pw.share[rep].voices : 0,
+              rep >= 0 ? pw.share[rep].points : 0);
+        int folded = 0;
+        for (int i = 0; i < 8; i++) {
+            if (i != rep && pw.share[i].points == 0 &&
+                pw.share[i].why == OBSERVORE_PEER_WHY_FOLDED) {
+                folded++;
+            }
+        }
+        CHECK(folded == 7 && pw.total == 1 && pw.stranger == 1,
+              "and the other seven are folded with nothing (order %d), got %d",
+              dir, folded);
+    }
+
+    /* Two strangers with the same id: the first listed speaks. */
+    memset(ws, 0, sizeof(ws));
+    for (int i = 0; i < 2; i++) {
+        ws[i].node = 0xB000;
+        ws[i].cls = OBSERVORE_CLASS_HUNTER;
+        ws[i].heard_us = SECS(10);
+    }
+    observore_peer_weigh(ws, 2, hunter_only, 0, 3, SECS(11), &pw);
+    CHECK(pw.share[0].points == 1 && pw.share[0].voices == 2 &&
+              pw.share[1].why == OBSERVORE_PEER_WHY_FOLDED,
+          "a tie in node id goes to the lower index");
+
+    peer_scene_reset();
+}
+
+static void test_a_stranger_cannot_push_a_friend_out(void)
+{
+    banner("a stranger cannot push a friend out");
+
+    observore_status_t st;
+    observore_peer_warning_t got[OBSERVORE_PEER_MAX];
+
+    /* A stranger copying a friend's id, with a sequence far ahead, must not
+     * replace the friend's entry or poison its sequence window. */
+    peer_scene_reset();
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 5, 0, true, SECS(10)),
+          "the friend is kept");
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 30005, 0, false, SECS(11)),
+          "a stranger with the same id is kept, as a stranger");
+    CHECK(observore_peer_trusted(SECS(12)) == 1,
+          "and the friend's entry is still trusted");
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 6, 0, true, SECS(13)),
+          "the friend's next warning is not taken for a replay");
+    int nodes = -1, warnings = -1;
+    observore_peer_counts(SECS(14), &nodes, &warnings);
+    CHECK(nodes == 1 && warnings == 2,
+          "one id heard twice is one node with two warnings, got %d/%d", nodes,
+          warnings);
+    size_t n = observore_peer_recent(got, OBSERVORE_PEER_MAX, SECS(14));
+    bool friend_ok = false;
+    for (size_t i = 0; i < n; i++) {
+        if (got[i].trusted && got[i].cls == OBSERVORE_CLASS_BODYCAM &&
+            got[i].seq == 6) {
+            friend_ok = true;
+        }
+    }
+    CHECK(friend_ok, "the friend's latest warning is what stands");
+
+    /* Twenty invented ids leave two friends in the table and counting. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    peer_say(0x3A80, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(11));
+    for (int i = 0; i < 20; i++) {
+        peer_say((uint16_t)(0xC000 + i), OBSERVORE_CLASS_HUNTER, 1, 0, false,
+                 SECS(20 + i));
+    }
+    CHECK(observore_peer_trusted(SECS(45)) == 2,
+          "invented ids do not displace the friends");
+    observore_track_status(&st, SECS(45));
+    CHECK(st.score == 6 && st.level == OBSERVORE_LEVEL_ALERT,
+          "and the two friends still alert, got %u", st.score);
+
+    /* Eight live friends: a stranger is refused, a ninth friend gets in. */
+    peer_scene_reset();
+    for (int i = 0; i < 8; i++) {
+        peer_say((uint16_t)(0x3B00 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, true,
+                 SECS(10 + i));
+    }
+    CHECK(!peer_say(0xC100, OBSERVORE_CLASS_BODYCAM, 1, 0, false, SECS(20)),
+          "a stranger finding only friends is refused");
+    CHECK(observore_peer_trusted(SECS(21)) == 8, "all eight friends stand");
+    CHECK(peer_say(0x3B08, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(22)),
+          "a ninth friend is kept");
+    CHECK(observore_peer_trusted(SECS(23)) == 8, "at the cost of the oldest friend");
+
+    /* An expired entry goes before any live one, even for a stranger. */
+    peer_scene_reset();
+    peer_say(0x3B00, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(1));
+    for (int i = 1; i < 8; i++) {
+        peer_say((uint16_t)(0x3B00 + i), OBSERVORE_CLASS_BODYCAM, 1, 0, true,
+                 SECS(100 + i));
+    }
+    int64_t late = SECS(1) + (int64_t)OBSERVORE_PEER_TTL_S * 1000000 + SECS(9);
+    CHECK(peer_say(0xC100, OBSERVORE_CLASS_BODYCAM, 1, 0, false, late),
+          "a stranger takes the place of an expired entry");
+    CHECK(observore_peer_trusted(late) == 7, "and no live friend was lost");
+
+    /* A repeat renews the hold and never adds a second share. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 2, 0, true, SECS(200)),
+          "the next sequence is kept");
+    observore_track_status(&st, SECS(201));
+    CHECK(st.peer_points == 3, "a repeat is still one share, got %u", st.peer_points);
+    observore_track_status(&st, SECS(450));
+    CHECK(st.peer_points == 3,
+          "and it holds from the renewal, not the first hearing, got %u",
+          st.peer_points);
+    CHECK(!peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 2, 0, true, SECS(210)),
+          "the same sequence again is refused");
+
+    /* The age boundaries. Age 254 heard at 10 s has 46 s of hold: it counts
+     * at 55 s and not at 56 s. Age 255 never counts. Age 0 counts to 309 s.
+     * In between the share is the full value: a cut-off, not a decay. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 254, true, SECS(10));
+    observore_track_status(&st, SECS(10));
+    CHECK(st.peer_points == 3, "age 254 counts when heard, got %u", st.peer_points);
+    observore_track_status(&st, SECS(55));
+    CHECK(st.peer_points == 3, "and at 55 s, got %u", st.peer_points);
+    observore_track_status(&st, SECS(56));
+    CHECK(st.peer_points == 0 && st.score == 0, "and not at 56 s, got %u",
+          st.peer_points);
+
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 255, true, SECS(10));
+    observore_track_status(&st, SECS(10));
+    CHECK(st.peer_points == 0, "age 255 never counts, got %u", st.peer_points);
+    observore_track_status(&st, SECS(11));
+    CHECK(st.peer_points == 0, "not a second later either");
+
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(160));
+    CHECK(st.peer_points == 3, "halfway through the hold it is the full 3, got %u",
+          st.peer_points);
+    observore_track_status(&st, SECS(309));
+    CHECK(st.peer_points == 3, "age 0 counts at 309 s, got %u", st.peer_points);
+    observore_track_status(&st, SECS(310));
+    CHECK(st.peer_points == 0, "and not at 310 s, got %u", st.peer_points);
+
+    peer_scene_reset();
+}
+
+/* The level a score reads as. level_for() is private to the tracker, and a
+ * second copy of the two thresholds here is the point: it is the test's own
+ * statement of where caution and alert begin. */
+static observore_level_t level_of_score(unsigned score)
+{
+    if (score >= OBSERVORE_SCORE_ALERT) {
+        return OBSERVORE_LEVEL_ALERT;
+    }
+    if (score >= OBSERVORE_SCORE_CAUTION) {
+        return OBSERVORE_LEVEL_CAUTION;
+    }
+    return OBSERVORE_LEVEL_CLEAR;
+}
+
+/* The share a given node holds in a weighed set, or NULL. */
+static const observore_peer_share_t *share_of(const observore_peer_weight_t *pw,
+                                              uint16_t node, bool trusted)
+{
+    for (int i = 0; i < pw->n; i++) {
+        if (pw->share[i].node == node && pw->share[i].trusted == trusted) {
+            return &pw->share[i];
+        }
+    }
+    return NULL;
+}
+
+/* A surface and the score must read the same thing: the status carries the
+ * three peer numbers, and observore_track_peer_weight() is what the console,
+ * the log and the glass list from. */
+static void peer_surfaces_agree(const char *scene, int64_t now_us)
+{
+    observore_status_t st;
+    observore_peer_weight_t pw;
+    observore_track_status(&st, now_us);
+    observore_track_peer_weight(&pw, now_us);
+    CHECK(pw.total == st.peer_points && pw.trusted == st.peer_trusted_points &&
+              pw.stranger == st.peer_stranger_points,
+          "%s: the listing (%u/%u/%u) and the score (%u/%u/%u) agree", scene,
+          pw.total, pw.trusted, pw.stranger, st.peer_points,
+          st.peer_trusted_points, st.peer_stranger_points);
+    CHECK(pw.total == pw.trusted + pw.stranger,
+          "%s: the parts add up to the whole", scene);
+}
+
+static bool same_row(const observore_event_t *a, const observore_event_t *b)
+{
+    return memcmp(a->mac, b->mac, sizeof(a->mac)) == 0 && a->cls == b->cls &&
+           a->points == b->points && strcmp(a->label, b->label) == 0 &&
+           a->hits == b->hits && a->rssi == b->rssi &&
+           a->rotations == b->rotations;
+}
+
+static void test_no_warning_lowers_a_score(void)
+{
+    banner("no warning lowers a score or touches a protected device");
+
+    observore_status_t st;
+    observore_peer_weight_t pw;
+
+    /* One definition of counting. The four scenes the rule is argued from,
+     * read through the tracker both ways. */
+    peer_scene_reset();
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    peer_surfaces_agree("one friend about a bodycam", SECS(11));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.peer_points == 3, "and the number is the one the rule gives, got %u",
+          st.peer_points);
+
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x3A7F, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(10));
+    peer_surfaces_agree("a friend confirming a Flipper", SECS(11));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.peer_trusted_points == 2 && st.score == 5,
+          "a friend confirming a Flipper adds the room under alert, got %u", st.score);
+
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x4433, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    peer_surfaces_agree("a stranger about a Flipper", SECS(11));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.peer_stranger_points == 1 && st.score == 4,
+          "a stranger adds one, got %u", st.score);
+
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    for (int i = 0; i < 50; i++) {
+        peer_say((uint16_t)(0x5000 + i), OBSERVORE_CLASS_HUNTER, 1, 0, false,
+                 SECS(10 + i));
+    }
+    peer_surfaces_agree("fifty strangers about a Flipper", SECS(61));
+    observore_track_status(&st, SECS(61));
+    CHECK(st.peer_stranger_points == 1, "fifty strangers are one voice, got %u",
+          st.peer_stranger_points);
+
+    /* A monitor switched off here keeps every peer out (D-15): the owner
+     * decided this node does not report that class, and the mesh must not
+     * bring it back. The warnings are still listed, so the silence is
+     * visible rather than a mystery. */
+    peer_scene_reset();
+    const uint8_t axon[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, 0x03};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t o_axon = {
+        .mac = axon, .src = OBSERVORE_SRC_BLE, .rssi = -40,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+    CHECK(observore_track_observe(&o_axon, SECS(5)), "the body camera is seen");
+    CHECK(observore_monitors_set(OBSERVORE_CLASS_BODYCAM, false),
+          "the bodycam monitor is switched off");
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    peer_say(0x4433, OBSERVORE_CLASS_BODYCAM, 1, 0, false, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 0 && st.level == OBSERVORE_LEVEL_CLEAR && st.peer_points == 0,
+          "a warning is not counted because the monitor is off here, got %u (+%u)",
+          st.score, st.peer_points);
+    observore_track_peer_weight(&pw, SECS(11));
+    const observore_peer_share_t *friend_sh = share_of(&pw, 0x3A7F, true);
+    const observore_peer_share_t *stranger_sh = share_of(&pw, 0x4433, false);
+    CHECK(friend_sh && stranger_sh, "both warnings have a share");
+    if (friend_sh && stranger_sh) {
+        CHECK(friend_sh->why == OBSERVORE_PEER_WHY_MONITOR_OFF &&
+                  stranger_sh->why == OBSERVORE_PEER_WHY_MONITOR_OFF,
+              "both are put down to the monitor being off here, got %u and %u",
+              friend_sh->why, stranger_sh->why);
+        CHECK(friend_sh->points == 0 && stranger_sh->points == 0,
+              "and neither adds anything");
+    }
+    CHECK(strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_MONITOR_OFF),
+                 "monitor off here") == 0,
+          "in the words the surfaces print");
+    observore_peer_warning_t recent[OBSERVORE_PEER_MAX];
+    CHECK(observore_peer_recent(recent, OBSERVORE_PEER_MAX, SECS(11)) == 2,
+          "and both are still listed as heard");
+    CHECK(st.monitors_off == 1, "with the monitor reported off");
+    CHECK(observore_monitors_set(OBSERVORE_CLASS_BODYCAM, true),
+          "switch the monitor back on");
+    observore_track_status(&st, SECS(12));
+    CHECK(st.peer_points == 3 && st.score == 9,
+          "the friend now confirms the bodycam and the stranger has no room, "
+          "got %u (+%u)", st.score, st.peer_points);
+
+    /* A class the rule does not score stays unscored when a friend says it. */
+    peer_scene_reset();
+    static const uint8_t w_unkcls[] = {0x4F, 0x42, 0x57, 0x31, 0x02, 0x00, 0xD4,
+                                       0xC3, 0xC8, 0x0C, 0x00, 0x01};
+    observore_peer_warning_t uw;
+    CHECK(observore_peer_parse(w_unkcls, sizeof(w_unkcls), &uw), "an unknown class decodes");
+    uw.trusted = true;
+    uw.heard_us = SECS(10);
+    CHECK(observore_peer_note(&uw, SECS(10)), "a friend's unknown class is kept");
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == 0 && st.peer_points == 0,
+          "a friend naming a class that is not scored adds nothing, got %u", st.score);
+    observore_track_peer_weight(&pw, SECS(11));
+    CHECK(pw.n == 1 && pw.share[0].why == OBSERVORE_PEER_WHY_CLASS_NOT_SCORED,
+          "and the reason is that the class is not scored");
+    CHECK(observore_peer_recent(recent, OBSERVORE_PEER_MAX, SECS(11)) == 1,
+          "while it is still listed as heard");
+
+    /* The census (D-05): a camera it has quieted is not a class that counts
+     * here, so it cannot confirm a stranger's word either. */
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x11, 0x22, 0x33};
+    observore_observation_t o_ring = {
+        .mac = ring, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+    peer_scene_reset();
+    observore_mute_clear();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_ring, SECS(0)), "the doorbell is seen");
+    observore_event_t ev[8];
+    CHECK(observore_track_snapshot(ev, 8) == 1, "and listed");
+    uint32_t ring_id = observore_census_id(&ev[0]);
+    CHECK(ring_id != 0, "with an identity the census can remember");
+    uint32_t mask = 0;
+    uint16_t base = 99;
+    observore_track_local(&mask, &base);
+    CHECK((mask & (1u << OBSERVORE_CLASS_CAMERA)) != 0 &&
+              base == observore_class_points(OBSERVORE_CLASS_CAMERA),
+          "with no census day the camera counts (mask %x, base %u)", mask, base);
+    observore_census_note(ring_id, 9000, ring);
+    observore_census_note(ring_id, 9001, ring);
+    observore_census_note(ring_id, 9002, ring);
+    observore_track_set_day(9002);
+    observore_track_local(&mask, &base);
+    CHECK((mask & (1u << OBSERVORE_CLASS_CAMERA)) == 0 && base == 0,
+          "once the census has quieted it the camera does not count (mask %x, base %u)",
+          mask, base);
+    observore_track_local(NULL, NULL);
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_track_local(&mask, NULL);
+    CHECK((mask & (1u << OBSERVORE_CLASS_CAMERA)) != 0,
+          "and with the day withdrawn it counts again");
+    observore_census_init();
+
+    /* Saturation: the local sum is clamped before anything is added to it, and
+     * the peer term is whole numbers that fit a byte. */
+    peer_scene_reset();
+    for (int i = 0; i < 17; i++) {
+        const uint8_t m[6] = {0x00, 0x25, 0xDF, 0x01, 0x02, (uint8_t)(0x10 + i)};
+        observore_observation_t o = {
+            .mac = m, .src = OBSERVORE_SRC_BLE, .rssi = -40,
+            .adv = boring, .adv_len = sizeof(boring),
+        };
+        CHECK(observore_track_observe(&o, SECS(5)), "body camera %d is seen", i);
+    }
+    peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    peer_say(0x3A80, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+    observore_track_status(&st, SECS(11));
+    CHECK(st.score == OBSERVORE_SCORE_MAX && st.peer_points == 6,
+          "seventeen bodycams and two friends read 99 with 6 from peers, got %u (+%u)",
+          st.score, st.peer_points);
+    peer_surfaces_agree("a saturated board", SECS(11));
+
+    /* D-13: nothing a peer says changes what is on the board. A bodycam, the
+     * Flipper and a tracker are here; every warning set below leaves the rows,
+     * the counts, the monitors and the census exactly as they were, and the
+     * score never drops. Their census day is set and each has been "seen"
+     * three days running, which is what would quiet an unprotected class. */
+    peer_scene_reset();
+    observore_census_init();
+    const uint8_t tile_mac[6] = {0x4A, 0x11, 0x22, 0x33, 0x44, 0x55};
+    uint8_t tile[] = {0x03, 0x03, 0xED, 0xFE};
+    observore_observation_t o_tile = {
+        .mac = tile_mac, .src = OBSERVORE_SRC_BLE, .rssi = -45,
+        .adv = tile, .adv_len = sizeof(tile),
+    };
+    CHECK(observore_track_observe(&o_axon, SECS(5)), "the bodycam is seen");
+    see_flipper(SECS(5));
+    CHECK(observore_track_observe(&o_tile, SECS(5)), "the tracker is seen");
+    observore_event_t base_rows[8];
+    size_t base_n = observore_track_snapshot(base_rows, 8);
+    CHECK(base_n == 3, "all three are listed, got %zu", base_n);
+    for (size_t i = 0; i < base_n; i++) {
+        CHECK(observore_mute_class_is_protected(base_rows[i].cls),
+              "%s is a protected class", observore_class_name(base_rows[i].cls));
+        uint32_t id = observore_census_id(&base_rows[i]);
+        if (id != 0) {
+            observore_census_note(id, 9000, base_rows[i].mac);
+            observore_census_note(id, 9001, base_rows[i].mac);
+            observore_census_note(id, 9002, base_rows[i].mac);
+        }
+    }
+    observore_track_set_day(9002);
+    observore_status_t before;
+    observore_track_status(&before, SECS(11));
+    CHECK(before.device_count == 3 && before.census_quieted == 0 &&
+              before.peer_points == 0,
+          "the board starts with three devices and nothing quieted");
+
+    enum { SETS = 5 };
+    for (int set = 0; set < SETS; set++) {
+        observore_peer_init();
+        switch (set) {
+        case 0:
+            break;
+        case 1:
+            peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+            break;
+        case 2:
+            peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+            peer_say(0x3A80, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+            break;
+        case 3: {
+            static const observore_class_t counted[3] = {
+                OBSERVORE_CLASS_BODYCAM, OBSERVORE_CLASS_HUNTER,
+                OBSERVORE_CLASS_TRACKER,
+            };
+            for (int i = 0; i < 8; i++) {
+                peer_say((uint16_t)(0x6000 + i), counted[i % 3], 1, 0, false,
+                         SECS(10));
+            }
+            break;
+        }
+        default: {
+            static const observore_class_t seven[7] = {
+                OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+                OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_ALPR,
+                OBSERVORE_CLASS_BODYCAM, OBSERVORE_CLASS_DEAUTH,
+                OBSERVORE_CLASS_HUNTER,
+            };
+            for (int i = 0; i < 7; i++) {
+                peer_say((uint16_t)(0x7000 + i), seven[i], 1, 0, true, SECS(10));
+            }
+            break;
+        }
+        }
+        observore_event_t rows[8];
+        size_t n = observore_track_snapshot(rows, 8);
+        observore_status_t after;
+        observore_track_status(&after, SECS(11));
+        bool rows_same = n == base_n;
+        for (size_t i = 0; rows_same && i < n; i++) {
+            rows_same = same_row(&rows[i], &base_rows[i]);
+        }
+        CHECK(rows_same, "set %d: the snapshot rows are unchanged", set);
+        CHECK(after.device_count == before.device_count &&
+                  memcmp(after.class_counts, before.class_counts,
+                         sizeof(after.class_counts)) == 0,
+              "set %d: the device and class counts are unchanged", set);
+        CHECK(after.monitors_off == before.monitors_off &&
+                  after.census_quieted == before.census_quieted &&
+                  after.census_dampened == before.census_dampened,
+              "set %d: monitors and the census are unchanged", set);
+        CHECK(after.score >= before.score &&
+                  after.level >= before.level &&
+                  after.level == level_of_score(after.score),
+              "set %d: the score never drops (%u to %u)", set, before.score,
+              after.score);
+        CHECK(after.score == before.score + after.peer_points ||
+                  after.score == OBSERVORE_SCORE_MAX,
+              "set %d: the only difference is the peer term", set);
+        for (size_t i = 0; i < n; i++) {
+            uint32_t id = observore_census_id(&rows[i]);
+            CHECK(id == 0 ||
+                      observore_census_verdict(id, 9002, rows[i].cls) ==
+                          OBSERVORE_CENSUS_REPORT,
+                  "set %d: %s is still reported by the census", set,
+                  observore_class_name(rows[i].cls));
+        }
+        peer_surfaces_agree("a protected board", SECS(11));
+    }
+
+    /* Leave nothing behind for a later test. */
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+    observore_monitors_init();
+    peer_scene_reset();
+}
+
+/* One warning as the pure rule is handed it. */
+typedef struct {
+    uint16_t node;
+    observore_class_t cls;
+    bool trusted;
+} bound_say_t;
+
+#define BOUND_NOW SECS(100)
+
+/* Weigh a set of fresh warnings (heard just now, age zero) against a board
+ * described only by the classes counting, the monitors off and the local sum. */
+static void bound_weigh(const bound_say_t *say, size_t n, uint32_t mask,
+                        uint32_t off, uint16_t base,
+                        observore_peer_weight_t *out)
+{
+    observore_peer_warning_t w[OBSERVORE_PEER_MAX];
+    memset(w, 0, sizeof(w));
+    if (n > OBSERVORE_PEER_MAX) {
+        n = OBSERVORE_PEER_MAX;
+    }
+    for (size_t i = 0; i < n; i++) {
+        w[i].node = say[i].node;
+        w[i].cls = (uint8_t)say[i].cls;
+        w[i].trusted = say[i].trusted;
+        w[i].heard_us = BOUND_NOW;
+    }
+    observore_peer_weigh(w, n, mask, off, base, BOUND_NOW, out);
+}
+
+#define CLS_BIT(c) (1u << (unsigned)(c))
+
+static void test_every_scene_stays_bounded(void)
+{
+    banner("every scene stays bounded");
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_peer_init();
+
+    static const observore_class_t eligible[7] = {
+        OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+        OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_HUNTER, OBSERVORE_CLASS_ALPR,
+        OBSERVORE_CLASS_BODYCAM, OBSERVORE_CLASS_DEAUTH,
+    };
+    observore_peer_weight_t pw;
+
+    /* The classes that can take part at all, found through the rule because
+     * the helper that decides is private to it. A lone fresh friend with
+     * nothing here adds the weight of the class up to three, and for every
+     * other class adds nothing and says why. Followers (4) and tailing (6)
+     * are the two heavy classes left out on purpose: they are guesses about
+     * unidentified devices, and a guess must not be amplified by the mesh. */
+    for (int c = 0; c < OBSERVORE_CLASS_MAX; c++) {
+        bool in = false;
+        for (size_t k = 0; k < 7; k++) {
+            in = in || eligible[k] == (observore_class_t)c;
+        }
+        bound_say_t one = {0x3A7F, (observore_class_t)c, true};
+        bound_weigh(&one, 1, 0, 0, 0, &pw);
+        if (in) {
+            CHECK(pw.total == 3 && pw.share[0].points == 3 &&
+                      pw.share[0].why == OBSERVORE_PEER_WHY_COUNTED,
+                  "a lone friend about %s adds 3, got %u",
+                  observore_class_name((observore_class_t)c), pw.total);
+        } else {
+            CHECK(pw.total == 0 &&
+                      pw.share[0].why == OBSERVORE_PEER_WHY_CLASS_NOT_SCORED,
+                  "a friend about %s adds nothing because the class is not "
+                  "scored, got %u (why %u)",
+                  observore_class_name((observore_class_t)c), pw.total,
+                  pw.share[0].why);
+        }
+    }
+
+    /* The worked scenes. */
+    {
+        bound_say_t s[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 3, &pw);
+        CHECK(pw.total == 1 && pw.stranger == 1 &&
+                  pw.share[0].why == OBSERVORE_PEER_WHY_COUNTED,
+              "S1: a stranger about a counted hunter adds 1, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s, 1, 0, 0, 0, &pw);
+        CHECK(pw.total == 3 && pw.trusted == 3, "S2: one friend adds 3, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true},
+                           {0x3A80, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s, 2, 0, 0, 0, &pw);
+        CHECK(pw.total == 6 && pw.share[0].points == 3 && pw.share[1].points == 3,
+              "S3: two friends about a bodycam reach 6, got %u", pw.total);
+    }
+
+    /* A class stops at its own weight: two friends about a 3-weight class
+     * add 3, caution, whichever of the four it is. Only the 6-weight classes
+     * reach alert from peers alone. */
+    static const observore_class_t three[4] = {
+        OBSERVORE_CLASS_TRACKER, OBSERVORE_CLASS_SMARTGLASSES,
+        OBSERVORE_CLASS_DRONE, OBSERVORE_CLASS_HUNTER,
+    };
+    for (int k = 0; k < 4; k++) {
+        bound_say_t s[] = {{0x3A7F, three[k], true}, {0x3A80, three[k], true}};
+        bound_weigh(s, 2, 0, 0, 0, &pw);
+        CHECK(pw.total == 3 && level_of_score(pw.total) == OBSERVORE_LEVEL_CAUTION,
+              "S3b: two friends about %s stop at its own weight and stay at "
+              "caution, got %u", observore_class_name(three[k]), pw.total);
+        CHECK(pw.share[0].points == 3 && pw.share[1].points == 0 &&
+                  pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S3b: the second friend about %s is limited to nothing",
+              observore_class_name(three[k]));
+    }
+    static const observore_class_t six[3] = {
+        OBSERVORE_CLASS_ALPR, OBSERVORE_CLASS_BODYCAM, OBSERVORE_CLASS_DEAUTH,
+    };
+    for (int k = 0; k < 3; k++) {
+        bound_say_t s[] = {{0x3A7F, six[k], true}, {0x3A80, six[k], true}};
+        bound_weigh(s, 2, 0, 0, 0, &pw);
+        CHECK(pw.total == 6 && level_of_score(pw.total) == OBSERVORE_LEVEL_ALERT,
+              "two friends about %s reach alert from peers alone, got %u",
+              observore_class_name(six[k]), pw.total);
+    }
+
+    /* S3c: a friend's bodycam and a different friend's drone. */
+    bound_say_t s3c[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true},
+                         {0x3A80, OBSERVORE_CLASS_DRONE, true}};
+    bound_weigh(s3c, 2, 0, 0, 0, &pw);
+    CHECK(pw.total == 5 && pw.share[0].points == 3 && pw.share[1].points == 2 &&
+              pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+          "S3c: a bodycam and a drone from two friends total 5, drone limited, got %u",
+          pw.total);
+    {
+        bound_say_t s[8];
+        for (int i = 0; i < 8; i++) {
+            s[i] = (bound_say_t){(uint16_t)(0x3B00 + i), OBSERVORE_CLASS_BODYCAM, true};
+        }
+        bound_weigh(s, 8, 0, 0, 0, &pw);
+        CHECK(pw.total == 6, "S3d: eight friends still total 6, got %u", pw.total);
+    }
+    {
+        bound_say_t both[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true},
+                              {0x4001, OBSERVORE_CLASS_BODYCAM, false}};
+        bound_weigh(both, 2, CLS_BIT(OBSERVORE_CLASS_BODYCAM), 0, 8, &pw);
+        CHECK(pw.total == 3 && pw.share[1].points == 0 &&
+                  pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S4: at 8 a friend confirms a bodycam and the stranger has no "
+              "room, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 5, &pw);
+        CHECK(pw.total == 0, "S5: a stranger at 5 adds nothing, got %u", pw.total);
+        bound_say_t both[] = {{0x3A7F, OBSERVORE_CLASS_HUNTER, true},
+                              {0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(both, 2, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 5, &pw);
+        CHECK(pw.total == 0 && pw.share[0].points == 0 &&
+                  pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S5b: a friend and a stranger about a hunter at 5 add nothing "
+              "and the friend is limited, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s, 1, 0, 0, 2, &pw);
+        CHECK(pw.total == 3, "S6: at 2 a lone friend adds 3, got %u", pw.total);
+        bound_say_t s7[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(s7, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 4, &pw);
+        CHECK(pw.total == 1 && pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED,
+              "S7: at 4 a friend about an unseen bodycam adds 1 and is "
+              "limited, got %u", pw.total);
+        bound_say_t s8[] = {{0x4001, OBSERVORE_CLASS_TRACKER, false}};
+        bound_weigh(s8, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 5, &pw);
+        CHECK(pw.total == 0, "S8: a stranger about a tracker at 5 adds nothing, got %u",
+              pw.total);
+    }
+    {
+        bound_say_t s[7];
+        for (int i = 0; i < 7; i++) {
+            s[i] = (bound_say_t){(uint16_t)(0x4100 + i), eligible[i], false};
+        }
+        bound_weigh(s, 7, 0, 0, 0, &pw);
+        bool all_unseen = pw.n == 7;
+        for (int i = 0; i < 7; i++) {
+            all_unseen = all_unseen &&
+                         pw.share[i].why == OBSERVORE_PEER_WHY_NOT_SEEN_HERE;
+        }
+        CHECK(pw.total == 0 && all_unseen,
+              "S9: strangers on all seven classes add nothing when none is "
+              "seen here, got %u", pw.total);
+    }
+    {
+        bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_HUNTER, true}};
+        bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 3, &pw);
+        CHECK(pw.total == 2 && level_of_score(3 + pw.total) == OBSERVORE_LEVEL_CAUTION,
+              "S10: a friend confirming a Flipper adds 2 and stays below "
+              "alert, got %u", pw.total);
+    }
+
+    /* S11: classes are spent heaviest first, then by id, so two alpr and two
+     * bodycam from friends leave the alpr with all of it. */
+    bound_say_t s11[] = {{0x3A01, OBSERVORE_CLASS_BODYCAM, true},
+                         {0x3A02, OBSERVORE_CLASS_BODYCAM, true},
+                         {0x3A03, OBSERVORE_CLASS_ALPR, true},
+                         {0x3A04, OBSERVORE_CLASS_ALPR, true}};
+    bound_weigh(s11, 4, 0, 0, 0, &pw);
+    CHECK(pw.total == 6 && pw.share[2].points == 3 && pw.share[3].points == 3 &&
+              pw.share[0].points == 0 && pw.share[1].points == 0 &&
+              pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED &&
+              pw.share[1].why == OBSERVORE_PEER_WHY_LIMITED,
+          "S11: two alpr and two bodycam total 6, alpr 6 and bodycam limited "
+          "to 0, got %u", pw.total);
+
+    /* The same sets reversed give the same per-node result. */
+    {
+        bound_say_t rev11[4], rev3c[2];
+        for (int i = 0; i < 4; i++) {
+            rev11[i] = s11[3 - i];
+        }
+        rev3c[0] = s3c[1];
+        rev3c[1] = s3c[0];
+        observore_peer_weight_t fwd, bwd;
+        bound_weigh(s11, 4, 0, 0, 0, &fwd);
+        bound_weigh(rev11, 4, 0, 0, 0, &bwd);
+        bool same = fwd.total == bwd.total;
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                if (fwd.share[i].node == bwd.share[j].node) {
+                    same = same && fwd.share[i].points == bwd.share[j].points &&
+                           fwd.share[i].why == bwd.share[j].why;
+                }
+            }
+        }
+        CHECK(same, "S11 reversed gives the same points for every node");
+        bound_weigh(s3c, 2, 0, 0, 0, &fwd);
+        bound_weigh(rev3c, 2, 0, 0, 0, &bwd);
+        same = fwd.total == bwd.total;
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 2; j++) {
+                if (fwd.share[i].node == bwd.share[j].node) {
+                    same = same && fwd.share[i].points == bwd.share[j].points &&
+                           fwd.share[i].why == bwd.share[j].why;
+                }
+            }
+        }
+        CHECK(same, "S3c reversed gives the same points for every node");
+    }
+
+    /* The alert room: a lone friend about a bodycam nobody here has seen
+     * fills what is left under alert and no more. */
+    {
+        static const unsigned want[5] = {3, 2, 1, 0, 0};
+        for (unsigned b = 2; b <= 6; b++) {
+            bound_say_t s[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+            bound_weigh(s, 1, 0, 0, (uint16_t)b, &pw);
+            CHECK(pw.total == want[b - 2],
+                  "alert room: a lone friend at base %u adds %u, got %u", b,
+                  want[b - 2], pw.total);
+        }
+        /* The stranger room is the same line, with a one-point voice. */
+        static const unsigned want_s[4] = {1, 1, 0, 0};
+        for (unsigned b = 3; b <= 6; b++) {
+            bound_say_t s[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+            bound_weigh(s, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, (uint16_t)b, &pw);
+            CHECK(pw.total == want_s[b - 3],
+                  "stranger room: a stranger on a hunter at base %u adds %u, got %u",
+                  b, want_s[b - 3], pw.total);
+        }
+    }
+
+    /* Every reason a warning can give is produced, and named. */
+    {
+        observore_peer_warning_t w;
+        memset(&w, 0, sizeof(w));
+        w.node = 0x3A7F;
+        w.cls = OBSERVORE_CLASS_BODYCAM;
+        w.trusted = true;
+        w.heard_us = BOUND_NOW;
+        w.age_s = OBSERVORE_PEER_STALE_AGE_S;
+        observore_peer_weigh(&w, 1, 0, 0, 0, BOUND_NOW, &pw);
+        CHECK(pw.total == 0 && pw.share[0].why == OBSERVORE_PEER_WHY_STALE,
+              "an age of 255 is stale");
+
+        static const observore_class_t unscored[] = {
+            OBSERVORE_CLASS_CAMERA, OBSERVORE_CLASS_FLEET_TELEMATICS,
+            OBSERVORE_CLASS_ACCESSORY, OBSERVORE_CLASS_FOLLOWER,
+            OBSERVORE_CLASS_TAILING, OBSERVORE_CLASS_UNKNOWN,
+            OBSERVORE_CLASS_PEER_DETECTOR, OBSERVORE_CLASS_FIXTURE,
+        };
+        for (size_t k = 0; k < sizeof(unscored) / sizeof(unscored[0]); k++) {
+            bound_say_t s[] = {{0x3A7F, unscored[k], true}};
+            bound_weigh(s, 1, CLS_BIT(unscored[k]), 0, 4, &pw);
+            CHECK(pw.total == 0 &&
+                      pw.share[0].why == OBSERVORE_PEER_WHY_CLASS_NOT_SCORED,
+                  "%s is not a scored class", observore_class_name(unscored[k]));
+        }
+
+        bound_say_t f[] = {{0x3A7F, OBSERVORE_CLASS_BODYCAM, true}};
+        bound_weigh(f, 1, CLS_BIT(OBSERVORE_CLASS_BODYCAM),
+                    CLS_BIT(OBSERVORE_CLASS_BODYCAM), 0, &pw);
+        CHECK(pw.total == 0 && pw.share[0].why == OBSERVORE_PEER_WHY_MONITOR_OFF,
+              "a friend about a class whose monitor is off here adds nothing "
+              "because the monitor is off here");
+        bound_say_t st[] = {{0x4001, OBSERVORE_CLASS_BODYCAM, false}};
+        bound_weigh(st, 1, CLS_BIT(OBSERVORE_CLASS_BODYCAM),
+                    CLS_BIT(OBSERVORE_CLASS_BODYCAM), 0, &pw);
+        CHECK(pw.total == 0 && pw.share[0].why == OBSERVORE_PEER_WHY_MONITOR_OFF,
+              "and so does a stranger");
+
+        bound_say_t ns[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(ns, 1, 0, 0, 0, &pw);
+        CHECK(pw.share[0].why == OBSERVORE_PEER_WHY_NOT_SEEN_HERE,
+              "a stranger about a class not seen here is 'not seen here'");
+
+        bound_say_t fo[] = {{0x4002, OBSERVORE_CLASS_HUNTER, false},
+                            {0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(fo, 2, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 3, &pw);
+        CHECK(pw.share[0].why == OBSERVORE_PEER_WHY_FOLDED &&
+                  pw.share[1].why == OBSERVORE_PEER_WHY_COUNTED &&
+                  pw.share[1].voices == 2 && pw.total == 1,
+              "a second stranger on a class is folded into the first voice");
+
+        CHECK(pw.share[1].points == 1, "counted is the full stranger point");
+        bound_say_t lim[] = {{0x4001, OBSERVORE_CLASS_HUNTER, false}};
+        bound_weigh(lim, 1, CLS_BIT(OBSERVORE_CLASS_HUNTER), 0, 5, &pw);
+        CHECK(pw.share[0].why == OBSERVORE_PEER_WHY_LIMITED, "and limited when cut");
+
+        CHECK(strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_COUNTED), "counted") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_STALE), "stale") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_CLASS_NOT_SCORED),
+                         "class not scored") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_MONITOR_OFF),
+                         "monitor off here") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_NOT_SEEN_HERE),
+                         "not seen here") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_FOLDED), "folded") == 0 &&
+                  strcmp(observore_peer_why_name(OBSERVORE_PEER_WHY_LIMITED), "limited") == 0,
+              "the seven reasons carry the words the surfaces print");
+        CHECK(strcmp(observore_peer_why_name((observore_peer_why_t)99), "?") == 0,
+              "and anything else is a question mark");
+    }
+
+    /* The sweep: every local board that can be built from the classes that
+     * matter, against every warning set worth asking about. Deterministic and
+     * small enough to run in a couple of seconds. The local sum and the
+     * counting mask are made the way the tracker makes them, so every scene
+     * is one the real tracker could be in. */
+    enum { SETS_PER_CLASS = 5, SETS = 7 * SETS_PER_CLASS + 2 };
+    unsigned long scenes = 0;
+    unsigned largest_stranger = 0;
+    unsigned long v_score = 0, v_level = 0, v_total = 0, v_stranger = 0,
+                  v_caution = 0;
+    bool printed_first = false;
+
+    for (unsigned mix = 0; mix < 2187u * 12u; mix++) {
+        unsigned m = mix;
+        unsigned count[7];
+        for (int k = 0; k < 7; k++) {
+            count[k] = m % 3;
+            m /= 3;
+        }
+        unsigned cam = m % 2; m /= 2;
+        unsigned fleet = m % 2; m /= 2;
+        unsigned follower = m % 3;   /* what the class contributes, 0..2 */
+
+        uint32_t mask = 0;
+        unsigned base = 0;
+        for (int k = 0; k < 7; k++) {
+            if (count[k]) {
+                mask |= CLS_BIT(eligible[k]);
+                base += count[k] * observore_class_points(eligible[k]);
+            }
+        }
+        if (cam) {
+            mask |= CLS_BIT(OBSERVORE_CLASS_CAMERA);
+            base += observore_class_points(OBSERVORE_CLASS_CAMERA);
+        }
+        if (fleet) {
+            mask |= CLS_BIT(OBSERVORE_CLASS_FLEET_TELEMATICS);
+            base += observore_class_points(OBSERVORE_CLASS_FLEET_TELEMATICS);
+        }
+        if (follower) {
+            mask |= CLS_BIT(OBSERVORE_CLASS_FOLLOWER);
+            base += follower;
+        }
+        if (base > OBSERVORE_SCORE_MAX) {
+            base = OBSERVORE_SCORE_MAX;
+        }
+
+        for (int set = 0; set < SETS; set++) {
+            bound_say_t say[OBSERVORE_PEER_MAX];
+            size_t n = 0;
+            bool stranger_only = true;
+            bool two_trusted_in_a_class = false;
+            if (set < 7 * SETS_PER_CLASS) {
+                observore_class_t c = eligible[set / SETS_PER_CLASS];
+                switch (set % SETS_PER_CLASS) {
+                case 0:   /* one stranger */
+                    say[n++] = (bound_say_t){0x4001, c, false};
+                    break;
+                case 1:   /* eight strangers */
+                    for (int i = 0; i < 8; i++) {
+                        say[n++] = (bound_say_t){(uint16_t)(0x4010 + i), c, false};
+                    }
+                    break;
+                case 2:   /* one friend */
+                    say[n++] = (bound_say_t){0x3A7F, c, true};
+                    stranger_only = false;
+                    break;
+                case 3:   /* two friends */
+                    say[n++] = (bound_say_t){0x3A7F, c, true};
+                    say[n++] = (bound_say_t){0x3A80, c, true};
+                    stranger_only = false;
+                    two_trusted_in_a_class = true;
+                    break;
+                default:  /* a friend and a stranger */
+                    say[n++] = (bound_say_t){0x3A7F, c, true};
+                    say[n++] = (bound_say_t){0x4001, c, false};
+                    stranger_only = false;
+                    break;
+                }
+            } else if (set == 7 * SETS_PER_CLASS) {
+                for (int k = 0; k < 7; k++) {
+                    say[n++] = (bound_say_t){(uint16_t)(0x4020 + k), eligible[k], false};
+                }
+            } else {
+                for (int k = 0; k < 7; k++) {
+                    say[n++] = (bound_say_t){(uint16_t)(0x3A00 + k), eligible[k], true};
+                }
+                stranger_only = false;
+            }
+
+            observore_peer_weight_t r;
+            bound_weigh(say, n, mask, 0, (uint16_t)base, &r);
+            scenes++;
+            unsigned score = base + r.total;
+            observore_level_t lvl = level_of_score(score);
+            observore_level_t base_lvl = level_of_score(base);
+            bool bad = false;
+
+            if (score < base) { v_score++; bad = true; }
+            if (stranger_only && lvl != base_lvl) { v_level++; bad = true; }
+            if (r.total > OBSERVORE_PEER_TOTAL_CAP) { v_total++; bad = true; }
+            if (r.stranger > OBSERVORE_PEER_STRANGER_CAP) { v_stranger++; bad = true; }
+            if (!two_trusted_in_a_class &&
+                lvl > (base_lvl > OBSERVORE_LEVEL_CAUTION ? base_lvl
+                                                          : OBSERVORE_LEVEL_CAUTION)) {
+                v_caution++;
+                bad = true;
+            }
+            if (r.stranger > largest_stranger) {
+                largest_stranger = r.stranger;
+            }
+            if (bad && !printed_first) {
+                printed_first = true;
+                printf("first failing scene: mix %u set %d base %u mask %x -> "
+                       "total %u trusted %u stranger %u\n",
+                       mix, set, base, (unsigned)mask, r.total, r.trusted,
+                       r.stranger);
+            }
+        }
+    }
+    CHECK(v_score == 0, "sweep: a warning lowered a score in %lu scenes", v_score);
+    CHECK(v_level == 0, "sweep: strangers changed the level in %lu scenes", v_level);
+    CHECK(v_total == 0, "sweep: peers added more than %d in %lu scenes",
+          OBSERVORE_PEER_TOTAL_CAP, v_total);
+    CHECK(v_stranger == 0, "sweep: strangers added more than %d in %lu scenes",
+          OBSERVORE_PEER_STRANGER_CAP, v_stranger);
+    CHECK(v_caution == 0,
+          "sweep: a set with no class holding two friends went past caution "
+          "in %lu scenes", v_caution);
+    CHECK(largest_stranger == 1,
+          "the largest stranger total is %u, and the docs say 1: a second "
+          "counted class already puts the board at alert, so a weight change "
+          "that breaks this needs docs/mesh.md updated", largest_stranger);
+    printf("sweep: %lu scenes, largest stranger total %u\n", scenes,
+           largest_stranger);
+
+    /* The same question for a base the sweep above never builds: a local sum
+     * in which a counted class scores less than its weight, because the census
+     * dampened the device. The counting mask still says the class is counted
+     * (dampened is not quieted), so a stranger may attach to it, and the base it
+     * lands on can be 1 or 2. In the real tracker every class a warning can
+     * score is protected and the census never dampens it, so this is the rule
+     * held to its invariant on its own rather than through that coupling: for
+     * ANY base, strangers alone never change the level. */
+    {
+        unsigned long d_scenes = 0, d_level = 0, d_total = 0, d_stranger = 0;
+        unsigned d_largest = 0;
+        bool d_printed = false;
+
+        for (unsigned mix = 0; mix < 2187u * 18u; mix++) {
+            unsigned m = mix;
+            unsigned state[7];   /* 0 absent, 1 full weight, 2 dampened */
+            for (int k = 0; k < 7; k++) {
+                state[k] = m % 3;
+                m /= 3;
+            }
+            unsigned cam = m % 2; m /= 2;
+            unsigned fleet = m % 3; m /= 3;
+            unsigned follower = m % 3;
+
+            uint32_t mask = 0;
+            unsigned base = 0;
+            for (int k = 0; k < 7; k++) {
+                if (state[k]) {
+                    unsigned pts = observore_class_points(eligible[k]);
+                    mask |= CLS_BIT(eligible[k]);
+                    base += state[k] == 2 ? observore_census_dampen((uint16_t)pts)
+                                          : pts;
+                }
+            }
+            if (cam) {
+                mask |= CLS_BIT(OBSERVORE_CLASS_CAMERA);
+                base += observore_class_points(OBSERVORE_CLASS_CAMERA);
+            }
+            if (fleet) {
+                unsigned pts = observore_class_points(OBSERVORE_CLASS_FLEET_TELEMATICS);
+                mask |= CLS_BIT(OBSERVORE_CLASS_FLEET_TELEMATICS);
+                base += fleet == 2 ? observore_census_dampen((uint16_t)pts) : pts;
+            }
+            if (follower) {
+                mask |= CLS_BIT(OBSERVORE_CLASS_FOLLOWER);
+                base += follower;
+            }
+            if (base > OBSERVORE_SCORE_MAX) {
+                base = OBSERVORE_SCORE_MAX;
+            }
+
+            /* One stranger per eligible class, then eight on one class, then
+             * all seven classes at once: every shape a stranger can take. */
+            for (int set = 0; set < 7 + 7 + 1; set++) {
+                bound_say_t say[OBSERVORE_PEER_MAX];
+                size_t n = 0;
+                if (set < 7) {
+                    say[n++] = (bound_say_t){0x4001, eligible[set], false};
+                } else if (set < 14) {
+                    for (int i = 0; i < 8; i++) {
+                        say[n++] = (bound_say_t){(uint16_t)(0x4010 + i),
+                                                 eligible[set - 7], false};
+                    }
+                } else {
+                    for (int k = 0; k < 7; k++) {
+                        say[n++] = (bound_say_t){(uint16_t)(0x4020 + k),
+                                                 eligible[k], false};
+                    }
+                }
+                observore_peer_weight_t r;
+                bound_weigh(say, n, mask, 0, (uint16_t)base, &r);
+                d_scenes++;
+                bool bad = false;
+                if (level_of_score(base + r.total) != level_of_score(base)) {
+                    d_level++;
+                    bad = true;
+                }
+                if (r.total > OBSERVORE_PEER_TOTAL_CAP) { d_total++; bad = true; }
+                if (r.stranger > OBSERVORE_PEER_STRANGER_CAP) {
+                    d_stranger++;
+                    bad = true;
+                }
+                if (r.stranger > d_largest) { d_largest = r.stranger; }
+                if (bad && !d_printed) {
+                    d_printed = true;
+                    printf("first failing dampened scene: mix %u set %d base %u "
+                           "mask %x -> total %u stranger %u\n", mix, set, base,
+                           (unsigned)mask, r.total, r.stranger);
+                }
+            }
+        }
+        CHECK(d_level == 0,
+              "dampened sweep: strangers changed the level in %lu scenes",
+              d_level);
+        CHECK(d_total == 0 && d_stranger == 0,
+              "dampened sweep: a stranger or peer cap was broken (%lu, %lu)",
+              d_total, d_stranger);
+        printf("dampened sweep: %lu scenes, largest stranger total %u\n",
+               d_scenes, d_largest);
+    }
+
+    /* The three scenes found in review, by name. Each is a counted class whose
+     * local score was halved by the census, with one stranger voice per class. */
+    {
+        const uint32_t both = CLS_BIT(OBSERVORE_CLASS_TRACKER) |
+                              CLS_BIT(OBSERVORE_CLASS_DRONE);
+        bound_say_t two[2] = {
+            {0x4001, OBSERVORE_CLASS_TRACKER, false},
+            {0x4002, OBSERVORE_CLASS_DRONE, false},
+        };
+        bound_weigh(two, 2, both, 0, 2, &pw);   /* tracker 1 + drone 1 */
+        CHECK(pw.stranger == 0 && level_of_score(2 + pw.total) == OBSERVORE_LEVEL_CLEAR,
+              "two dampened classes at 2 stay clear under two strangers "
+              "(got +%u)", pw.stranger);
+
+        bound_say_t one[1] = {{0x4001, OBSERVORE_CLASS_TRACKER, false}};
+        bound_weigh(one, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER) |
+                                CLS_BIT(OBSERVORE_CLASS_CAMERA),
+                    0, 2, &pw);                 /* tracker 1 + camera 1 */
+        CHECK(level_of_score(2 + pw.total) == OBSERVORE_LEVEL_CLEAR,
+              "a dampened tracker and a camera at 2 stay clear under a "
+              "stranger (got +%u)", pw.stranger);
+
+        bound_weigh(one, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 1, &pw);
+        CHECK(pw.stranger == 1 && level_of_score(1 + pw.total) == OBSERVORE_LEVEL_CLEAR,
+              "a lone dampened tracker takes its point and stays clear");
+
+        /* Inside caution the room is what is left of caution, not of the
+         * number's distance from clear: 3 plus a stranger is 4, still caution,
+         * and 5 plus anything stays put. */
+        bound_weigh(one, 1, CLS_BIT(OBSERVORE_CLASS_TRACKER), 0, 5, &pw);
+        CHECK(pw.stranger == 0,
+              "a stranger adds nothing at the top of caution (got +%u)",
+              pw.stranger);
+    }
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_peer_init();
+}
+
+/* One share, written out, for the ring cases below. */
+static observore_peer_share_t pshare(uint16_t node, observore_class_t cls,
+                                     bool trusted, bool seen, unsigned voices,
+                                     unsigned points, observore_peer_why_t why)
+{
+    observore_peer_share_t s;
+    memset(&s, 0, sizeof(s));
+    s.node = node;
+    s.cls = (uint8_t)cls;
+    s.trusted = trusted;
+    s.seen_here = seen;
+    s.voices = (uint8_t)voices;
+    s.points = (uint8_t)points;
+    s.why = (uint8_t)why;
+    return s;
+}
+
+/* A weight holding exactly the shares given, for a round of the ring. */
+static void pweight(observore_peer_weight_t *pw,
+                    const observore_peer_share_t *s, size_t n)
+{
+    memset(pw, 0, sizeof(*pw));
+    for (size_t i = 0; i < n; i++) {
+        pw->share[i] = s[i];
+        pw->total = (uint8_t)(pw->total + s[i].points);
+    }
+    pw->n = (uint8_t)n;
+}
+
+static void test_a_peer_report_is_written_down_once(void)
+{
+    banner("a peer report is written down once");
+
+    observore_peer_weight_t pw;
+    observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX + 2];
+    uint8_t started[OBSERVORE_PEER_MAX];
+    size_t k, n;
+
+    peer_scene_reset();
+
+    /* Start: a counting share opens an event and is reported as started. */
+    observore_peer_share_t friend_ = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM,
+                                            true, false, 1, 3,
+                                            OBSERVORE_PEER_WHY_COUNTED);
+    pweight(&pw, &friend_, 1);
+    k = observore_peer_events_update(&pw, SECS(10), started, OBSERVORE_PEER_MAX);
+    CHECK(k == 1 && started[0] == 0, "a new share starts one event, got %u",
+          (unsigned)k);
+    /* The same round again is not new: one event, its last_us moved. */
+    k = observore_peer_events_update(&pw, SECS(20), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && ev[0].open && ev[0].first_us == SECS(10) &&
+              ev[0].last_us == SECS(20),
+          "a share still counting is one open event, got %u starts, %u held",
+          (unsigned)k, (unsigned)n);
+
+    /* Close: nothing counting closes it and leaves last_us where it was. */
+    pweight(&pw, NULL, 0);
+    k = observore_peer_events_update(&pw, SECS(30), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && !ev[0].open && ev[0].last_us == SECS(20),
+          "an event nothing matches closes at its last round");
+
+    /* Reopen: the same node and class counting later is a second event. */
+    pweight(&pw, &friend_, 1);
+    k = observore_peer_events_update(&pw, SECS(40), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 1 && n == 2 && ev[0].first_us == SECS(40) && ev[0].open &&
+              ev[1].first_us == SECS(10) && !ev[1].open,
+          "a share that counts again is a new event, newest first, got %u", (unsigned)n);
+
+    /* The stranger voice is keyed on the class: another representative later
+     * is the same event, and it keeps the node the log line named. */
+    peer_scene_reset();
+    observore_peer_share_t voice = pshare(0x1111, OBSERVORE_CLASS_HUNTER,
+                                          false, true, 3, 1,
+                                          OBSERVORE_PEER_WHY_COUNTED);
+    pweight(&pw, &voice, 1);
+    k = observore_peer_events_update(&pw, SECS(10), started, OBSERVORE_PEER_MAX);
+    CHECK(k == 1, "the stranger voice starts one event");
+    voice = pshare(0x0222, OBSERVORE_CLASS_HUNTER, false, true, 2, 1,
+                   OBSERVORE_PEER_WHY_COUNTED);
+    pweight(&pw, &voice, 1);
+    k = observore_peer_events_update(&pw, SECS(20), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && ev[0].share.node == 0x1111 &&
+              ev[0].share.voices == 2,
+          "a new representative is the same event, got %u events, node %04X",
+          (unsigned)n, (unsigned)ev[0].share.node);
+
+    /* Eviction: strangers are reused before any friend, however many of them
+     * start. Two closed friends, then twelve stranger events. */
+    peer_scene_reset();
+    observore_peer_share_t fa = pshare(0x00A1, OBSERVORE_CLASS_BODYCAM, true,
+                                       false, 1, 3, OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_t fb = pshare(0x00B2, OBSERVORE_CLASS_ALPR, true,
+                                       false, 1, 3, OBSERVORE_PEER_WHY_COUNTED);
+    int64_t at = SECS(10);
+    pweight(&pw, &fa, 1);
+    observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    pweight(&pw, &fb, 1);
+    at += SECS(1);
+    observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    pweight(&pw, NULL, 0);
+    at += SECS(1);
+    observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    bool every_start_reported = true;
+    for (int i = 0; i < 12; i++) {
+        observore_peer_share_t st = pshare(
+            (uint16_t)(0x0300 + i),
+            i % 2 ? OBSERVORE_CLASS_HUNTER : OBSERVORE_CLASS_SMARTGLASSES,
+            false, true, 1, 1, OBSERVORE_PEER_WHY_COUNTED);
+        pweight(&pw, &st, 1);
+        at += SECS(1);
+        if (observore_peer_events_update(&pw, at, started,
+                                         OBSERVORE_PEER_MAX) != 1) {
+            every_start_reported = false;
+        }
+        pweight(&pw, NULL, 0);
+        at += SECS(1);
+        observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    }
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX + 2);
+    bool have_a = false, have_b = false;
+    for (size_t i = 0; i < n; i++) {
+        have_a = have_a || (ev[i].share.trusted && ev[i].share.node == 0x00A1);
+        have_b = have_b || (ev[i].share.trusted && ev[i].share.node == 0x00B2);
+    }
+    CHECK(every_start_reported && n == OBSERVORE_PEER_EVENTS_MAX && have_a &&
+              have_b,
+          "twelve stranger events leave both friends in a ring of %u, got %u",
+          (unsigned)OBSERVORE_PEER_EVENTS_MAX, (unsigned)n);
+
+    /* Size, measured rather than asserted from the declaration. */
+    printf("sizeof(observore_peer_event_t) = %u, sizeof(observore_peer_weight_t) = %u\n",
+           (unsigned)sizeof(observore_peer_event_t),
+           (unsigned)sizeof(observore_peer_weight_t));
+    CHECK(sizeof(observore_peer_event_t) <= 32 &&
+              sizeof(observore_peer_weight_t) <= 96,
+          "the ring stays within 256 bytes and a weight within 96, got %u and %u",
+          (unsigned)sizeof(observore_peer_event_t),
+          (unsigned)sizeof(observore_peer_weight_t));
+
+    /* Text, exact. */
+    char text[96];
+    observore_peer_share_t s;
+    s = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true, true, 1, 3,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "bodycam +3 from node 3A7F (trusted)") == 0,
+          "trusted, seen: '%s'", text);
+    s = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true, false, 1, 3,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "bodycam +3 from node 3A7F (trusted, not seen here)") == 0,
+          "trusted, not seen: '%s'", text);
+    s = pshare(0x3A7F, OBSERVORE_CLASS_HUNTER, false, true, 5, 1,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "hunter +1 from node 3A7F (stranger, one voice for 5 nodes)") == 0,
+          "stranger voice: '%s'", text);
+    s = pshare(0x3A7F, OBSERVORE_CLASS_HUNTER, false, true, 1, 1,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "hunter +1 from node 3A7F (stranger)") == 0,
+          "one stranger: '%s'", text);
+    s = pshare(0xFFFF, OBSERVORE_CLASS_SMARTGLASSES, false, true, 8, 1,
+               OBSERVORE_PEER_WHY_COUNTED);
+    size_t longest = observore_peer_share_text(&s, text, sizeof(text));
+    printf("longest counting text: %u characters\n", (unsigned)longest);
+    CHECK(longest == 65 && strlen(text) == 65 &&
+              strcmp(text, "smart-glasses +1 from node FFFF (stranger, one voice for 8 nodes)") == 0,
+          "the longest counting text is 65 characters, got %u: '%s'",
+          (unsigned)longest, text);
+    s = pshare(0x4433, OBSERVORE_CLASS_CAMERA, false, true, 1, 0,
+               OBSERVORE_PEER_WHY_CLASS_NOT_SCORED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "camera +0 from node 4433 (stranger): class not scored") == 0,
+          "zero points: '%s'", text);
+    strcpy(text, "stale");
+    CHECK(observore_peer_share_text(NULL, text, sizeof(text)) == 0 && text[0] == '\0',
+          "a NULL share writes an empty string");
+    char small[10];
+    s = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true, true, 1, 3,
+               OBSERVORE_PEER_WHY_COUNTED);
+    size_t w = observore_peer_share_text(&s, small, sizeof(small));
+    CHECK(w <= sizeof(small) - 1 && strlen(small) == w,
+          "a short buffer is filled to len - 1 and terminated, got %u", (unsigned)w);
+
+    /* The ring is not the device table: a friend's bodycam report with
+     * nothing local starts an event and leaves the findings empty. */
+    peer_scene_reset();
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10)),
+          "the friend's warning is kept");
+    observore_peer_weight_t live;
+    observore_track_peer_weight(&live, SECS(11));
+    k = observore_peer_events_update(&live, SECS(11), started, OBSERVORE_PEER_MAX);
+    observore_event_t list[4];
+    CHECK(live.total == 3 && k == 1 && observore_track_snapshot(list, 4) == 0,
+          "a peer event is not a device: %u points, %u started", live.total,
+          (unsigned)k);
+
+    peer_scene_reset();
 }
 
 static void test_bcd(void)
@@ -4523,6 +6166,29 @@ static void test_json_builder(void)
     CHECK(accepted < 100, "not everything can have fitted");
     CHECK(json_balanced(small), "a full buffer must still close: '%s'", small);
     CHECK(strlen(small) < sizeof(small), "must not overrun");
+
+    /* The /api/history ending that says the peer events were left out. It is
+     * longer than "]}", so the cursor has to be given its length as the reserve
+     * or the closing would run past the buffer. A full body must still end in
+     * balanced JSON that carries the marker. */
+    {
+        char hist[64];
+        observore_jb_init(&jb, hist, sizeof(hist),
+                          sizeof(OBSERVORE_PEER_EVENTS_OMITTED_TAIL) - 1);
+        observore_jb_printf(&jb, "{\"history\":[");
+        for (int i = 0; i < 100 && !observore_jb_full(&jb); i++) {
+            observore_jb_printf(&jb, "%s{\"index\":%d}", i ? "," : "", i);
+        }
+        CHECK(observore_jb_full(&jb), "the history body should have filled");
+        observore_jb_close(&jb, observore_jb_full(&jb)
+                                    ? OBSERVORE_PEER_EVENTS_OMITTED_TAIL
+                                    : "]}");
+        CHECK(json_balanced(hist), "a full history body must still close: '%s'",
+              hist);
+        CHECK(strstr(hist, "\"peer_events_omitted\":true}") != NULL,
+              "and must say the peer events were left out: '%s'", hist);
+        CHECK(strlen(hist) < sizeof(hist), "must not overrun");
+    }
 
     /* A partial write is dropped whole rather than leaving half a token. */
     observore_jb_init(&jb, small, sizeof(small), 2);
@@ -6257,6 +7923,12 @@ int main(void)
     test_a_digest_admits_what_it_is_not_looking_for();
     test_a_drone_says_where_it_is_and_where_its_pilot_is();
     test_a_warning_from_a_stranger_can_raise_but_never_quiet();
+    test_a_trusted_warning_raises_the_score();
+    test_a_flood_of_strangers_is_one_voice();
+    test_a_stranger_cannot_push_a_friend_out();
+    test_no_warning_lowers_a_score();
+    test_every_scene_stays_bounded();
+    test_a_peer_report_is_written_down_once();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

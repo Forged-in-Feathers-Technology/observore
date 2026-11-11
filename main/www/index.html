@@ -89,6 +89,9 @@
   .rule button:hover { color: var(--alert); }
   .add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
   tr.going { opacity: 0.35; }
+  /* A row that says what another node reported, not something this node saw.
+     Italic so it never reads as a local sighting. */
+  tr.peer { font-style: italic; }
   button:disabled { opacity: 0.4; cursor: default; }
   .note { color: var(--dim); font-size: 11px; margin: 8px 0 0; }
   .warn { color: var(--caution); }
@@ -156,6 +159,26 @@
 </div>
 
 <div class="panel">
+  <h2>Mesh warnings <span id="peerinfo" class="dim"></span></h2>
+  <p class="dim" style="margin:0 0 10px;font-size:11px">
+    Every warning another node has sent that is still held, and what it added
+    to the score. A trusted node&rsquo;s warning can add up to 3 points and
+    lift the board to caution on its own. Strangers together add at most one
+    point, and only to something this node already sees. A class whose
+    monitor is switched off here takes nothing from peers either. Nothing a
+    peer sends can quiet anything.
+  </p>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>node</th><th>trust</th><th>class</th><th>adds</th><th>why</th><th>seen here</th><th>age</th></tr>
+      </thead>
+      <tbody id="peerrows"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
   <h2>History <span id="histinfo" class="dim"></span></h2>
   <p class="dim" style="margin:0 0 10px;font-size:11px">
     Classified detections that outlive a restart. The live list above is
@@ -171,6 +194,20 @@
         <tr><th>class</th><th>label</th><th>mac</th><th>rssi</th><th>hits</th><th>first seen</th><th>last seen</th></tr>
       </thead>
       <tbody id="histrows"></tbody>
+    </table>
+  </div>
+  <h3 style="margin:14px 0 6px;font-size:12px">Peer reports this boot</h3>
+  <p class="dim" style="margin:0 0 10px;font-size:11px">
+    What other nodes added to the score since this device started. Kept in
+    memory only, so a restart clears it, and never mixed into the record
+    above.
+  </p>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>class</th><th>from</th><th>adds</th><th>here</th><th>first</th><th>last</th></tr>
+      </thead>
+      <tbody id="peerhistrows"></tbody>
     </table>
   </div>
 </div>
@@ -444,6 +481,25 @@ function tagCell(tr, cls, text) {
   cell(tr, '', '').appendChild(span);
 }
 
+// A node id is sixteen bits and is shown as four upper-case hex digits
+// everywhere, the same way the serial log prints it, so the two can be put
+// side by side.
+function nodeHex(n) {
+  return n.toString(16).toUpperCase().padStart(4, '0');
+}
+
+// The one way this page names who a peer contribution came from. All
+// strangers together count as one voice, and the voice still has to say which
+// node is speaking for it: the representative is the one stranger warning in
+// its class with points above 0, the lowest node id the rule picked. The
+// Mesh warnings panel lists the others as folded.
+function peerFrom(w) {
+  if (w.trusted) { return 'node ' + nodeHex(w.node) + ' (trusted)'; }
+  return w.voices > 1
+    ? 'node ' + nodeHex(w.node) + ' (stranger, one voice for ' + w.voices + ' nodes)'
+    : 'node ' + nodeHex(w.node) + ' (stranger)';
+}
+
 // Prefer a rule that outlives the address: the name if it broadcasts one,
 // else the advert's shape, else the MAC.
 function ignoreCell(tr, d) {
@@ -510,6 +566,13 @@ function renderStatus(s) {
   const half = (s.census && s.census.dampened) || 0;
   const notes = [];
   if (tx) { notes.push('MESH TX \u2014 ' + peers + ' peer' + (peers === 1 ? '' : 's')); }
+  // The number must never rise without the banner saying another node raised
+  // it. Zero says nothing: a banner that always carried "+0 from peers" would
+  // be noise people learn to skip.
+  const pp = (s.peers && s.peers.points) || 0;
+  const ptr = (s.peers && s.peers.trusted_points) || 0;
+  const pst = (s.peers && s.peers.stranger_points) || 0;
+  if (pp > 0) { notes.push('+' + pp + ' from peers (' + ptr + ' trusted, ' + pst + ' stranger)'); }
   if (monOff) { notes.push(monOff + ' monitor' + (monOff === 1 ? '' : 's') + ' off'); }
   if (quiet)  { notes.push(quiet + ' quieted as household'); }
   if (half)   { notes.push(half + ' at half weight'); }
@@ -720,21 +783,50 @@ function stamp(iso) {
                                hour: '2-digit', minute: '2-digit'});
 }
 
-function renderHistory(list) {
+function renderHistory(h) {
+  const list = h.history || [];
   const rows = $('histrows');
   rows.textContent = '';
-  for (const h of list) {
+  for (const r of list) {
     const tr = document.createElement('tr');
-    cell(tr, '', h.class);
-    cell(tr, '', h.label || '');
-    cell(tr, 'dim', h.mac);
-    cell(tr, '', h.rssi + ' dBm');
-    cell(tr, 'dim', String(h.hits));
-    cell(tr, 'dim', stamp(h.first_seen));
-    cell(tr, 'dim', stamp(h.last_seen) + (h.this_boot ? '' : ' \u00b7 earlier'));
+    cell(tr, '', r.class);
+    cell(tr, '', r.label || '');
+    cell(tr, 'dim', r.mac);
+    cell(tr, '', r.rssi + ' dBm');
+    cell(tr, 'dim', String(r.hits));
+    cell(tr, 'dim', stamp(r.first_seen));
+    cell(tr, 'dim', stamp(r.last_seen) + (r.this_boot ? '' : ' \u00b7 earlier'));
     rows.appendChild(tr);
   }
   $('histinfo').textContent = list.length ? list.length + ' kept' : 'nothing recorded yet';
+
+  // Peer reports are this boot's and live beside the record, never in it. The
+  // from cell uses the same naming as the findings, so a stranger event
+  // still names the node it started with.
+  const prow = $('peerhistrows');
+  prow.textContent = '';
+  const evs = h.peer_events || [];
+  for (const ev of evs) {
+    const tr = document.createElement('tr');
+    cell(tr, '', ev.class);
+    cell(tr, '', peerFrom(ev));
+    cell(tr, '', '+' + ev.points);
+    cell(tr, 'dim', ev.seen_here ? 'yes' : 'no');
+    cell(tr, 'dim', ev.first_seen ? stamp(ev.first_seen) : 'at ' + ev.first_s + ' s uptime');
+    cell(tr, 'dim', (ev.last_seen ? stamp(ev.last_seen) : 'at ' + ev.last_s + ' s uptime') +
+      (ev.open ? '' : ' \u00b7 ended'));
+    prow.appendChild(tr);
+  }
+  // A list the device left out is not an empty list: when the response filled,
+  // say so rather than "none". It can also have been cut short, so the note
+  // follows whatever rows did arrive.
+  if (h.peer_events_omitted || !evs.length) {
+    const tr = document.createElement('tr');
+    cell(tr, 'dim', h.peer_events_omitted
+      ? 'not shown: history response full'
+      : 'none this boot').colSpan = 6;
+    prow.appendChild(tr);
+  }
 }
 
 function renderCensus(c) {
@@ -818,6 +910,78 @@ function renderMonitors(m) {
   box.appendChild(t);
 }
 
+// What the mesh said, in two places: the panel that lists every held warning
+// with what it added and why, and one row per class in the findings table for
+// the classes peers actually moved the score on. A peer row names the sending
+// node and never carries a MAC, a vendor or an ignore control, and never sits
+// on a local device's row: no peer saw that device, it named a class.
+function peerRow(cls, label, detail) {
+  const tr = document.createElement('tr');
+  tr.className = 'peer';
+  tagCell(tr, 'tag t-' + cls, cls);
+  cell(tr, '', label);
+  cell(tr, 'dim', '');
+  cell(tr, 'dim', '');
+  cell(tr, '', detail);
+  for (let i = 0; i < 6; i++) { cell(tr, 'dim', ''); }
+  return tr;
+}
+
+function renderPeers(p) {
+  const list = p.warnings || [];
+  const body = $('peerrows');
+  body.replaceChildren();
+  for (const w of list) {
+    const tr = document.createElement('tr');
+    cell(tr, '', nodeHex(w.node));
+    cell(tr, 'dim', w.trusted ? 'trusted' : 'stranger');
+    tagCell(tr, 'tag t-' + w.class, w.class);
+    cell(tr, '', '+' + w.points);
+    cell(tr, 'dim', w.why);
+    cell(tr, 'dim', w.seen_here ? 'yes' : 'no');
+    cell(tr, 'dim', (w.age_s + (w.heard_s || 0)) + 's');
+    body.appendChild(tr);
+  }
+  $('peerinfo').textContent = list.length
+    ? '\u2014 ' + list.length + ' heard, +' + (p.points || 0) + ' counted'
+    : '\u2014 none heard';
+
+  // One findings row per class, in the order the classes first appear.
+  const byClass = new Map();
+  for (const w of list) {
+    if (!byClass.has(w.class)) { byClass.set(w.class, []); }
+    byClass.get(w.class).push(w);
+  }
+  const rows = $('rows');
+  for (const [cls, ws] of byClass) {
+    const counted = ws.filter(w => w.points > 0);
+    const seen = ws.some(w => w.seen_here);
+    if (counted.length && seen) {
+      const total = counted.reduce((a, w) => a + w.points, 0);
+      rows.appendChild(peerRow(cls, 'peer report',
+        '+' + total + ' from peers: ' +
+        counted.map(w => peerFrom(w) + ' +' + w.points).join(', ')));
+    } else if (counted.length) {
+      // Only a trusted voice can count about a class this node does not see.
+      rows.appendChild(peerRow(cls, 'peer report',
+        counted.map(w => 'reported by node ' + nodeHex(w.node) +
+          ' (trusted), not seen here, +' + w.points).join(' and ')));
+    } else {
+      // The owner switched this monitor off here and the mesh does not switch
+      // it back on. A trusted node's warning is shown as not counted so the
+      // silence is visible; a stranger's gets no row, because a stranger
+      // never puts a row on the board, and stays in the panel above.
+      const off = ws.filter(w => w.trusted && w.why === 'monitor off here');
+      if (off.length) {
+        rows.appendChild(peerRow(cls, 'peer report',
+          off.map(w => 'reported by node ' + nodeHex(w.node) +
+            ' (trusted), not counted: monitor off here').join(' and ')));
+      }
+    }
+  }
+  $('empty').style.display = rows.children.length ? 'none' : 'block';
+}
+
 async function refreshLive() {
   if (locked) return;
   errors.length = 0;
@@ -827,9 +991,14 @@ async function refreshLive() {
     update_state: 'idle', update_pct: -1, heap: null, runs: [], bright: -1, bright_steps: 0,
     monitors: { off: 0, off_mask: 0 },
     checked_s: -1, checking: false, check_error: '' }));
-  renderDevices((await getJSON('/api/devices', { devices: [] })).devices);
+  const devs = await getJSON('/api/devices', { devices: [] });
+  const peerJ = await getJSON('/api/peers',
+    { warnings: [], points: 0, trusted_points: 0, stranger_points: 0 });
+  // Both are painted together so the peer rows are never missing for a frame.
+  renderDevices(devs.devices);
+  renderPeers(peerJ);
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
-  renderHistory((await getJSON('/api/history', { history: [] })).history);
+  renderHistory(await getJSON('/api/history', { history: [], peer_events: [] }));
   renderCensus(await getJSON('/api/census',
     { members: [], min_days: 3, window: 16, addr_limit: 8, day: -1 }));
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString() +

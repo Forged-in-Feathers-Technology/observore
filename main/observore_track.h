@@ -1,6 +1,7 @@
 #pragma once
 
 #include "observore_detect.h"
+#include "observore_peer.h"
 
 /* Sizing.
  *
@@ -161,6 +162,14 @@ _Static_assert(OBSERVORE_FOLLOWER_SCORE_CAP + OBSERVORE_SCORE_CAUTION <
                "unidentified devices must not be able to carry an identified "
                "one over the line into alert");
 
+/* The same invariant for the mesh: all strangers together, on top of the whole
+ * follower class, still fall short of an alert. The mix of local evidence a
+ * stranger lands on cannot be asserted here, so observore_peer_weigh() also
+ * clamps strangers to the room that is left under alert when it runs. */
+_Static_assert(OBSERVORE_FOLLOWER_SCORE_CAP + OBSERVORE_PEER_STRANGER_CAP <
+                   OBSERVORE_SCORE_ALERT,
+               "strangers plus followers stay out of alert");
+
 typedef struct {
     uint16_t      score;
     observore_level_t level;
@@ -185,6 +194,18 @@ typedef struct {
      * the fix both times was not a better rule but a visible one. */
     int           census_quieted;
     int           census_dampened;
+    /* How much other nodes' warnings added to `score`, and from whom.
+     *
+     * Carried in the status for the same reason `monitors_off` and
+     * `census_quieted` are: a verdict that another node has added to must be
+     * able to say so, or a score that is high for a reason nobody can find in
+     * the device list reads as a fault. `peer_points` is the whole addition,
+     * split into what trusted nodes and what strangers contributed. Per-sender
+     * detail is deliberately not in this struct, which lives on small task
+     * stacks; observore_peer_weigh_now() has it. */
+    uint8_t       peer_points;
+    uint8_t       peer_trusted_points;
+    uint8_t       peer_stranger_points;
 } observore_status_t;
 
 void observore_track_init(void);
@@ -234,6 +255,23 @@ bool observore_track_observe(const observore_observation_t *obs, int64_t now_us)
 void observore_track_tick(int64_t now_us);
 
 void observore_track_status(observore_status_t *out, int64_t now_us);
+
+/* The two halves of the status that a warning's surface needs on its own.
+ *
+ * observore_track_local() gives the classes that count here right now (bit c
+ * for class c) and the local score before any warning is added. It is what a
+ * caller needs to ask the pure rule, observore_peer_weigh(), a question about
+ * a warning set of its own.
+ *
+ * observore_track_peer_weight() gives every warning's share of the score, the
+ * numbers the status carries as peer_points, from the same walk and the same
+ * arguments, so a listing and the score cannot disagree. Callers: the console
+ * and the publish loop (/api/peers, the "peer report" log line) and the glass.
+ * Both take the tracker's lock and then the peer lock, in that order, and
+ * nothing in the peer module calls back into the tracker. Neither copies the
+ * warning table onto the caller's stack; the shares are written into `out`. */
+void observore_track_local(uint32_t *counting_mask, uint16_t *base_score);
+void observore_track_peer_weight(observore_peer_weight_t *out, int64_t now_us);
 
 /* Snapshot the device table, most recently seen first.  Returns the number of
  * entries written.  Only classified devices are returned -- the unclassified

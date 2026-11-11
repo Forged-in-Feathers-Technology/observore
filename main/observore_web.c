@@ -346,7 +346,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"taps\":%u"
         ",\"monitors\":{\"off\":%d,\"off_mask\":%lu}"
         ",\"peers\":{\"nodes\":%d,\"warnings\":%d,\"tx\":%s"
-        ",\"trusted\":%d,\"key\":%s}"
+        ",\"trusted\":%d,\"key\":%s"
+        ",\"points\":%u,\"trusted_points\":%u,\"stranger_points\":%u}"
         ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d"
         ",\"quieted\":%d,\"dampened\":%d}"
         ",\"counts\":{",
@@ -409,6 +410,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         /* How many standing warnings came from a node sharing the household
          * key, and whether this node has that key at all. Never the key. */
         peer_trusted, observore_meshkey_present() ? "true" : "false",
+        /* What the peers added to the score, from the score's own fields
+         * rather than a second sum, so this and the number above cannot
+         * disagree. */
+        (unsigned)st.peer_points, (unsigned)st.peer_trusted_points,
+        (unsigned)st.peer_stranger_points,
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS,
         st.census_quieted, st.census_dampened);
 
@@ -790,7 +796,10 @@ static esp_err_t history_handler(httpd_req_t *req)
     size_t count = observore_history_entries(&rows);
 
     observore_jbuf_t jb;
-    observore_jb_init(&jb, s_body, s_body_cap, 2);
+    /* The reserve holds back room for the longest way this body can end, so
+     * the omitted-peers marker below always fits. */
+    observore_jb_init(&jb, s_body, s_body_cap,
+                      sizeof(OBSERVORE_PEER_EVENTS_OMITTED_TAIL) - 1);
     observore_jb_printf(&jb, "{\"history\":[");
 
     for (size_t i = 0; i < count; i++) {
@@ -824,7 +833,44 @@ static esp_err_t history_handler(httpd_req_t *req)
             break;
         }
     }
-    observore_jb_close(&jb, "]}");
+
+    /* What peers added during this boot, after the persisted history and only
+     * when that was written whole. A body that filled on the record leaves
+     * peer_events out rather than cutting the record short: a source strangers
+     * can feed must never push a real detection out of this listing. The
+     * tail below closes whichever array is open, so the document is valid
+     * either way, and when the body filled it says so with
+     * "peer_events_omitted": absence of the list must never read as "no peer
+     * reports", which is a different and false statement. */
+    if (!observore_jb_full(&jb)) {
+        observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX];
+        size_t ne = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+        observore_jb_printf(&jb, "],\"peer_events\":[");
+        for (size_t i = 0; i < ne && !observore_jb_full(&jb); i++) {
+            const observore_peer_event_t *p = &ev[i];
+            char first[24] = "", last[24] = "";
+            observore_clock_iso(p->first_us, first, sizeof(first));
+            observore_clock_iso(p->last_us, last, sizeof(last));
+            observore_jb_printf(&jb,
+                "%s{\"node\":%u,\"trusted\":%s,\"class\":\"%s\","
+                "\"points\":%u,\"seen_here\":%s,\"voices\":%u,"
+                "\"first_s\":%lld,\"last_s\":%lld,"
+                "\"first_seen\":\"%s\",\"last_seen\":\"%s\","
+                "\"open\":%s,\"this_boot\":true}",
+                i ? "," : "", (unsigned)p->share.node,
+                p->share.trusted ? "true" : "false",
+                observore_class_name((observore_class_t)p->share.cls),
+                (unsigned)p->share.points,
+                p->share.seen_here ? "true" : "false",
+                (unsigned)p->share.voices,
+                (long long)(p->first_us / 1000000),
+                (long long)(p->last_us / 1000000), first, last,
+                p->open ? "true" : "false");
+        }
+    }
+    observore_jb_close(&jb, observore_jb_full(&jb)
+                               ? OBSERVORE_PEER_EVENTS_OMITTED_TAIL
+                               : "]}");
     return send_json(req, s_body);
 }
 
@@ -1602,17 +1648,31 @@ static esp_err_t tz_set_handler(httpd_req_t *req)
  * firmware: a node could say "three neighbours are warning" and nothing could
  * say what about, from where, or how long ago. Counting is not reporting, and
  * a positioned warning is worth nothing if the position cannot be read back.
+ *
+ * This list is also where an owner reads what each warning added to the score
+ * and why it added no more (counts, points, seen_here, voices, why). The
+ * shares are computed over the very snapshot the list shows, so share i
+ * describes warning i, and the totals at the end are the score's own peer
+ * points for that snapshot.
  */
 static esp_err_t peers_handler(httpd_req_t *req)
 {
     observore_peer_warning_t w[OBSERVORE_PEER_MAX];
+    observore_peer_weight_t pw;
+    uint32_t mask = 0;
+    uint16_t base = 0;
     int64_t now = esp_timer_get_time();
     size_t n = observore_peer_recent(w, OBSERVORE_PEER_MAX, now);
+
+    observore_track_local(&mask, &base);
+    observore_peer_weigh(w, n, mask, observore_monitors_off_mask(), base, now,
+                         &pw);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"ok\":true,\"warnings\":[");
     for (size_t i = 0; i < n; i++) {
         char item[256];
+        char extra[112];
         char pos[64] = "";
         if (w[i].have_pos) {
             snprintf(pos, sizeof(pos), ",\"lat_e7\":%ld,\"lon_e7\":%ld",
@@ -1621,7 +1681,7 @@ static esp_err_t peers_handler(httpd_req_t *req)
         snprintf(item, sizeof(item),
                  "%s{\"node\":%u,\"class\":\"%s\",\"seq\":%u"
                  ",\"age_s\":%u,\"heard_s\":%lld,\"trusted\":%s"
-                 ",\"positioned\":%s%s}",
+                 ",\"positioned\":%s%s",
                  i ? "," : "", (unsigned)w[i].node,
                  observore_class_desc((observore_class_t)w[i].cls)->name,
                  (unsigned)w[i].seq, (unsigned)w[i].age_s,
@@ -1629,8 +1689,25 @@ static esp_err_t peers_handler(httpd_req_t *req)
                  w[i].trusted ? "true" : "false",
                  w[i].have_pos ? "true" : "false", pos);
         httpd_resp_sendstr_chunk(req, item);
+        snprintf(extra, sizeof(extra),
+                 ",\"counts\":%s,\"points\":%u,\"seen_here\":%s"
+                 ",\"voices\":%u,\"why\":\"%s\"}",
+                 pw.share[i].points > 0 ? "true" : "false",
+                 (unsigned)pw.share[i].points,
+                 pw.share[i].seen_here ? "true" : "false",
+                 (unsigned)pw.share[i].voices,
+                 observore_peer_why_name(
+                     (observore_peer_why_t)pw.share[i].why));
+        httpd_resp_sendstr_chunk(req, extra);
     }
-    httpd_resp_sendstr_chunk(req, "]}");
+    {
+        char tail[96];
+        snprintf(tail, sizeof(tail),
+                 "],\"points\":%u,\"trusted_points\":%u,\"stranger_points\":%u}",
+                 (unsigned)pw.total, (unsigned)pw.trusted,
+                 (unsigned)pw.stranger);
+        httpd_resp_sendstr_chunk(req, tail);
+    }
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
 }

@@ -94,10 +94,32 @@ typedef struct {
  *
  * A struct rather than a count, because the kinds of suppression keep
  * arriving -- disabled monitors, then the census -- and each one added as
- * another int is another call site to find. */
+ * another int is another call site to find.
+ *
+ * The note also says what other nodes added to the picture. A push reading
+ * "caution" when nothing local is in the findings has to say a friend's
+ * warning raised it, or the device is one the owner stops believing, and a
+ * stranger's point has to name the node speaking for the strangers, as every
+ * other surface does. */
+
+/* At most two stranger voices can count at once: each adds at least one
+ * point and all strangers together stop at the stranger cap. notify.c asserts
+ * the tie, because this header stays independent of the peer table. */
+#define OBSERVORE_DIGEST_STRANGER_NODES 2
+
+/* Room for the longest note, 104 characters (the host test prints the
+ * length): every part present, two stranger nodes, 14 monitors off and 192
+ * devices quieted. */
+#define OBSERVORE_DIGEST_NOTE_LEN 128
+
 typedef struct {
     int monitors_off;      /* monitors switched off: nothing is being looked for */
     int census_quieted;    /* household devices contributing nothing right now */
+    int peer_trusted_points;    /* points trusted peers added to the score */
+    int peer_stranger_points;   /* points strangers added; at most the cap */
+    int peer_stranger_nodes;    /* how many of peer_stranger_node[] are set */
+    /* The representative node of each stranger voice that counted. */
+    uint16_t peer_stranger_node[OBSERVORE_DIGEST_STRANGER_NODES];
 } observore_digest_notes_t;
 
 /* The note on its own, for a message that has no findings to lead. Writes
