@@ -483,6 +483,14 @@ size_t observore_peer_events_update(const observore_peer_weight_t *pw,
 /* The events held, newest first by start, at most `max`. Returns the count. */
 size_t observore_peer_events_copy(observore_peer_event_t *out, size_t max);
 
+/* How a /api/history body ends when the peer events could not all be written.
+ * The "]" closes whichever array was open (the record, or the events cut short)
+ * and the flag tells the reader the list is incomplete, so a console never
+ * reports "none" for events that were only left out. The JSON cursor must be
+ * given a reserve of at least this many bytes (sizeof less the terminator) so
+ * the tail always fits. */
+#define OBSERVORE_PEER_EVENTS_OMITTED_TAIL "],\"peer_events_omitted\":true}"
+
 /* One share as a line of text, the words every surface uses for it:
  *   "bodycam +3 from node 3A7F (trusted)"
  *   "bodycam +3 from node 3A7F (trusted, not seen here)"

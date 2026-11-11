@@ -796,7 +796,10 @@ static esp_err_t history_handler(httpd_req_t *req)
     size_t count = observore_history_entries(&rows);
 
     observore_jbuf_t jb;
-    observore_jb_init(&jb, s_body, s_body_cap, 2);
+    /* The reserve holds back room for the longest way this body can end, so
+     * the omitted-peers marker below always fits. */
+    observore_jb_init(&jb, s_body, s_body_cap,
+                      sizeof(OBSERVORE_PEER_EVENTS_OMITTED_TAIL) - 1);
     observore_jb_printf(&jb, "{\"history\":[");
 
     for (size_t i = 0; i < count; i++) {
@@ -835,8 +838,10 @@ static esp_err_t history_handler(httpd_req_t *req)
      * when that was written whole. A body that filled on the record leaves
      * peer_events out rather than cutting the record short: a source strangers
      * can feed must never push a real detection out of this listing. The
-     * closing "]}" below then closes whichever array is open, so the document
-     * is valid either way. */
+     * tail below closes whichever array is open, so the document is valid
+     * either way, and when the body filled it says so with
+     * "peer_events_omitted": absence of the list must never read as "no peer
+     * reports", which is a different and false statement. */
     if (!observore_jb_full(&jb)) {
         observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX];
         size_t ne = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
@@ -863,7 +868,9 @@ static esp_err_t history_handler(httpd_req_t *req)
                 p->open ? "true" : "false");
         }
     }
-    observore_jb_close(&jb, "]}");
+    observore_jb_close(&jb, observore_jb_full(&jb)
+                               ? OBSERVORE_PEER_EVENTS_OMITTED_TAIL
+                               : "]}");
     return send_json(req, s_body);
 }
 

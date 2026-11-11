@@ -817,9 +817,14 @@ function renderHistory(h) {
       (ev.open ? '' : ' \u00b7 ended'));
     prow.appendChild(tr);
   }
-  if (!evs.length) {
+  // A list the device left out is not an empty list: when the response filled,
+  // say so rather than "none". It can also have been cut short, so the note
+  // follows whatever rows did arrive.
+  if (h.peer_events_omitted || !evs.length) {
     const tr = document.createElement('tr');
-    cell(tr, 'dim', 'none this boot').colSpan = 6;
+    cell(tr, 'dim', h.peer_events_omitted
+      ? 'not shown: history response full'
+      : 'none this boot').colSpan = 6;
     prow.appendChild(tr);
   }
 }

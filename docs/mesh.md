@@ -340,7 +340,9 @@ Six scenes, each checked by the host tests:
 **Where it shows.** `/api/status` `peers` carries the three point figures,
 `/api/peers` lists every held warning with its counts, points, whether it was
 seen here and why it did or did not count, `/api/history` `peer_events` holds
-what peers added during this boot (RAM only, and gone on reboot), the console
+what peers added during this boot (RAM only, and gone on reboot; when the history
+body fills first the list is left out and `peer_events_omitted` is `true`, and the
+console says it was not shown rather than that there were none), the console
 banner and findings table and its Mesh warnings panel, the coloured band and
 rows on a screen board, the log line when a level changes, the notification
 note, and one card row per trusted report. Every place that lists peer points

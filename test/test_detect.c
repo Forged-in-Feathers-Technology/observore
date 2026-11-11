@@ -6167,6 +6167,29 @@ static void test_json_builder(void)
     CHECK(json_balanced(small), "a full buffer must still close: '%s'", small);
     CHECK(strlen(small) < sizeof(small), "must not overrun");
 
+    /* The /api/history ending that says the peer events were left out. It is
+     * longer than "]}", so the cursor has to be given its length as the reserve
+     * or the closing would run past the buffer. A full body must still end in
+     * balanced JSON that carries the marker. */
+    {
+        char hist[64];
+        observore_jb_init(&jb, hist, sizeof(hist),
+                          sizeof(OBSERVORE_PEER_EVENTS_OMITTED_TAIL) - 1);
+        observore_jb_printf(&jb, "{\"history\":[");
+        for (int i = 0; i < 100 && !observore_jb_full(&jb); i++) {
+            observore_jb_printf(&jb, "%s{\"index\":%d}", i ? "," : "", i);
+        }
+        CHECK(observore_jb_full(&jb), "the history body should have filled");
+        observore_jb_close(&jb, observore_jb_full(&jb)
+                                    ? OBSERVORE_PEER_EVENTS_OMITTED_TAIL
+                                    : "]}");
+        CHECK(json_balanced(hist), "a full history body must still close: '%s'",
+              hist);
+        CHECK(strstr(hist, "\"peer_events_omitted\":true}") != NULL,
+              "and must say the peer events were left out: '%s'", hist);
+        CHECK(strlen(hist) < sizeof(hist), "must not overrun");
+    }
+
     /* A partial write is dropped whole rather than leaving half a token. */
     observore_jb_init(&jb, small, sizeof(small), 2);
     observore_jb_printf(&jb, "{\"x\":\"");
