@@ -1,5 +1,6 @@
 #include "observore_peer.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "observore_detect.h"
@@ -44,6 +45,12 @@ static SemaphoreHandle_t s_lock;
 
 static observore_peer_warning_t s_tab[OBSERVORE_PEER_MAX];
 static size_t s_count;
+
+/* The record of this boot's peer reports, oldest first so a new event is
+ * appended and "newest first" is a reverse walk with no tie to break. Touched
+ * only under PEER_LOCK. */
+static observore_peer_event_t s_events[OBSERVORE_PEER_EVENTS_MAX];
+static size_t s_event_n;
 
 static uint16_t le16(const uint8_t *p)
 {
@@ -297,6 +304,8 @@ void observore_peer_init(void)
     PEER_LOCK();
     s_count = 0;
     memset(s_tab, 0, sizeof(s_tab));
+    s_event_n = 0;
+    memset(s_events, 0, sizeof(s_events));
     PEER_UNLOCK();
 }
 
@@ -761,4 +770,159 @@ void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
     observore_peer_weigh(s_tab, s_count, counting_mask, monitors_off_mask,
                          base_score, now_us, out);
     PEER_UNLOCK();
+}
+
+/* ---- the record of this boot's peer reports ------------------------------
+ *
+ * The ring itself is declared with the warning table, above. */
+
+static bool event_matches(const observore_peer_event_t *e,
+                          const observore_peer_share_t *s)
+{
+    if (e->share.cls != s->cls || e->share.trusted != s->trusted) {
+        return false;
+    }
+    /* Every stranger about a class is one voice, whichever id speaks for it. */
+    return !s->trusted || e->share.node == s->node;
+}
+
+/* The slot to give up, never one a share matched this round: strangers before
+ * friends, closed before open, then oldest. Returns SIZE_MAX if every slot is
+ * protected, which the sizes make impossible (at most six shares can count,
+ * and the ring holds eight). */
+static size_t event_victim(const bool *keep)
+{
+    size_t best = SIZE_MAX;
+    int best_rank = 4;
+    for (size_t i = 0; i < s_event_n; i++) {
+        if (keep[i]) {
+            continue;
+        }
+        const observore_peer_event_t *e = &s_events[i];
+        int rank = e->share.trusted ? (e->open ? 3 : 2) : (e->open ? 1 : 0);
+        if (rank < best_rank ||
+            (rank == best_rank && e->last_us < s_events[best].last_us)) {
+            best = i;
+            best_rank = rank;
+        }
+    }
+    return best;
+}
+
+size_t observore_peer_events_update(const observore_peer_weight_t *pw,
+                                    int64_t now_us, uint8_t *started,
+                                    size_t max_started)
+{
+    if (!pw || !PEER_READY()) {
+        return 0;
+    }
+    bool keep[OBSERVORE_PEER_EVENTS_MAX] = { false };
+    bool taken[OBSERVORE_PEER_MAX] = { false };
+    size_t written = 0;
+
+    PEER_LOCK();
+    /* Existing events first: a share that is still counting refreshes its own
+     * event, and an open event nothing matched stops here. */
+    for (size_t k = 0; k < pw->n && k < OBSERVORE_PEER_MAX; k++) {
+        const observore_peer_share_t *s = &pw->share[k];
+        if (s->points == 0) {
+            continue;
+        }
+        for (size_t i = 0; i < s_event_n; i++) {
+            if (s_events[i].open && !keep[i] && event_matches(&s_events[i], s)) {
+                uint16_t node = s_events[i].share.node;
+                s_events[i].share = *s;
+                s_events[i].share.node = node;   /* the one the log named */
+                s_events[i].last_us = now_us;
+                keep[i] = true;
+                taken[k] = true;
+                break;
+            }
+        }
+    }
+    for (size_t i = 0; i < s_event_n; i++) {
+        if (!keep[i]) {
+            s_events[i].open = false;
+        }
+    }
+    /* What is left counting is new. */
+    for (size_t k = 0; k < pw->n && k < OBSERVORE_PEER_MAX; k++) {
+        const observore_peer_share_t *s = &pw->share[k];
+        if (s->points == 0 || taken[k]) {
+            continue;
+        }
+        if (s_event_n == OBSERVORE_PEER_EVENTS_MAX) {
+            size_t v = event_victim(keep);
+            if (v == SIZE_MAX) {
+                continue;
+            }
+            memmove(&s_events[v], &s_events[v + 1],
+                    (s_event_n - v - 1) * sizeof(s_events[0]));
+            memmove(&keep[v], &keep[v + 1],
+                    (s_event_n - v - 1) * sizeof(keep[0]));
+            s_event_n--;
+        }
+        observore_peer_event_t *e = &s_events[s_event_n];
+        e->first_us = now_us;
+        e->last_us = now_us;
+        e->share = *s;
+        e->open = true;
+        keep[s_event_n] = true;
+        s_event_n++;
+        if (started && written < max_started) {
+            started[written++] = (uint8_t)k;
+        }
+    }
+    PEER_UNLOCK();
+    return written;
+}
+
+size_t observore_peer_events_copy(observore_peer_event_t *out, size_t max)
+{
+    size_t n = 0;
+    if (!out || !PEER_READY()) {
+        return 0;
+    }
+    PEER_LOCK();
+    for (size_t i = s_event_n; i > 0 && n < max; i--) {
+        out[n++] = s_events[i - 1];
+    }
+    PEER_UNLOCK();
+    return n;
+}
+
+size_t observore_peer_share_text(const observore_peer_share_t *s, char *buf,
+                                 size_t len)
+{
+    if (!buf || len == 0) {
+        return 0;
+    }
+    if (!s) {
+        buf[0] = '\0';
+        return 0;
+    }
+    const char *cls = observore_class_name((observore_class_t)s->cls);
+    int n;
+    if (s->points == 0) {
+        n = snprintf(buf, len, "%s +0 from node %04X (%s): %s", cls,
+                     (unsigned)s->node, s->trusted ? "trusted" : "stranger",
+                     observore_peer_why_name((observore_peer_why_t)s->why));
+    } else if (s->trusted) {
+        n = snprintf(buf, len, "%s +%u from node %04X (trusted%s)", cls,
+                     (unsigned)s->points, (unsigned)s->node,
+                     s->seen_here ? "" : ", not seen here");
+    } else if (s->voices > 1) {
+        n = snprintf(buf, len,
+                     "%s +%u from node %04X (stranger, one voice for %u nodes)",
+                     cls, (unsigned)s->points, (unsigned)s->node,
+                     (unsigned)s->voices);
+    } else {
+        n = snprintf(buf, len, "%s +%u from node %04X (stranger)", cls,
+                     (unsigned)s->points, (unsigned)s->node);
+    }
+    if (n < 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (size_t)n < len ? (size_t)n : len - 1;
 }

@@ -4095,6 +4095,211 @@ static void test_every_scene_stays_bounded(void)
     observore_peer_init();
 }
 
+/* One share, written out, for the ring cases below. */
+static observore_peer_share_t pshare(uint16_t node, observore_class_t cls,
+                                     bool trusted, bool seen, unsigned voices,
+                                     unsigned points, observore_peer_why_t why)
+{
+    observore_peer_share_t s;
+    memset(&s, 0, sizeof(s));
+    s.node = node;
+    s.cls = (uint8_t)cls;
+    s.trusted = trusted;
+    s.seen_here = seen;
+    s.voices = (uint8_t)voices;
+    s.points = (uint8_t)points;
+    s.why = (uint8_t)why;
+    return s;
+}
+
+/* A weight holding exactly the shares given, for a round of the ring. */
+static void pweight(observore_peer_weight_t *pw,
+                    const observore_peer_share_t *s, size_t n)
+{
+    memset(pw, 0, sizeof(*pw));
+    for (size_t i = 0; i < n; i++) {
+        pw->share[i] = s[i];
+        pw->total = (uint8_t)(pw->total + s[i].points);
+    }
+    pw->n = (uint8_t)n;
+}
+
+static void test_a_peer_report_is_written_down_once(void)
+{
+    banner("a peer report is written down once");
+
+    observore_peer_weight_t pw;
+    observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX + 2];
+    uint8_t started[OBSERVORE_PEER_MAX];
+    size_t k, n;
+
+    peer_scene_reset();
+
+    /* Start: a counting share opens an event and is reported as started. */
+    observore_peer_share_t friend_ = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM,
+                                            true, false, 1, 3,
+                                            OBSERVORE_PEER_WHY_COUNTED);
+    pweight(&pw, &friend_, 1);
+    k = observore_peer_events_update(&pw, SECS(10), started, OBSERVORE_PEER_MAX);
+    CHECK(k == 1 && started[0] == 0, "a new share starts one event, got %u",
+          (unsigned)k);
+    /* The same round again is not new: one event, its last_us moved. */
+    k = observore_peer_events_update(&pw, SECS(20), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && ev[0].open && ev[0].first_us == SECS(10) &&
+              ev[0].last_us == SECS(20),
+          "a share still counting is one open event, got %u starts, %u held",
+          (unsigned)k, (unsigned)n);
+
+    /* Close: nothing counting closes it and leaves last_us where it was. */
+    pweight(&pw, NULL, 0);
+    k = observore_peer_events_update(&pw, SECS(30), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && !ev[0].open && ev[0].last_us == SECS(20),
+          "an event nothing matches closes at its last round");
+
+    /* Reopen: the same node and class counting later is a second event. */
+    pweight(&pw, &friend_, 1);
+    k = observore_peer_events_update(&pw, SECS(40), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 1 && n == 2 && ev[0].first_us == SECS(40) && ev[0].open &&
+              ev[1].first_us == SECS(10) && !ev[1].open,
+          "a share that counts again is a new event, newest first, got %u", (unsigned)n);
+
+    /* The stranger voice is keyed on the class: another representative later
+     * is the same event, and it keeps the node the log line named. */
+    peer_scene_reset();
+    observore_peer_share_t voice = pshare(0x1111, OBSERVORE_CLASS_HUNTER,
+                                          false, true, 3, 1,
+                                          OBSERVORE_PEER_WHY_COUNTED);
+    pweight(&pw, &voice, 1);
+    k = observore_peer_events_update(&pw, SECS(10), started, OBSERVORE_PEER_MAX);
+    CHECK(k == 1, "the stranger voice starts one event");
+    voice = pshare(0x0222, OBSERVORE_CLASS_HUNTER, false, true, 2, 1,
+                   OBSERVORE_PEER_WHY_COUNTED);
+    pweight(&pw, &voice, 1);
+    k = observore_peer_events_update(&pw, SECS(20), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && ev[0].share.node == 0x1111 &&
+              ev[0].share.voices == 2,
+          "a new representative is the same event, got %u events, node %04X",
+          (unsigned)n, (unsigned)ev[0].share.node);
+
+    /* Eviction: strangers are reused before any friend, however many of them
+     * start. Two closed friends, then twelve stranger events. */
+    peer_scene_reset();
+    observore_peer_share_t fa = pshare(0x00A1, OBSERVORE_CLASS_BODYCAM, true,
+                                       false, 1, 3, OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_t fb = pshare(0x00B2, OBSERVORE_CLASS_ALPR, true,
+                                       false, 1, 3, OBSERVORE_PEER_WHY_COUNTED);
+    int64_t at = SECS(10);
+    pweight(&pw, &fa, 1);
+    observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    pweight(&pw, &fb, 1);
+    at += SECS(1);
+    observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    pweight(&pw, NULL, 0);
+    at += SECS(1);
+    observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    bool every_start_reported = true;
+    for (int i = 0; i < 12; i++) {
+        observore_peer_share_t st = pshare(
+            (uint16_t)(0x0300 + i),
+            i % 2 ? OBSERVORE_CLASS_HUNTER : OBSERVORE_CLASS_SMARTGLASSES,
+            false, true, 1, 1, OBSERVORE_PEER_WHY_COUNTED);
+        pweight(&pw, &st, 1);
+        at += SECS(1);
+        if (observore_peer_events_update(&pw, at, started,
+                                         OBSERVORE_PEER_MAX) != 1) {
+            every_start_reported = false;
+        }
+        pweight(&pw, NULL, 0);
+        at += SECS(1);
+        observore_peer_events_update(&pw, at, started, OBSERVORE_PEER_MAX);
+    }
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX + 2);
+    bool have_a = false, have_b = false;
+    for (size_t i = 0; i < n; i++) {
+        have_a = have_a || (ev[i].share.trusted && ev[i].share.node == 0x00A1);
+        have_b = have_b || (ev[i].share.trusted && ev[i].share.node == 0x00B2);
+    }
+    CHECK(every_start_reported && n == OBSERVORE_PEER_EVENTS_MAX && have_a &&
+              have_b,
+          "twelve stranger events leave both friends in a ring of %u, got %u",
+          (unsigned)OBSERVORE_PEER_EVENTS_MAX, (unsigned)n);
+
+    /* Size, measured rather than asserted from the declaration. */
+    printf("sizeof(observore_peer_event_t) = %u, sizeof(observore_peer_weight_t) = %u\n",
+           (unsigned)sizeof(observore_peer_event_t),
+           (unsigned)sizeof(observore_peer_weight_t));
+    CHECK(sizeof(observore_peer_event_t) <= 32 &&
+              sizeof(observore_peer_weight_t) <= 96,
+          "the ring stays within 256 bytes and a weight within 96, got %u and %u",
+          (unsigned)sizeof(observore_peer_event_t),
+          (unsigned)sizeof(observore_peer_weight_t));
+
+    /* Text, exact. */
+    char text[96];
+    observore_peer_share_t s;
+    s = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true, true, 1, 3,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "bodycam +3 from node 3A7F (trusted)") == 0,
+          "trusted, seen: '%s'", text);
+    s = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true, false, 1, 3,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "bodycam +3 from node 3A7F (trusted, not seen here)") == 0,
+          "trusted, not seen: '%s'", text);
+    s = pshare(0x3A7F, OBSERVORE_CLASS_HUNTER, false, true, 5, 1,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "hunter +1 from node 3A7F (stranger, one voice for 5 nodes)") == 0,
+          "stranger voice: '%s'", text);
+    s = pshare(0x3A7F, OBSERVORE_CLASS_HUNTER, false, true, 1, 1,
+               OBSERVORE_PEER_WHY_COUNTED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "hunter +1 from node 3A7F (stranger)") == 0,
+          "one stranger: '%s'", text);
+    s = pshare(0xFFFF, OBSERVORE_CLASS_SMARTGLASSES, false, true, 8, 1,
+               OBSERVORE_PEER_WHY_COUNTED);
+    size_t longest = observore_peer_share_text(&s, text, sizeof(text));
+    printf("longest counting text: %u characters\n", (unsigned)longest);
+    CHECK(longest == 65 && strlen(text) == 65 &&
+              strcmp(text, "smart-glasses +1 from node FFFF (stranger, one voice for 8 nodes)") == 0,
+          "the longest counting text is 65 characters, got %u: '%s'",
+          (unsigned)longest, text);
+    s = pshare(0x4433, OBSERVORE_CLASS_CAMERA, false, true, 1, 0,
+               OBSERVORE_PEER_WHY_CLASS_NOT_SCORED);
+    observore_peer_share_text(&s, text, sizeof(text));
+    CHECK(strcmp(text, "camera +0 from node 4433 (stranger): class not scored") == 0,
+          "zero points: '%s'", text);
+    strcpy(text, "stale");
+    CHECK(observore_peer_share_text(NULL, text, sizeof(text)) == 0 && text[0] == '\0',
+          "a NULL share writes an empty string");
+    char small[10];
+    s = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true, true, 1, 3,
+               OBSERVORE_PEER_WHY_COUNTED);
+    size_t w = observore_peer_share_text(&s, small, sizeof(small));
+    CHECK(w <= sizeof(small) - 1 && strlen(small) == w,
+          "a short buffer is filled to len - 1 and terminated, got %u", (unsigned)w);
+
+    /* The ring is not the device table: a friend's bodycam report with
+     * nothing local starts an event and leaves the findings empty. */
+    peer_scene_reset();
+    CHECK(peer_say(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10)),
+          "the friend's warning is kept");
+    observore_peer_weight_t live;
+    observore_track_peer_weight(&live, SECS(11));
+    k = observore_peer_events_update(&live, SECS(11), started, OBSERVORE_PEER_MAX);
+    observore_event_t list[4];
+    CHECK(live.total == 3 && k == 1 && observore_track_snapshot(list, 4) == 0,
+          "a peer event is not a device: %u points, %u started", live.total,
+          (unsigned)k);
+
+    peer_scene_reset();
+}
+
 static void test_bcd(void)
 {
     banner("the clock chip speaks BCD and nothing else here does");
@@ -7478,6 +7683,7 @@ int main(void)
     test_a_stranger_cannot_push_a_friend_out();
     test_no_warning_lowers_a_score();
     test_every_scene_stays_bounded();
+    test_a_peer_report_is_written_down_once();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

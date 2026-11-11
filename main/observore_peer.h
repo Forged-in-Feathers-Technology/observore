@@ -439,3 +439,58 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
 void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
                               uint32_t monitors_off_mask, uint16_t base_score,
                               observore_peer_weight_t *out);
+
+/* The record of what peers added during this boot.
+ *
+ * Eight events, because that is what the RAM costs: each is at most 32 bytes
+ * (the host test prints the size), so the ring is at most 256 bytes, and a
+ * mesh of eight nodes in range cannot start events faster than they are read.
+ * RAM only, and deliberately: the persisted history has a fixed layout and a
+ * migration to pay for, and a source that strangers can feed must never be
+ * able to push a real detection out of the record that survives a restart.
+ * Nothing here is written to flash and nothing here is in the device table.
+ *
+ * An event is a peer share that started counting and runs until it stops. A
+ * trusted share is keyed on (node, class); all strangers about one class are a
+ * single voice, so that event is keyed on the class alone and keeps the node
+ * that was named when it started, the one the "peer report" log line printed.
+ * When the ring is full the slot reused is the oldest stranger event (a closed
+ * one first), and only then a trusted one, so a flood of invented ids cannot
+ * erase a friend's record. */
+#define OBSERVORE_PEER_EVENTS_MAX 8
+
+typedef struct {
+    int64_t                first_us;   /* when it started counting          */
+    int64_t                last_us;    /* the last round it was counting    */
+    observore_peer_share_t share;      /* as of the last round it counted   */
+    bool                   open;       /* still counting in the last round  */
+} observore_peer_event_t;
+
+/* Feed one round of shares to the ring. Starts an event for every counting
+ * share (points above 0) that has no open event, refreshes the ones that do,
+ * and closes every open event no counting share matched, keeping its last_us.
+ * The index in pw->share of each event started is written to `started`, at
+ * most `max_started` of them (NULL for none), and the number written is
+ * returned, so a caller can log each start exactly once. A NULL pw closes
+ * nothing and returns 0. */
+size_t observore_peer_events_update(const observore_peer_weight_t *pw,
+                                    int64_t now_us, uint8_t *started,
+                                    size_t max_started);
+
+/* The events held, newest first by start, at most `max`. Returns the count. */
+size_t observore_peer_events_copy(observore_peer_event_t *out, size_t max);
+
+/* One share as a line of text, the words every surface uses for it:
+ *   "bodycam +3 from node 3A7F (trusted)"
+ *   "bodycam +3 from node 3A7F (trusted, not seen here)"
+ *   "hunter +1 from node 3A7F (stranger)"
+ *   "hunter +1 from node 3A7F (stranger, one voice for 5 nodes)"
+ *   "camera +0 from node 4433 (stranger): class not scored"
+ * The node is four upper-case hex digits, from the same sixteen bits the
+ * console carries as an integer. A stranger voice is named by its
+ * representative, the lowest id the rule picked, so the text is the same
+ * whichever order the warnings arrived in. The longest counting text is 65
+ * characters. snprintf semantics: the length written is returned, clamped to
+ * len - 1, and a NULL share writes an empty string. */
+size_t observore_peer_share_text(const observore_peer_share_t *s, char *buf,
+                                 size_t len);
