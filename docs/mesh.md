@@ -1,7 +1,7 @@
 # Nodes that warn each other
 
 Several boards in one household can tell each other what they have seen. Off by
-default, three tiers deep: listen, warn, and sign.
+default, four tiers deep: listen, warn, sign and count.
 
 ## Warning the neighbours
 
@@ -63,7 +63,9 @@ an easier job than something listening for one in a window.
 **It says so while it is doing it**, in the three places that cannot be
 missed: the coloured band on the glass carries a hexagon *and the peer count*,
 the system page says `mesh  warning, N peers in range` or `listen only, never
-transmits`, and `/api/status` reports `peers: {nodes, warnings, tx}`. The
+transmits`, and `/api/status` reports `peers: {nodes, warnings, tx, points,
+trusted_points, stranger_points}`, where `nodes` counts distinct node ids and
+the three point figures are what other nodes added to the score. The
 count matters more than the state — `⬡0` means the exposure is being paid for
 and nothing is coming back, and an on/off mark hides exactly that case.
 
@@ -208,7 +210,9 @@ forgery succeeds about once in four billion, and the receiver already refuses
 a sequence that does not advance, so an attacker cannot grind against a live
 node. More to the point, the asymmetry bounds the prize: a stranger may warn
 and nothing may silence, so forging a tag buys *more weight* on a warning,
-never blindness. What it does not survive is a weak key — a four-byte tag
+never blindness — and not much weight, since a forged tag is one trusted voice,
+which lifts a board to caution at most (see
+[what a warning adds to the score](#what-a-warning-adds-to-the-score)). What it does not survive is a weak key — a four-byte tag
 confirms an offline guess — so the key wants to be long and random rather than
 a passphrase somebody chose.
 
@@ -236,15 +240,122 @@ The middle row is the one that matters. `trusted` falls to zero while `nodes`
 and `warnings` stay at one: the warning is still heard, still counted, still
 reported — just not trusted. And it recovers, so the tier does not latch.
 
-**A trusted warning does not yet change the score.** Warnings still contribute
-zero, exactly as before. Making the tier real and visible before letting it
-act is the same order the census took, and "how much more should a friend's
-warning count" is a separate decision with its own way of going wrong.
+**A trusted warning raises the score, by a bounded amount.** The tier was made
+real and visible before it was allowed to act, which is the order the census
+took; the amount is set out in
+[What a warning adds to the score](#what-a-warning-adds-to-the-score).
 
 No position is sent. The format carries one and the decoder reads one, but
 this device has no fix to put there; a GPS node is where that field starts
 being filled, and the encoder refuses zeroes rather than claiming the Gulf of
 Guinea.
+
+## What a warning adds to the score
+
+**A warning is a second, separate term in the score, added after the local
+sum.** It names a class, not a device, and nothing on this node saw it, so it
+never becomes a row in the device table. It is only ever added, which is the
+whole reason no warning can lower a score, quiet a device or change what a
+protected class reads.
+
+The numbers, all of them in `main/observore_peer.h` where the build refuses
+to compile if they are retuned out of the corner they have to sit in:
+
+| constant | value | what it bounds |
+|---|---|---|
+| `OBSERVORE_PEER_TRUSTED_POINTS` | 3 | what one trusted node adds, per class |
+| `OBSERVORE_PEER_STRANGER_POINTS` | 1 | what all strangers about one class add, together |
+| `OBSERVORE_PEER_STRANGER_CAP` | 2 | every stranger point, across every class |
+| `OBSERVORE_PEER_CLASS_CAP` | 6 | the most any one class can get from peers |
+| `OBSERVORE_PEER_TOTAL_CAP` | 6 | everything peers add, one alert at most |
+| `OBSERVORE_PEER_STALE_AGE_S` | 255 | the sender's age at which a warning counts nothing |
+
+**Trusted nodes add 3 each, per class, and a class stops at its own weight.**
+Three is the one value that lets a single friend reach caution, keeps a single
+friend below alert, and lets two agreeing friends reach alert. A class's peer
+points also stop at the smaller of the class cap and the class's own weight, so
+a friend's warning stands in for one sighting rather than for a crowd of them,
+and all peer points together stop at 6. One node repeating itself about the
+same class adds nothing more: it renews the hold and adds nothing.
+
+**One friend cannot raise an alert on their own.** One trusted node about a
+class this node does not see lifts the board to caution at most, and one
+trusted node confirming a class worth less than an alert stays below alert too.
+Two or more distinct trusted nodes may alert, but only about a class that is
+worth an alert by itself. Because each class's peer points stop at its own
+weight, two friends warning about a tracker, smart-glasses, drone or hunter
+that this node does not see reach 3, caution, never alert: **only alpr,
+bodycam and deauth-flood can reach alert from peers alone.** Local evidence
+that alerts on its own still alerts, and a friend's warning does not take that
+away.
+
+**Strangers are one voice per class, and a quiet one.** All strangers about a
+class together are worth 1 however many node ids they invent, all classes
+together are worth at most 2, and they only attach to a class this node already
+counts. They can never change the level: in practice a stranger adds at most
+1, because a second counted class already puts the board at alert and there is
+no room left under it.
+
+**"Counts" means a device of that class is in the current sum.** A device the
+census has quieted does not confirm a stranger's warning, because it is not
+counted; and every class a warning can score is protected, so the census never
+quiets one of them in the first place.
+
+**Only some classes score.** Tracker, smart-glasses, drone, hunter, alpr,
+bodycam and deauth-flood are worth caution or more, and those are the ones a
+warning can add to. Camera, fleet-telematics, accessory, follower, tailing and
+anything unidentified are heard and shown, with 0, and add nothing: a warning
+about a fixture is a fact about the room, and the cheapest attack on a mesh is
+to fill it with true but useless statements.
+
+**A warning about a class whose monitor is switched off here adds nothing from
+any peer, trusted or not.** Switching a monitor off on this node also switches
+off what any peer can add for that class, which is the promise
+[docs/detecting.md](detecting.md) already makes: nothing automatic, a mesh peer
+included, overrides the owner's off switch. The warning is still heard and still listed, as not counted and
+labelled `monitor off here`, so the silence is visible rather than assumed.
+
+**A warning holds, then it stops.** It counts while its age plus the time since
+this node heard it is under 300 seconds. An age of 255, the sender's saturated
+"a while ago", counts nothing, because a sender keeps announcing a device for
+up to half an hour after it last saw it and every receiver would otherwise hold
+the points for a threat that has left. There is no fading: the full value
+until the hold ends and then none, because the score has no accumulator to
+bleed.
+
+Six scenes, each checked by the host tests:
+
+| what this node sees | what peers say | score | level |
+|---|---|---|---|
+| nothing | one friend: a bodycam | 3 | caution |
+| nothing | two friends: a bodycam | 6 | alert |
+| nothing | two friends: a Flipper (hunter) | 3 | caution |
+| a Flipper | one friend: a Flipper | 5 | caution |
+| a Flipper | two friends: a Flipper | 6 | alert |
+| a Flipper | any number of strangers: a Flipper | 4 | caution |
+
+**Where it shows.** `/api/status` `peers` carries the three point figures,
+`/api/peers` lists every held warning with its counts, points, whether it was
+seen here and why it did or did not count, `/api/history` `peer_events` holds
+what peers added during this boot (RAM only, and gone on reboot), the console
+banner and findings table and its Mesh warnings panel, the coloured band and
+rows on a screen board, the log line when a level changes, the notification
+note, and one card row per trusted report. Every place that lists peer points
+names the node and whether it was trusted. The stranger voice is named by its
+lowest node id, the one the rule picks, with how many stranger nodes it speaks
+for, so the same warnings read the same whichever order they arrived in.
+
+**Known limits, said plainly.**
+
+- A captured trusted warning that is replayed after its hold counts again. It
+  is still one node, so it lifts a board to caution at most; the table
+  refuses a repeated sequence only while the entry is live, and accepts it
+  again once the entry has expired.
+- A forged tag is one trusted voice. Thirty-two bits is not a strong
+  signature, and what keeps a forgery cheap to survive is the bound above, not
+  the tag.
+- Two friends whose sixteen-bit node ids collide count as one node. That errs
+  low: the board hears less than it was told, never more.
 
 ## Hearing other nodes, without becoming findable
 
@@ -263,10 +374,12 @@ benefits from every warning in range and emits nothing.
 device cannot authenticate can draw attention and can never quiet anything.
 That asymmetry is what makes an open mesh survivable — an adversary standing up
 ten invented nodes produces *noise*, never blindness, and noise is recoverable
-in a way that silent suppression is not. In this slice it holds by
-construction: there is no suppression path at all, and a warning contributes
-**zero** to the score. The device says what it heard and whose it was, and a
-person decides.
+in a way that silent suppression is not. It holds by construction: there is no
+suppression path at all, and a stranger's warning adds at most one point on a
+class this node already counts — folded to one voice however many ids appear,
+never enough to change the level, never a way to quiet anything
+([the rule](#what-a-warning-adds-to-the-score)). The device says what it heard
+and whose it was, and a person decides.
 
 A warning rides in manufacturer-specific data under company `0xFFFF`, the SIG's
 reserved non-production ID, with four magic bytes that make it specific —
@@ -289,18 +402,21 @@ Four details of the format earn their place:
   arithmetically. Repeating somebody's warning back at them forever is the
   cheapest attack on a table like this, and a plain greater-than would silence
   a node permanently the first time its counter wrapped or it rebooted.
-- **One entry per node.** A node repeating itself must not be able to fill the
-  table and push other nodes out.
+- **One entry per node and trust.** A node repeating itself must not be able to
+  fill the table and push other nodes out. Strangers are evicted first and can
+  never evict a live trusted entry, and a stranger who uses a friend's id gets
+  an entry and a sequence window of its own, so it cannot overwrite the
+  friend's or make the friend's next warning look like a replay.
 - **Warnings expire**, after five minutes. A warning is about *now*; one kept
   for ever would let a single sighting look like a standing alarm.
 - **A version we do not know is refused.** Unlike another project's format this
   one is ours, and reading fields by a layout we have since changed is how a
   position ends up in the wrong place.
 
-A tag field is parsed for its length and then ignored, because there is no key
-management yet. A tag that cannot be checked must never be mistaken for one
-that has been, so `trusted` is always false — which is also why nothing in this
-slice can be trusted enough to suppress.
+A tag field is parsed for its length and not judged there. A tag that cannot be
+checked must never be mistaken for one that has been, so the parser leaves
+`trusted` false and the receive path sets it, after checking the tag against
+the household secret (see [Warnings your own nodes signed](#warnings-your-own-nodes-signed)).
 
 **Every field is as small as it is for one reason.** A legacy advert gives 24
 usable bytes once a flags element is present. The first version of the format
@@ -336,5 +452,8 @@ The version bumped to 2 when this changed. An unknown version is refused, so an
 old node and a new one simply do not hear each other — the right failure, and
 free right now because nothing transmits yet.
 
-`/api/status` reports `peers: {nodes, warnings}`, which is how a headless
-receive-only node says whether it is hearing anything at all.
+`/api/status` reports `peers: {nodes, warnings}` and the three point figures,
+`points`, `trusted_points` and `stranger_points`. `nodes` counts distinct node
+ids, and `warnings` the standing entries, so a node heard both signed and
+unsigned is one node with two warnings. This is how a headless receive-only node
+says whether it is hearing anything at all, and what it did about it.

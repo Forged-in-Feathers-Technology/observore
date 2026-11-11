@@ -345,6 +345,15 @@ Sustained presence is not lost; it has moved to where it belongs. A device does
 not *become* a follower until it has been there five minutes. Duration decides
 what something is, and the score says what is here.
 
+**A warning from another node adds bounded points.** A node that shares your
+household key adds 3 for each class it warns about, and no more than the class
+is worth on its own; a stranger's warning adds 1 for all strangers together, and
+only about a class this node already counts. A warning on its own stops below
+alert: one friend can lift a quiet board to caution and not past it, and
+strangers can never change the level. Nothing a peer sends lowers a score, quiets a device or
+changes what a protected class reads. The rule, its limits and the arithmetic
+are in [docs/mesh.md](docs/mesh.md#what-a-warning-adds-to-the-score).
+
 ### Channels
 
 The sniffer sweeps a list of channels, not a range, because 5 GHz channel
@@ -544,7 +553,8 @@ So it is worth being precise about what survives a power cut:
 | household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
 | device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
 | peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
-| card log *(1.85 and 1.43 only, off by default)* | every detection, as CSV: time, address, class, label, signal, vendor | until you delete the file |
+| peer reports | the last 8 peer contributions this boot: node id, class, points | RAM only; gone on reboot |
+| card log *(1.85 and 1.43 only, off by default)* | every detection and every trusted peer report, as CSV: time, address, class, label, signal, vendor | until you delete the file |
 
 ### What a recovered board gives up
 
