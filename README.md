@@ -199,6 +199,9 @@ location and broadcast it would be making that call for you. It goes out
 coarse, to about 2.8 metres, with no setting to make it finer: a node
 broadcasting its exact position would be offering a precision that only helps
 somebody looking for it.
+A node that knows its own position shows a received one as an approximate
+distance and compass bearing, such as ~120 m NE; see
+[How a received position reads](docs/mesh.md#how-a-received-position-reads).
 
 The Wi-Fi scan being passive matters as much as the BLE one. An active scan
 broadcasts probe requests carrying the device's own MAC on every channel, every
@@ -553,8 +556,8 @@ So it is worth being precise about what survives a power cut:
 | household census | 64 identities, **as hashes** — a 32-bit id and up to eight 16-bit address hashes | days fall out of a 16-day window |
 | device table | everything currently nearby | RAM only; 30 minutes, gone on reboot |
 | peer warnings | 8 warnings from other nodes | RAM only; 5 minutes |
-| peer reports | the last 8 peer contributions this boot: node id, class, points | RAM only; gone on reboot |
-| card log *(1.85 and 1.43 only, off by default)* | every detection and every trusted peer report, as CSV: time, address, class, label, signal, vendor | until you delete the file |
+| peer reports | the last 8 peer contributions this boot: node id, class, points, and where the sender said it was | RAM only; gone on reboot |
+| card log *(1.85 and 1.43 only, off by default)* | every detection and every trusted peer report, as CSV: time, address, class, label, signal, vendor; a peer report's distance and bearing as text, never coordinates | until you delete the file |
 
 ### What a recovered board gives up
 

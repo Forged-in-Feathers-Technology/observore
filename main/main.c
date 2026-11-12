@@ -254,20 +254,28 @@ static observore_status_t publish(void)
 
     /* What the peers added, written down once. Static, not on the stack: the
      * main task has little of it to spare (see mesh_warn()), and a weight is
-     * 84 bytes. Each share that starts counting is logged when it starts, the
-     * same once-per-change rule a detection follows, so a score that rose
+     * 164 bytes. Each share that starts counting is logged when it starts,
+     * the same once-per-change rule a detection follows, so a score that rose
      * because another node spoke has the node, its trust and the class in
-     * the log next to the rise. */
+     * the log next to the rise, and where it is when it said. */
     static observore_peer_weight_t s_pw;
     static uint8_t s_started[OBSERVORE_PEER_MAX];
     static char s_peer_text[96];     /* longest counting text: 65 characters */
+    /* The reading beside it, static for the same stack reason. */
+    static char s_peer_where[OBSERVORE_PEER_WHERE_LEN];
     observore_track_peer_weight(&s_pw, now);
     size_t started = observore_peer_events_update(&s_pw, now, s_started,
                                                   OBSERVORE_PEER_MAX);
+    int32_t own_lat = 0, own_lon = 0;
+    bool have_own = observore_nodepos_get(&own_lat, &own_lon);
     for (size_t i = 0; i < started; i++) {
         observore_peer_share_text(&s_pw.share[s_started[i]], s_peer_text,
                                   sizeof(s_peer_text));
-        ESP_LOGW(TAG, "peer report: %s", s_peer_text);
+        observore_peer_share_where(&s_pw.share[s_started[i]], have_own, own_lat,
+                                   own_lon, false, s_peer_where,
+                                   sizeof(s_peer_where));
+        ESP_LOGW(TAG, "peer report: %s%s%s", s_peer_text,
+                 s_peer_where[0] ? " " : "", s_peer_where);
         /* The card gets a friend's report and never a stranger's: a source
          * anyone can broadcast must not be able to fill it. */
         if (s_pw.share[s_started[i]].trusted) {

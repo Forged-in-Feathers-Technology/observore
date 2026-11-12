@@ -179,7 +179,74 @@ sender was trusted, and the position when one was sent. The function behind
 it, `observore_peer_recent()`, existed and was host-tested and had **no caller
 in the firmware**: a node could report that three neighbours were warning and
 nothing could say what about. Counting is not reporting, and a position that
-cannot be read back is not worth sending.
+cannot be read back is not worth sending. Each warning there also carries
+`where`, `dist_m`, `dir` and `far`, described in
+[How a received position reads](#how-a-received-position-reads).
+
+### How a received position reads
+
+A position on the wire is only coordinates. What a person needs is how far
+away the sender is and which way to look, so a node that knows its own
+position (`POST /api/nodepos`, or a GPS fix when none was typed) turns a
+received one into an approximate distance and an eight-point compass bearing
+from itself to the sender, for example `~120 m NE`. Eight points, not sixteen,
+because sixteen would claim more than two coarse positions hold.
+
+**Distance bands.** The distance is rounded to the nearest 10 m under a
+kilometre, shown with one decimal from 1 to 10 km, and in whole kilometres
+beyond that. Ten metres is the floor because a position typed to four decimals
+is only good to about 11 m, and the sender's end is cut to about 2.8 m on the
+wire. The value is rounded before the band is picked, so 995 m reads `~1.0 km`
+and never `~1000 m`. Every distance starts with `~`.
+
+**Nearby.** Below `OBSERVORE_PEER_NEARBY_M` (20 m) the reading is `nearby`,
+with no direction. At that range the two ends' errors are as large as the
+distance, and the arrow would point into the wrong sector more than a quarter
+of the time; a confident wrong arrow is worse than none.
+
+**Far for BLE.** Above `OBSERVORE_PEER_FAR_M` (2 km) the distance is shown with
+`(far for BLE)` after it, not hidden. No BLE hearing reaches that far, so one
+of the two positions is wrong, a mistyped position or a bad fix, and showing
+the number is what makes the mistake visible. The screen, which has less room,
+says `(far)`.
+
+**Without a position of its own.** A node that does not know where it is cannot
+measure anything. It says `position known` for a trusted sender and
+`position claimed` for a stranger, so the reading still tells you that the
+warning said where it came from.
+
+**A stranger's position is its claim.** Anyone can broadcast a position, and
+an unsigned one costs nothing to forge, so a stranger's reads `claims ~120 m NE`
+in the console and in history and is never drawn on the screen. All strangers
+warning about one class count as one voice, so a folded voice reads as a count
+rather than as one sender's position, for example `3 nodes, 2 with position`;
+the individual claims stay listed in `/api/peers`. A warning that adds no
+points still gets a reading wherever it is listed: a position says something
+about the sender whether or not the warning counted.
+
+**Where it appears.**
+
+- `/api/peers`: each warning carries `where` (the text), and `dist_m`, `dir`
+  and `far` when there is a distance or a bearing.
+- The console's Mesh warnings and Peer reports this boot tables, in a `where`
+  column.
+- `/api/history`: each peer event carries `where`, computed when the page is
+  read against whatever this node knows then, so clearing this node's position
+  turns a distance back into `position known`. Coordinates are never listed.
+- The serial log's peer report line.
+- The card's detail text for a trusted peer report, as words and never as a
+  coordinate, because a card is read anywhere.
+- The screen, for trusted rows only. On the 3.5-inch panel each trusted row
+  carries its reading on the same row. Narrower panels have two rows to spare
+  for peers, so one dim line goes under the first peer row, the one that
+  explains the band's colour, and the other rows' readings are in the console
+  and in history. When local findings fill the screen the second peer row is
+  the one dropped for that line; the band's `+N peer` total still counts it.
+
+**A position never changes the score.** It is display only, for friends and
+strangers alike: a forged position cannot raise or lower anything, and the host
+suite proves the points are identical with and without positions. Only the
+newest warning's position from a sender is shown; nothing tracks movement.
 
 ## Warnings your own nodes signed
 

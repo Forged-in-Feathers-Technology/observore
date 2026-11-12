@@ -628,8 +628,14 @@ void observore_track_status(observore_status_t *out, int64_t now_us)
                                                 : (uint16_t)sum;
 
     /* Lock order is this lock, then the peer lock; nothing in the peer module
-     * calls back into the tracker. */
-    observore_peer_weight_t pw;
+     * calls back into the tracker.
+     *
+     * Static, not on the stack: a weight is 164 bytes now that each share
+     * carries the sender's position, and this runs on the 6144-byte main task
+     * and on the HTTP task. That is safe because the track lock is held for
+     * this variable's whole life, nothing keeps a pointer to it past the
+     * unlock, and the host build is single-threaded. */
+    static observore_peer_weight_t pw;
     observore_peer_weigh_now(now_us, counting, observore_monitors_off_mask(),
                              base, &pw);
     uint32_t score = sum + pw.total;

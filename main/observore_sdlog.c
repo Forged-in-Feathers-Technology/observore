@@ -20,6 +20,7 @@ static const char *TAG = "observore.sdlog";
 #include "observore_clock.h"
 #include "observore_csv.h"
 #include "observore_detect.h"
+#include "observore_nodepos.h"
 #include "observore_util.h"
 #include "observore_sd.h"
 
@@ -235,11 +236,25 @@ void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us)
     char when[32] = "";
     observore_clock_iso(now_us, when, sizeof(when));
 
-    char raw[48];
-    char detail[sizeof(raw) * 2 + 4];
-    snprintf(raw, sizeof(raw), "node %04X trusted +%u %s",
+    /* The reading of where the sender is goes at the end of the detail text.
+     * It is worked out now, when the line is written. A removable card is read
+     * on any machine, so it carries the reading as words and never a
+     * coordinate, and the column layout is unchanged: every reader of the old
+     * files parses the new ones. Only the main task calls this, so the three
+     * buffers are static and stay off its stack: raw holds the compiler's
+     * worst case of 95 bytes, the existing text at its widest, a space and a
+     * 47-character reading. */
+    static char raw[96];
+    static char detail[sizeof(raw) * 2 + 4];
+    static char where[OBSERVORE_PEER_WHERE_LEN];
+    int32_t own_lat = 0, own_lon = 0;
+    bool have_own = observore_nodepos_get(&own_lat, &own_lon);
+    observore_peer_share_where(s, have_own, own_lat, own_lon, false, where,
+                               sizeof(where));
+    snprintf(raw, sizeof(raw), "node %04X trusted +%u %s%s%s",
              (unsigned)s->node, (unsigned)s->points,
-             s->seen_here ? "seen here" : "not seen here");
+             s->seen_here ? "seen here" : "not seen here",
+             where[0] ? " " : "", where);
     observore_csv_field(detail, sizeof(detail), raw);
 
     int n = fprintf(f, "%s,%lld,%s,,0,peer,,0,peer,peer report,%s,,1\n",
