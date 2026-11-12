@@ -631,3 +631,53 @@ size_t observore_peer_reading_text(const observore_peer_reading_t *r, bool trust
 size_t observore_peer_share_where(const observore_peer_share_t *s, bool have_own,
                                   int32_t own_lat_e7, int32_t own_lon_e7,
                                   bool screen, char *buf, size_t len);
+
+/* ---- Where the screen puts a reading ----------------------------------------
+ *
+ * The watch page keeps a few rows below the local findings for what other
+ * nodes said, so a crowd of local findings cannot push the one report that
+ * explains the band's colour off the glass. This many rows at most: peers never
+ * take more than these from local findings, and a line that carries a reading
+ * counts against them. */
+#define OBSERVORE_PEER_SCREEN_ROWS 2
+
+/* A slot that shows the first peer row's reading on the line under it, rather
+ * than a peer row. */
+#define OBSERVORE_PEER_SLOT_READING 0xFF
+
+/* Room for every slot there can be: every peer row and one reading line. */
+#define OBSERVORE_PEER_SCREEN_SLOTS (OBSERVORE_PEER_MAX + 1)
+
+/* The display is not built on the host, so the choice of which row gets a
+ * reading, and how many rows peers keep, is made here where the suite can check
+ * it; the drawing code draws what these return and decides neither.
+ *
+ * reading[k] is true when the k-th peer row, in drawing order, has a screen
+ * reading (observore_peer_share_where() in screen form is not empty). n is how
+ * many peer rows there are. narrow is true on a panel with no room for a
+ * reading on the row itself.
+ *
+ * On a narrow panel one line carries a reading, under the first row only: two
+ * reserved rows leave room for one, and the first row is the one that explains
+ * the band's colour. The line is there only when that first row has a screen
+ * reading, so a stranger as the first row, whose screen reading is always
+ * empty, gets none even when a later row has one. The line comes before the
+ * second row, so with two rows free the second row is the one dropped, and
+ * with one row free the line is dropped, not the row it explains. On a wide
+ * panel each row carries its own reading and no line is ever laid out.
+ *
+ * observore_peer_screen_reserve() returns the rows the findings must leave: n
+ * plus the line, at most OBSERVORE_PEER_SCREEN_ROWS.
+ *
+ * observore_peer_screen_slots() fills slot[0..returned) top to bottom with the
+ * index of a peer row or OBSERVORE_PEER_SLOT_READING, stops at rows_free, and
+ * returns how many. slot must hold OBSERVORE_PEER_SCREEN_SLOTS.
+ *
+ * A NULL reading is read as no readings, a NULL slot returns 0, and n above
+ * OBSERVORE_PEER_MAX is taken as OBSERVORE_PEER_MAX. The first element of
+ * reading is looked at only when n, after that clamp, is at least 1: with no
+ * rows both return 0 without reading anything, so an array the caller did not
+ * fill cannot add a line. Pure: no state, no arithmetic on positions. */
+size_t observore_peer_screen_reserve(const bool *reading, size_t n, bool narrow);
+size_t observore_peer_screen_slots(const bool *reading, size_t n, bool narrow,
+                                   size_t rows_free, uint8_t *slot);

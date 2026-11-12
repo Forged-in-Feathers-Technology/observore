@@ -5223,6 +5223,183 @@ static void test_a_position_stays_with_its_sender(void)
     peer_scene_reset();
 }
 
+/* A slot list as text ("0 R 1": R is the reading line), so each check prints
+ * what it compared. */
+static const char *slots_text(const uint8_t *slot, size_t k, char *buf, size_t len)
+{
+    size_t at = 0;
+    buf[0] = '\0';
+    for (size_t i = 0; i < k && at + 4 < len; i++) {
+        if (slot[i] == OBSERVORE_PEER_SLOT_READING) {
+            at += (size_t)snprintf(buf + at, len - at, "%sR", i ? " " : "");
+        } else {
+            at += (size_t)snprintf(buf + at, len - at, "%s%u", i ? " " : "",
+                                   (unsigned)slot[i]);
+        }
+    }
+    return buf;
+}
+
+/* One layout question: what do rows_free free rows hold for these readings? */
+static bool screen_slots_are(const bool *reading, size_t n, bool narrow,
+                             size_t rows_free, const char *want)
+{
+    uint8_t slot[OBSERVORE_PEER_SCREEN_SLOTS];
+    char got[64];
+    size_t k = observore_peer_screen_slots(reading, n, narrow, rows_free, slot);
+    slots_text(slot, k, got, sizeof(got));
+    CHECK(strcmp(got, want) == 0,
+          "%s, %zu row(s), %zu free: slots '%s', wanted '%s'",
+          narrow ? "narrow" : "wide", n, rows_free, got, want);
+    return strcmp(got, want) == 0;
+}
+
+static void test_the_screen_keeps_two_rows_for_peers(void)
+{
+    banner("the screen keeps two rows for peers");
+
+    peer_scene_reset();
+
+    const bool two[2] = {true, true};
+    const bool three[3] = {true, true, true};
+    const bool eight[OBSERVORE_PEER_MAX] = {true, true, true, true,
+                                            true, true, true, true};
+    const bool one[1] = {true};
+    const bool one_bare[1] = {false};
+
+    /* Narrow: the line goes before the second row, so with two rows free the
+     * second row is the one dropped. */
+    CHECK(observore_peer_screen_reserve(two, 2, true) == 2,
+          "narrow, two rows with readings keep 2 rows");
+    screen_slots_are(two, 2, true, 2, "0 R");
+    screen_slots_are(two, 2, true, 3, "0 R 1");
+    screen_slots_are(two, 2, true, 8, "0 R 1");
+
+    /* One line only, under the first row, never under another. */
+    CHECK(observore_peer_screen_reserve(three, 3, true) == 2,
+          "narrow, three rows with readings keep 2 rows");
+    screen_slots_are(three, 3, true, 8, "0 R 1 2");
+
+    /* One row with a reading, and one without. */
+    CHECK(observore_peer_screen_reserve(one, 1, true) == 2,
+          "narrow, one row with a reading keeps the row and its line");
+    screen_slots_are(one, 1, true, 2, "0 R");
+    CHECK(observore_peer_screen_reserve(one_bare, 1, true) == 1,
+          "narrow, one row without a reading keeps 1 row");
+    screen_slots_are(one_bare, 1, true, 2, "0");
+
+    /* Wide: every row carries its own reading and no line is laid out. */
+    CHECK(observore_peer_screen_reserve(two, 2, false) == 2,
+          "wide, two rows keep 2 rows");
+    screen_slots_are(two, 2, false, 2, "0 1");
+    screen_slots_are(two, 2, false, 3, "0 1");
+    CHECK(observore_peer_screen_reserve(one, 1, false) == 1,
+          "wide, one row with a reading keeps 1 row");
+    screen_slots_are(one, 1, false, 2, "0");
+
+    /* The budget bound, and the most that can ever be laid out. */
+    CHECK(observore_peer_screen_reserve(eight, 8, true) == OBSERVORE_PEER_SCREEN_ROWS &&
+              observore_peer_screen_reserve(eight, 8, false) == OBSERVORE_PEER_SCREEN_ROWS,
+          "eight rows keep %d on either width", OBSERVORE_PEER_SCREEN_ROWS);
+    screen_slots_are(eight, 8, true, 20, "0 R 1 2 3 4 5 6 7");
+    screen_slots_are(eight, 8, false, 20, "0 1 2 3 4 5 6 7");
+    {
+        uint8_t slot[OBSERVORE_PEER_SCREEN_SLOTS];
+        CHECK(observore_peer_screen_slots(eight, 8, true, 20, slot) ==
+                      OBSERVORE_PEER_SCREEN_SLOTS &&
+                  observore_peer_screen_slots(eight, 8, false, 20, slot) ==
+                      OBSERVORE_PEER_MAX,
+              "narrow fills %d slots and wide fills %d", OBSERVORE_PEER_SCREEN_SLOTS,
+              OBSERVORE_PEER_MAX);
+    }
+
+    /* Little room: the line goes before the row it explains does. */
+    screen_slots_are(two, 2, true, 1, "0");
+    screen_slots_are(two, 2, true, 0, "");
+
+    /* No rows: neither function looks at the readings, so a first element left
+     * set cannot add a line or a reserved row. */
+    for (size_t free_rows = 0; free_rows <= 9; free_rows++) {
+        CHECK(observore_peer_screen_reserve(one, 0, true) == 0 &&
+                  observore_peer_screen_reserve(one, 0, false) == 0,
+              "no rows reserve nothing, even with a stale reading set");
+        screen_slots_are(one, 0, true, free_rows, "");
+        screen_slots_are(one, 0, false, free_rows, "");
+    }
+
+    /* Edges. */
+    CHECK(observore_peer_screen_slots(two, 2, true, 3, NULL) == 0,
+          "a NULL slot array gives nothing");
+    CHECK(observore_peer_screen_reserve(NULL, 2, true) == 2,
+          "a NULL reading array is read as no readings");
+    screen_slots_are(NULL, 2, true, 3, "0 1");
+    CHECK(observore_peer_screen_reserve(eight, 100, true) == OBSERVORE_PEER_SCREEN_ROWS,
+          "more rows than there can be are taken as the most");
+    screen_slots_are(eight, 100, false, 20, "0 1 2 3 4 5 6 7");
+
+    /* The stranger first (the first ordered row is the stranger voice, whose
+     * screen reading is always empty): no line, even though a trusted row
+     * further down has a reading. Built from a real weight. */
+    peer_scene_reset();
+    observore_peer_weight_t pw;
+    char buf[OBSERVORE_PEER_WHERE_LEN];
+    see_flipper(SECS(5));
+    CHECK(observore_monitors_set(OBSERVORE_CLASS_DRONE, false),
+          "the drone monitor is switched off");
+    peer_say(0x0111, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    peer_say_at(0x3A7F, OBSERVORE_CLASS_DRONE, 1, 0, true, 515084000, -1263560,
+                SECS(11));
+    observore_track_peer_weight(&pw, SECS(12));
+    const observore_peer_share_t *voice = NULL;
+    const observore_peer_share_t *monitor_off = NULL;
+    for (size_t i = 0; i < pw.n; i++) {
+        const observore_peer_share_t *sh = &pw.share[i];
+        if (!sh->trusted && sh->points > 0) {
+            voice = sh;
+        } else if (sh->trusted && sh->points == 0 &&
+                   sh->why == OBSERVORE_PEER_WHY_MONITOR_OFF) {
+            monitor_off = sh;
+        }
+    }
+    CHECK(voice != NULL && monitor_off != NULL,
+          "a counting stranger voice and a trusted warning put down to its monitor "
+          "being off here are both held");
+    if (voice && monitor_off) {
+        /* The watch page puts a stranger voice before a trusted warning whose
+         * monitor is off. */
+        const observore_peer_share_t *ordered[2] = {voice, monitor_off};
+        bool reading[2];
+        for (size_t k = 0; k < 2; k++) {
+            observore_peer_share_where(ordered[k], true, OWN_LAT, OWN_LON, true, buf,
+                                       sizeof(buf));
+            reading[k] = buf[0] != '\0';
+            if (k == 1) {
+                CHECK(strcmp(buf, "~150 m NE") == 0,
+                      "the monitor-off friend still reads on the glass: '%s'", buf);
+            } else {
+                CHECK(buf[0] == '\0', "the stranger voice reads nothing on the glass: '%s'", buf);
+            }
+        }
+        CHECK(!reading[0] && reading[1],
+              "readings in drawing order: %d, %d", (int)reading[0], (int)reading[1]);
+        CHECK(observore_peer_screen_reserve(reading, 2, true) == 2,
+              "narrow, stranger first: 2 rows and no line");
+        for (size_t free_rows = 0; free_rows <= 9; free_rows++) {
+            uint8_t slot[OBSERVORE_PEER_SCREEN_SLOTS];
+            size_t k = observore_peer_screen_slots(reading, 2, true, free_rows, slot);
+            bool line = false;
+            for (size_t i = 0; i < k; i++) {
+                line = line || slot[i] == OBSERVORE_PEER_SLOT_READING;
+            }
+            CHECK(!line, "no free row count gives a reading line under a stranger "
+                         "(%zu free)", free_rows);
+        }
+        screen_slots_are(reading, 2, true, 3, "0 1");
+    }
+
+    peer_scene_reset();
+}
+
 static void test_bcd(void)
 {
     banner("the clock chip speaks BCD and nothing else here does");
@@ -8634,6 +8811,7 @@ int main(void)
     test_where_is_never_finer_than_the_position();
     test_a_position_never_changes_a_score();
     test_a_position_stays_with_its_sender();
+    test_the_screen_keeps_two_rows_for_peers();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

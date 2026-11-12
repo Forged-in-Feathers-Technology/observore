@@ -1167,3 +1167,41 @@ size_t observore_peer_share_where(const observore_peer_share_t *s, bool have_own
                           s->lat_e7, s->lon_e7, &r);
     return observore_peer_reading_text(&r, s->trusted, screen, buf, len);
 }
+
+size_t observore_peer_screen_reserve(const bool *reading, size_t n, bool narrow)
+{
+    if (n > OBSERVORE_PEER_MAX) {
+        n = OBSERVORE_PEER_MAX;
+    }
+    if (n == 0) {
+        return 0;
+    }
+    size_t rows = n;
+    if (narrow && reading && reading[0]) {
+        rows++;
+    }
+    return rows < OBSERVORE_PEER_SCREEN_ROWS ? rows : OBSERVORE_PEER_SCREEN_ROWS;
+}
+
+size_t observore_peer_screen_slots(const bool *reading, size_t n, bool narrow,
+                                   size_t rows_free, uint8_t *slot)
+{
+    if (!slot) {
+        return 0;
+    }
+    if (n > OBSERVORE_PEER_MAX) {
+        n = OBSERVORE_PEER_MAX;
+    }
+    if (n == 0) {
+        return 0;
+    }
+    const bool line = narrow && reading && reading[0];
+    size_t out = 0;
+    for (size_t k = 0; k < n && out < rows_free; k++) {
+        slot[out++] = (uint8_t)k;
+        if (k == 0 && line && out < rows_free) {
+            slot[out++] = OBSERVORE_PEER_SLOT_READING;
+        }
+    }
+    return out;
+}
