@@ -413,6 +413,15 @@ typedef struct {
     uint8_t  points;       /* what this warning actually added              */
     uint8_t  why;          /* an observore_peer_why_t                       */
     uint16_t age_s;        /* wire age plus whole seconds since heard       */
+    /* Where the sender said it was. Display-only: copied from the newest held
+     * warning from that sender, and no rule that decides a share's points
+     * reads any of it, so a position, forged or genuine, cannot move a score. */
+    bool     have_pos;     /* the sender gave a position this format accepts */
+    uint8_t  pos_n;        /* warnings with a usable position this share
+                            * stands for: 0 or 1 for one sender, the count
+                            * over the folded strangers for a representative */
+    int32_t  lat_e7, lon_e7;   /* the coarse position as received; zero when
+                                * have_pos is false                          */
 } observore_peer_share_t;
 
 typedef struct {
@@ -445,9 +454,11 @@ void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
 
 /* The record of what peers added during this boot.
  *
- * Eight events, because that is what the RAM costs: each is at most 32 bytes
- * (the host test prints the size), so the ring is at most 256 bytes, and a
+ * Eight events, because that is what the RAM costs: each is at most 40 bytes
+ * (the host test prints the size), so the ring is at most 320 bytes, and a
  * mesh of eight nodes in range cannot start events faster than they are read.
+ * An event keeps the sender's latest coarse position with the rest of its
+ * share, refreshed each round.
  * RAM only, and deliberately: the persisted history has a fixed layout and a
  * migration to pay for, and a source that strangers can feed must never be
  * able to push a real detection out of the record that survives a restart.
@@ -505,3 +516,116 @@ size_t observore_peer_events_copy(observore_peer_event_t *out, size_t max);
  * len - 1, and a NULL share writes an empty string. */
 size_t observore_peer_share_text(const observore_peer_share_t *s, char *buf,
                                  size_t len);
+
+/* ---- Where a warning came from ---------------------------------------------
+ *
+ * A warning can carry the sender's coarse position. These turn it into words:
+ * how far away, and in which of eight directions, from this node to the
+ * sender. Every surface calls observore_peer_share_where() and prints what it
+ * returns; none does any arithmetic of its own, so the bands, the thresholds
+ * and the trust wording cannot drift apart between the console, the log, the
+ * history and the screen. Display only: nothing here feeds a score.
+ *
+ * Below this many raw metres the reading is "nearby" and carries no
+ * direction. Both ends are coarse: the sender's position is cut to about 2.8
+ * metres on the wire, and an owner who types a position by hand usually gives
+ * four or five decimals, which is only good to about 11 metres. A Monte Carlo
+ * with both ends typed to four decimals plus the sender's truncation puts the
+ * 90th-percentile bearing error at half a sector (22.5 degrees) at about 20
+ * metres, and below that the arrow lands in the neighbouring sector more than
+ * a quarter of the time. A direction there would be noise that flips between
+ * readings, so none is given. Only the sender's end is cut: this node's own
+ * position is stored exactly. */
+#define OBSERVORE_PEER_NEARBY_M 20
+
+/* Raw metres above which the reading is flagged as far for BLE. A free-space
+ * link budget at the chip's maximum +9 dBm and about -97 dBm sensitivity
+ * reaches about 2 km, and the default 0 dBm about 0.7 km, so a distance beyond
+ * this cannot be a real BLE hearing and one of the two positions is wrong (a
+ * mistyped owner position, a bad fix). It is shown and flagged rather than
+ * hidden, because showing it is what makes the mistake visible. */
+#define OBSERVORE_PEER_FAR_M 2000
+
+_Static_assert(OBSERVORE_PEER_NEARBY_M < OBSERVORE_PEER_FAR_M,
+               "nearby sits inside BLE range");
+
+/* Room for the longest reading in the console, the log, the history and the
+ * card: "claims ~20015 km NE (far for BLE)" is 33 characters. */
+#define OBSERVORE_PEER_WHERE_LEN 48
+
+/* Room for the longest reading on a screen row: "~20015 km NE (far)" is 18
+ * characters. */
+#define OBSERVORE_PEER_WHERE_SCREEN_LEN 20
+
+typedef enum {
+    OBSERVORE_PEER_READ_NONE = 0,  /* the sender gave no usable position: say
+                                    * nothing                                 */
+    OBSERVORE_PEER_READ_KNOWN,     /* the sender has one and this node does not */
+    OBSERVORE_PEER_READ_NEARBY,    /* closer than OBSERVORE_PEER_NEARBY_M      */
+    OBSERVORE_PEER_READ_BEARING,   /* a distance and one of eight directions   */
+} observore_peer_read_kind_t;
+
+typedef struct {
+    uint8_t  kind;      /* an observore_peer_read_kind_t                        */
+    uint8_t  sector;    /* 0..7 = N NE E SE S SW W NW, BEARING only             */
+    bool     far;       /* raw distance above OBSERVORE_PEER_FAR_M              */
+    uint32_t dist_m;    /* whole metres, rounded and saturating; NEARBY and
+                         * BEARING only                                        */
+} observore_peer_reading_t;
+
+/* What can be said about a sender's position from this node's. Pure.
+ *
+ * Both ends go through observore_peer_position_usable() before any
+ * arithmetic, so 0,0 is never treated as a place. A sender that is absent or
+ * unusable gives NONE whatever this node knows. A usable sender with this
+ * node's own position absent or unusable gives KNOWN: the position exists but
+ * there is nothing to measure it from. Otherwise the result is the great-circle
+ * distance and initial bearing from this node to the sender: NEARBY when the
+ * raw distance is below OBSERVORE_PEER_NEARBY_M, else BEARING with the sector
+ * and the far flag. Both thresholds are compared on the raw, unrounded
+ * distance. A NULL `out` does nothing. */
+void observore_peer_locate(bool have_own, int32_t own_lat_e7, int32_t own_lon_e7,
+                           bool have_peer, int32_t peer_lat_e7,
+                           int32_t peer_lon_e7, observore_peer_reading_t *out);
+
+/* "N", "NE", "E", "SE", "S", "SW", "W", "NW", and "?" for 8 and above. */
+const char *observore_peer_sector_name(uint8_t sector);
+
+/* The words for one reading.
+ *
+ * NONE writes nothing. KNOWN writes "position known" for a trusted sender and
+ * "position claimed" for a stranger. NEARBY writes "nearby", or "claims
+ * nearby" for a stranger. BEARING writes the distance, a space and the sector
+ * name, for example "~120 m NE", followed when far by " (far for BLE)" or, in
+ * screen form where the row has less room, " (far)".
+ *
+ * Distances are banded to what the positions can carry: the nearest 10 metres
+ * under a kilometre, one decimal of a kilometre up to 10 km, whole kilometres
+ * beyond. The value is rounded first and the band picked from the rounded
+ * value, so 995 m reads "~1.0 km" and never "~1000 m". Every distance starts
+ * with "~".
+ *
+ * A stranger's reading is always worded as its claim, with "claims " in front,
+ * because an unsigned position costs nothing to forge and so is only ever the
+ * sender's word. In screen form a stranger's reading is always empty: the
+ * screen is read at a glance and acted on, so it shows trusted positions only.
+ * The text is built from fixed words, the sector name and digits, so no
+ * received byte reaches it. snprintf semantics: the length written, clamped
+ * to len - 1; a NULL reading writes an empty string. */
+size_t observore_peer_reading_text(const observore_peer_reading_t *r, bool trusted,
+                                   bool screen, char *buf, size_t len);
+
+/* The one call every surface makes for a share, given this node's own
+ * position (from observore_nodepos_get()).
+ *
+ * A folded stranger voice (not trusted, voices above 1) stands for several
+ * senders, so it never shows one sender's position: in console form it writes
+ * "3 nodes, 2 with position" from voices and pos_n, nothing when none of them
+ * gave a position (a lone sender that gave none says nothing either, and the
+ * voice count is already in the share's own text), and in screen form nothing.
+ * Any other share runs observore_peer_locate() on its own position and
+ * observore_peer_reading_text() with its own trust. A NULL share writes an
+ * empty string. */
+size_t observore_peer_share_where(const observore_peer_share_t *s, bool have_own,
+                                  int32_t own_lat_e7, int32_t own_lon_e7,
+                                  bool screen, char *buf, size_t len);

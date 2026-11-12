@@ -2994,6 +2994,32 @@ static bool peer_say(uint16_t node, observore_class_t cls, uint16_t seq,
     return observore_peer_note(&w, now_us);
 }
 
+/* peer_say() with a position: the same build-and-parse path, so the
+ * coordinates come back the way the wire carries them (cut to about 2.8
+ * metres), which is what the share holds. */
+static bool peer_say_at(uint16_t node, observore_class_t cls, uint16_t seq,
+                        uint16_t age_s, bool trusted, int32_t lat_e7,
+                        int32_t lon_e7, int64_t now_us)
+{
+    observore_peer_warning_t src;
+    memset(&src, 0, sizeof(src));
+    src.node = node;
+    src.cls = (uint8_t)cls;
+    src.seq = seq;
+    src.age_s = age_s;
+    src.have_pos = true;
+    src.lat_e7 = lat_e7;
+    src.lon_e7 = lon_e7;
+    uint8_t buf[32];
+    size_t len = observore_peer_build(&src, buf, sizeof(buf));
+    observore_peer_warning_t w;
+    if (len == 0 || !observore_peer_parse(buf, len, &w)) {
+        return false;
+    }
+    w.trusted = trusted;
+    return observore_peer_note(&w, now_us);
+}
+
 static void peer_scene_reset(void)
 {
     observore_track_init();
@@ -4454,9 +4480,9 @@ static void test_a_peer_report_is_written_down_once(void)
     printf("sizeof(observore_peer_event_t) = %u, sizeof(observore_peer_weight_t) = %u\n",
            (unsigned)sizeof(observore_peer_event_t),
            (unsigned)sizeof(observore_peer_weight_t));
-    CHECK(sizeof(observore_peer_event_t) <= 32 &&
-              sizeof(observore_peer_weight_t) <= 96,
-          "the ring stays within 256 bytes and a weight within 96, got %u and %u",
+    CHECK(sizeof(observore_peer_event_t) <= 40 &&
+              sizeof(observore_peer_weight_t) <= 164,
+          "the ring stays within 320 bytes and a weight within 164, got %u and %u",
           (unsigned)sizeof(observore_peer_event_t),
           (unsigned)sizeof(observore_peer_weight_t));
 
@@ -4518,6 +4544,78 @@ static void test_a_peer_report_is_written_down_once(void)
     CHECK(live.total == 3 && k == 1 && observore_track_snapshot(list, 4) == 0,
           "a peer event is not a device: %u points, %u started", live.total,
           (unsigned)k);
+
+    peer_scene_reset();
+}
+
+/* This node's own position for the reading tests: central London-ish, typed
+ * to four decimals the way an owner would. */
+#define OWN_LAT 515074000
+#define OWN_LON (-1278000)
+
+static void test_a_trusted_position_reads_as_distance_and_bearing(void)
+{
+    banner("a trusted position reads as distance and bearing");
+
+    observore_peer_weight_t pw;
+    observore_peer_warning_t held[2];
+    observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX];
+    uint8_t started[OBSERVORE_PEER_MAX];
+    char buf[OBSERVORE_PEER_WHERE_LEN];
+
+    peer_scene_reset();
+    CHECK(peer_say_at(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, 515084000,
+                      -1263560, SECS(10)),
+          "the friend's positioned warning is kept");
+    size_t nheld = observore_peer_recent(held, 2, SECS(11));
+    observore_track_peer_weight(&pw, SECS(11));
+    CHECK(nheld == 1 && pw.n == 1 && pw.share[0].node == 0x3A7F &&
+              pw.share[0].points == 3 && pw.share[0].have_pos &&
+              pw.share[0].pos_n == 1 && pw.share[0].lat_e7 == held[0].lat_e7 &&
+              pw.share[0].lon_e7 == held[0].lon_e7,
+          "the share carries the position the table holds: %u held, node %04X, "
+          "+%u, have_pos %d, pos_n %u, %ld,%ld vs %ld,%ld",
+          (unsigned)nheld, (unsigned)pw.share[0].node,
+          (unsigned)pw.share[0].points, (int)pw.share[0].have_pos,
+          (unsigned)pw.share[0].pos_n, (long)pw.share[0].lat_e7,
+          (long)pw.share[0].lon_e7, (long)held[0].lat_e7, (long)held[0].lon_e7);
+
+    observore_peer_share_where(&pw.share[0], true, OWN_LAT, OWN_LON, false, buf,
+                               sizeof(buf));
+    CHECK(strcmp(buf, "~150 m NE") == 0, "trusted console reading: '%s'", buf);
+    observore_peer_share_where(&pw.share[0], true, OWN_LAT, OWN_LON, true, buf,
+                               sizeof(buf));
+    CHECK(strcmp(buf, "~150 m NE") == 0, "trusted screen reading: '%s'", buf);
+    observore_peer_share_where(&pw.share[0], false, 0, 0, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "position known") == 0,
+          "no position of our own, console: '%s'", buf);
+    observore_peer_share_where(&pw.share[0], false, 0, 0, true, buf, sizeof(buf));
+    CHECK(strcmp(buf, "position known") == 0,
+          "no position of our own, screen: '%s'", buf);
+
+    /* The same warning from a stranger is only ever a claim. */
+    observore_peer_share_t stranger = pw.share[0];
+    stranger.trusted = false;
+    stranger.voices = 1;
+    observore_peer_share_where(&stranger, true, OWN_LAT, OWN_LON, false, buf,
+                               sizeof(buf));
+    CHECK(strcmp(buf, "claims ~150 m NE") == 0, "stranger console: '%s'", buf);
+    observore_peer_share_where(&stranger, true, OWN_LAT, OWN_LON, true, buf,
+                               sizeof(buf));
+    CHECK(buf[0] == '\0', "a stranger's screen reading is empty, got '%s'", buf);
+    observore_peer_share_where(&stranger, false, 0, 0, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "position claimed") == 0,
+          "stranger with no position of our own: '%s'", buf);
+
+    /* The record history will read: the event holds the same position. */
+    size_t k = observore_peer_events_update(&pw, SECS(11), started,
+                                            OBSERVORE_PEER_MAX);
+    size_t n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 1 && n == 1 && ev[0].share.have_pos &&
+              ev[0].share.lat_e7 == pw.share[0].lat_e7 &&
+              ev[0].share.lon_e7 == pw.share[0].lon_e7,
+          "the event holds the sender's position, %u started, %u held",
+          (unsigned)k, (unsigned)n);
 
     peer_scene_reset();
 }
@@ -7929,6 +8027,7 @@ int main(void)
     test_no_warning_lowers_a_score();
     test_every_scene_stays_bounded();
     test_a_peer_report_is_written_down_once();
+    test_a_trusted_position_reads_as_distance_and_bearing();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

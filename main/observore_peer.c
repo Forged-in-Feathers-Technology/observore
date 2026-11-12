@@ -1,5 +1,6 @@
 #include "observore_peer.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -610,6 +611,7 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
     bool cand[OBSERVORE_PEER_MAX] = {false};
     unsigned nt[OBSERVORE_CLASS_MAX] = {0};     /* trusted candidates      */
     unsigned ns[OBSERVORE_CLASS_MAX] = {0};     /* stranger candidates     */
+    unsigned nsp[OBSERVORE_CLASS_MAX] = {0};    /* ... that gave a position */
     int rep[OBSERVORE_CLASS_MAX];               /* the one stranger voice  */
     unsigned spent[OBSERVORE_CLASS_MAX] = {0};  /* points given per class  */
     for (size_t c = 0; c < OBSERVORE_CLASS_MAX; c++) {
@@ -631,6 +633,15 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
                        ((counting_mask >> w[i].cls) & 1u);
         s->voices = 1;
         s->age_s = (uint16_t)(eff_s > 65535 ? 65535 : eff_s);
+
+        /* The sender's position, carried for display. Nothing below that
+         * decides cand[], nt[], ns[], rep[], points or why reads these
+         * fields, so a position, forged or genuine, cannot move a score. */
+        s->have_pos = w[i].have_pos &&
+                      observore_peer_position_usable(w[i].lat_e7, w[i].lon_e7);
+        s->lat_e7 = s->have_pos ? w[i].lat_e7 : 0;
+        s->lon_e7 = s->have_pos ? w[i].lon_e7 : 0;
+        s->pos_n = s->have_pos ? 1 : 0;
 
         /* A cut-off and never a decay: the share is the full value until the
          * hold ends. Compared in microseconds so nothing rounds. */
@@ -659,6 +670,9 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
                 nt[w[i].cls]++;
             } else {
                 ns[w[i].cls]++;
+                if (s->have_pos) {
+                    nsp[w[i].cls]++;
+                }
                 /* Strangers fold to one voice per class: the lowest node id,
                  * the lowest index on a tie, so the same warnings pick the
                  * same node whichever order they arrived in. */
@@ -673,6 +687,7 @@ void observore_peer_weigh(const observore_peer_warning_t *w, size_t nw,
         if (cand[i] && !w[i].trusted) {
             if ((int)i == rep[w[i].cls]) {
                 out->share[i].voices = (uint8_t)ns[w[i].cls];
+                out->share[i].pos_n = (uint8_t)nsp[w[i].cls];
             } else {
                 out->share[i].why = OBSERVORE_PEER_WHY_FOLDED;
             }
@@ -944,4 +959,198 @@ size_t observore_peer_share_text(const observore_peer_share_t *s, char *buf,
         return 0;
     }
     return (size_t)n < len ? (size_t)n : len - 1;
+}
+
+/* ---- where a warning came from -------------------------------------------
+ *
+ * M_PI is not defined under strict C11, which is why the ultrasound module
+ * spells it out too. The mean radius is good to about 0.3 percent against the
+ * real, slightly flattened Earth, far under the 10 metre floor the distance
+ * bands never go below. */
+#define PEER_PI        3.14159265358979323846
+#define PEER_EARTH_R_M 6371000.0
+
+/* Distance and initial bearing from point 1 to point 2, haversine in double.
+ *
+ * Two valid longitudes can differ by 3.6e9, which does not fit an int32_t, so
+ * the difference is taken in 64 bits and wrapped to the short way round: 179.9
+ * degrees east and 179.9 degrees west are 0.2 degrees apart, not 359.8. The
+ * haversine term is clamped to 1 because rounding can push it a hair over for
+ * points on opposite sides of the Earth, and sqrt of a negative would be NaN.
+ * The caller has already refused an unusable position at either end. */
+static void great_circle(int32_t la1, int32_t lo1, int32_t la2, int32_t lo2,
+                         double *dist_m, double *bearing_deg)
+{
+    int64_t dlo = (int64_t)lo2 - lo1;
+    if (dlo > 1800000000LL) {
+        dlo -= 3600000000LL;
+    }
+    if (dlo < -1800000000LL) {
+        dlo += 3600000000LL;
+    }
+    const double k = 1e-7 * PEER_PI / 180.0;
+    double p1 = la1 * k;
+    double p2 = la2 * k;
+    double dphi = (double)((int64_t)la2 - la1) * k;
+    double dl = (double)dlo * k;
+    double s1 = sin(dphi / 2.0);
+    double s2 = sin(dl / 2.0);
+    double a = s1 * s1 + cos(p1) * cos(p2) * s2 * s2;
+    if (a > 1.0) {
+        a = 1.0;
+    }
+    *dist_m = 2.0 * PEER_EARTH_R_M * atan2(sqrt(a), sqrt(1.0 - a));
+
+    double y = sin(dl) * cos(p2);
+    double x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl);
+    double b = atan2(y, x) * 180.0 / PEER_PI;
+    *bearing_deg = (b < 0.0) ? b + 360.0 : b;
+}
+
+void observore_peer_locate(bool have_own, int32_t own_lat_e7, int32_t own_lon_e7,
+                           bool have_peer, int32_t peer_lat_e7,
+                           int32_t peer_lon_e7, observore_peer_reading_t *out)
+{
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (!have_peer || !observore_peer_position_usable(peer_lat_e7, peer_lon_e7)) {
+        return;
+    }
+    if (!have_own || !observore_peer_position_usable(own_lat_e7, own_lon_e7)) {
+        out->kind = OBSERVORE_PEER_READ_KNOWN;
+        return;
+    }
+
+    double d = 0.0;
+    double b = 0.0;
+    great_circle(own_lat_e7, own_lon_e7, peer_lat_e7, peer_lon_e7, &d, &b);
+
+    /* Whole metres for the bands, saturating (the comparison form also sends a
+     * NaN to the saturated value). The two thresholds below are decided on the raw distance, so 19.9
+     * metres is nearby and 20.0 is not, whatever the rounding says. */
+    double r = d + 0.5;
+    out->dist_m = (r < 4294967295.0) ? (uint32_t)r : UINT32_MAX;
+    if (d < (double)OBSERVORE_PEER_NEARBY_M) {
+        out->kind = OBSERVORE_PEER_READ_NEARBY;
+        return;
+    }
+    out->kind = OBSERVORE_PEER_READ_BEARING;
+    out->sector = (uint8_t)((unsigned)((b + 22.5) / 45.0) % 8u);
+    out->far = d > (double)OBSERVORE_PEER_FAR_M;
+}
+
+const char *observore_peer_sector_name(uint8_t sector)
+{
+    static const char *const names[8] = {"N", "NE", "E", "SE",
+                                         "S", "SW", "W", "NW"};
+    return sector < 8 ? names[sector] : "?";
+}
+
+/* A distance in the band its precision allows: the nearest 10 metres under a
+ * kilometre, a decimal of a kilometre up to 10 km, whole kilometres beyond.
+ * Rounding comes first and the band is picked from the rounded value, which
+ * is what makes 995 m read "~1.0 km" and 9950 m read "~10 km"; picking the
+ * band from the raw value would print "~1000 m" and "~10.0 km". 64-bit
+ * arithmetic so nothing overflows near UINT32_MAX. */
+static size_t distance_text(uint32_t m, char *buf, size_t len)
+{
+    uint64_t v = m;
+    uint64_t tens = ((v + 5) / 10) * 10;
+    int n;
+    if (tens < 1000) {
+        n = snprintf(buf, len, "~%u m", (unsigned)tens);
+    } else {
+        uint64_t tenths = (v + 50) / 100;
+        if (tenths < 100) {
+            n = snprintf(buf, len, "~%u.%u km", (unsigned)(tenths / 10),
+                         (unsigned)(tenths % 10));
+        } else {
+            n = snprintf(buf, len, "~%u km", (unsigned)((v + 500) / 1000));
+        }
+    }
+    if (n < 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (size_t)n < len ? (size_t)n : len - 1;
+}
+
+/* What a folded stranger voice says in place of a position: how many senders
+ * it stands for and how many of them gave one. */
+static size_t fold_text(unsigned voices, unsigned with_pos, char *buf, size_t len)
+{
+    int n = snprintf(buf, len, "%u nodes, %u with position", voices, with_pos);
+    if (n < 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (size_t)n < len ? (size_t)n : len - 1;
+}
+
+size_t observore_peer_reading_text(const observore_peer_reading_t *r, bool trusted,
+                                   bool screen, char *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return 0;
+    }
+    buf[0] = '\0';
+    /* Nothing for a stranger on a screen: it is read at a glance and acted
+     * on, and an unsigned position is only ever the sender's claim. */
+    if (!r || (!trusted && screen)) {
+        return 0;
+    }
+    const char *claims = trusted ? "" : "claims ";
+    int n;
+    switch (r->kind) {
+    case OBSERVORE_PEER_READ_KNOWN:
+        n = snprintf(buf, len, "%s", trusted ? "position known" : "position claimed");
+        break;
+    case OBSERVORE_PEER_READ_NEARBY:
+        n = snprintf(buf, len, "%snearby", claims);
+        break;
+    case OBSERVORE_PEER_READ_BEARING: {
+        char dist[24];
+        distance_text(r->dist_m, dist, sizeof(dist));
+        n = snprintf(buf, len, "%s%s %s%s", claims, dist,
+                     observore_peer_sector_name(r->sector),
+                     r->far ? (screen ? " (far)" : " (far for BLE)") : "");
+        break;
+    }
+    default:
+        return 0;
+    }
+    if (n < 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (size_t)n < len ? (size_t)n : len - 1;
+}
+
+size_t observore_peer_share_where(const observore_peer_share_t *s, bool have_own,
+                                  int32_t own_lat_e7, int32_t own_lon_e7,
+                                  bool screen, char *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return 0;
+    }
+    buf[0] = '\0';
+    if (!s) {
+        return 0;
+    }
+    if (!s->trusted && s->voices > 1) {
+        /* A folded row stands for several senders, so it never shows one
+         * sender's position. When none of them gave a position there is
+         * nothing to say about where, the same as a lone sender that gave
+         * none; the voice count is already in the share's own text. */
+        if (screen || s->pos_n == 0) {
+            return 0;
+        }
+        return fold_text(s->voices, s->pos_n, buf, len);
+    }
+    observore_peer_reading_t r;
+    observore_peer_locate(have_own, own_lat_e7, own_lon_e7, s->have_pos,
+                          s->lat_e7, s->lon_e7, &r);
+    return observore_peer_reading_text(&r, s->trusted, screen, buf, len);
 }
