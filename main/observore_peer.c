@@ -867,6 +867,19 @@ size_t observore_peer_events_update(const observore_peer_weight_t *pw,
                 uint16_t node = s_events[i].share.node;
                 s_events[i].share = *s;
                 s_events[i].share.node = node;   /* the one the log named */
+                /* A stranger event is keyed on the class and keeps the node
+                 * its log line named, while the refreshed position belongs to
+                 * whichever stranger now speaks for the class. Showing it
+                 * under the old id would attach a position to a node that
+                 * never sent it, so it is dropped until the named node
+                 * speaks again. A trusted event is keyed on its node, so its
+                 * whole share, position included, always follows the newest
+                 * warning. */
+                if (!s->trusted && s->node != node) {
+                    s_events[i].share.have_pos = false;
+                    s_events[i].share.lat_e7 = 0;
+                    s_events[i].share.lon_e7 = 0;
+                }
                 s_events[i].last_us = now_us;
                 keep[i] = true;
                 taken[k] = true;

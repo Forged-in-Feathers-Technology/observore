@@ -4620,6 +4620,609 @@ static void test_a_trusted_position_reads_as_distance_and_bearing(void)
     peer_scene_reset();
 }
 
+/* Test pairs are built without going through the code under test. Along a
+ * meridian the distance is exactly R times the latitude difference, so a
+ * target in metres becomes a whole number of latitude units; the radius and
+ * the pi literal are the ones observore_peer.c uses. */
+#define T_PI  3.14159265358979323846
+#define T_R_M 6371000.0
+#define T_UNIT_M (T_R_M * T_PI / 180.0 * 1e-7)
+
+static int32_t north_units(double metres)
+{
+    return (int32_t)llround(metres / T_UNIT_M);
+}
+
+/* A position `metres` from the own position along `bearing_deg`, east
+ * converted to longitude with the cosine of the own latitude. */
+static void offset_from_own(double metres, double bearing_deg, int32_t *lat,
+                            int32_t *lon)
+{
+    double rad = bearing_deg * T_PI / 180.0;
+    double lat_rad = (double)OWN_LAT * 1e-7 * T_PI / 180.0;
+    *lat = OWN_LAT + north_units(metres * cos(rad));
+    *lon = OWN_LON + (int32_t)llround(metres * sin(rad) / (T_UNIT_M * cos(lat_rad)));
+}
+
+/* The reading of a sender at plat,plon from the own position. */
+static void read_text(int32_t plat, int32_t plon, bool trusted, bool screen,
+                      char *buf, size_t len)
+{
+    observore_peer_reading_t r;
+    observore_peer_locate(true, OWN_LAT, OWN_LON, true, plat, plon, &r);
+    observore_peer_reading_text(&r, trusted, screen, buf, len);
+}
+
+static void test_where_is_never_finer_than_the_position(void)
+{
+    banner("where is never finer than the position");
+
+    char buf[OBSERVORE_PEER_WHERE_LEN];
+    char scr[OBSERVORE_PEER_WHERE_LEN];
+    observore_peer_reading_t r;
+
+    /* An unusable position at either end gives no distance, ever. */
+    observore_peer_locate(true, OWN_LAT, OWN_LON, true, 0, 0, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_NONE, "a sender at 0,0 is no reading, got kind %u",
+          (unsigned)r.kind);
+    for (int trusted = 0; trusted < 2; trusted++) {
+        for (int screen = 0; screen < 2; screen++) {
+            size_t n = observore_peer_reading_text(&r, trusted != 0, screen != 0,
+                                                   buf, sizeof(buf));
+            CHECK(n == 0 && buf[0] == '\0',
+                  "0,0 reads as nothing (trusted %d, screen %d), got '%s'",
+                  trusted, screen, buf);
+        }
+    }
+    observore_peer_locate(true, OWN_LAT, OWN_LON, true, 900000001, 1000, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_NONE,
+          "a latitude past the pole is no reading, got kind %u", (unsigned)r.kind);
+    observore_peer_locate(true, OWN_LAT, OWN_LON, true, 1800000001, 1000, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_NONE,
+          "an impossible latitude is no reading, got kind %u", (unsigned)r.kind);
+    observore_peer_locate(true, OWN_LAT, OWN_LON, true, 10000, 1800000001, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_NONE,
+          "a longitude past the antimeridian is no reading, got kind %u",
+          (unsigned)r.kind);
+    observore_peer_locate(true, OWN_LAT, OWN_LON, false, 515084000, -1263560, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_NONE,
+          "a sender that gave no position is no reading, got kind %u",
+          (unsigned)r.kind);
+    observore_peer_locate(true, 0, 0, true, 515084000, -1263560, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_KNOWN,
+          "our own 0,0 with a usable sender is known, got kind %u", (unsigned)r.kind);
+    observore_peer_reading_text(&r, true, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "position known") == 0, "trusted, own 0,0: '%s'", buf);
+    observore_peer_reading_text(&r, false, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "position claimed") == 0, "stranger, own 0,0: '%s'", buf);
+    observore_peer_locate(false, 0, 0, true, 515084000, -1263560, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_KNOWN,
+          "no position of our own with a usable sender is known, got kind %u",
+          (unsigned)r.kind);
+    observore_peer_locate(true, 0, 0, true, 0, 0, &r);
+    CHECK(r.kind == OBSERVORE_PEER_READ_NONE,
+          "both ends 0,0 is no reading, got kind %u", (unsigned)r.kind);
+    observore_peer_locate(true, 9000, 1000000, true, 0, 1000000, &r);
+    observore_peer_reading_text(&r, true, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "~100 m S") == 0,
+          "a sender at latitude 0 is a real place, 100 m south: '%s'", buf);
+
+    /* Bands and the two thresholds, due north of the own position. */
+    static const struct {
+        double      m;
+        const char *console;
+        const char *screen;
+    } bands[] = {
+        {19.9,    "nearby",                  "nearby"},
+        {20.0,    "~20 m N",                 "~20 m N"},
+        {994.0,   "~990 m N",                "~990 m N"},
+        {995.0,   "~1.0 km N",               "~1.0 km N"},
+        {999.0,   "~1.0 km N",               "~1.0 km N"},
+        {1000.0,  "~1.0 km N",               "~1.0 km N"},
+        {1999.9,  "~2.0 km N",               "~2.0 km N"},
+        {2000.1,  "~2.0 km N (far for BLE)", "~2.0 km N (far)"},
+        {9949.0,  "~9.9 km N (far for BLE)", "~9.9 km N (far)"},
+        {9950.0,  "~10 km N (far for BLE)",  "~10 km N (far)"},
+        {10000.0, "~10 km N (far for BLE)",  "~10 km N (far)"},
+        {10499.0, "~10 km N (far for BLE)",  "~10 km N (far)"},
+        {10500.0, "~11 km N (far for BLE)",  "~11 km N (far)"},
+    };
+    for (size_t i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
+        int32_t la = OWN_LAT + north_units(bands[i].m);
+        read_text(la, OWN_LON, true, false, buf, sizeof(buf));
+        read_text(la, OWN_LON, true, true, scr, sizeof(scr));
+        CHECK(strcmp(buf, bands[i].console) == 0 && strcmp(scr, bands[i].screen) == 0,
+              "%.1f m: wanted '%s' / '%s', got '%s' / '%s'", bands[i].m,
+              bands[i].console, bands[i].screen, buf, scr);
+    }
+
+    /* Eight sectors, at the centre and 20 degrees either side of it. */
+    for (unsigned sector = 0; sector < 8; sector++) {
+        for (int off = -20; off <= 20; off += 20) {
+            int32_t la, lo;
+            offset_from_own(100.0, (double)sector * 45.0 + off, &la, &lo);
+            read_text(la, lo, true, false, buf, sizeof(buf));
+            char want[OBSERVORE_PEER_WHERE_LEN];
+            snprintf(want, sizeof(want), "~100 m %s",
+                     observore_peer_sector_name((uint8_t)sector));
+            CHECK(strcmp(buf, want) == 0, "sector %u at %+d degrees: wanted '%s', got '%s'",
+                  sector, off, want, buf);
+        }
+    }
+    CHECK(strcmp(observore_peer_sector_name(8), "?") == 0 &&
+              strcmp(observore_peer_sector_name(255), "?") == 0,
+          "a sector out of range is '?'");
+
+    /* The long way round and the ends of the Earth. */
+    observore_peer_locate(true, 0, 1799000000, true, 10000, -1799000000, &r);
+    observore_peer_reading_text(&r, true, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "~22 km E (far for BLE)") == 0,
+          "across the antimeridian is 22 km, not 360 degrees: '%s'", buf);
+    observore_peer_locate(true, 900000000, 0, true, -900000000, 0, &r);
+    observore_peer_reading_text(&r, true, false, buf, sizeof(buf));
+    CHECK(r.kind == OBSERVORE_PEER_READ_BEARING && r.far &&
+              strncmp(buf, "~20015 km ", 10) == 0,
+          "pole to pole is about 20015 km, far: '%s'", buf);
+    observore_peer_locate(true, OWN_LAT, OWN_LON, true, OWN_LAT, OWN_LON, &r);
+    observore_peer_reading_text(&r, true, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "nearby") == 0, "the same point is nearby: '%s'", buf);
+
+    /* The wording table, from readings built by hand. */
+    const observore_peer_reading_t near_r = {OBSERVORE_PEER_READ_BEARING, 1, false, 120};
+    const observore_peer_reading_t far_r = {OBSERVORE_PEER_READ_BEARING, 1, true, 312000};
+    const observore_peer_reading_t close_r = {OBSERVORE_PEER_READ_NEARBY, 0, false, 7};
+    const observore_peer_reading_t known_r = {OBSERVORE_PEER_READ_KNOWN, 0, false, 0};
+    const observore_peer_reading_t none_r = {OBSERVORE_PEER_READ_NONE, 0, false, 0};
+    struct row {
+        const observore_peer_reading_t *r;
+        bool        trusted;
+        bool        screen;
+        const char *want;
+    };
+    const struct row rows[] = {
+        {&near_r,  true,  false, "~120 m NE"},
+        {&near_r,  true,  true,  "~120 m NE"},
+        {&far_r,   true,  false, "~312 km NE (far for BLE)"},
+        {&far_r,   true,  true,  "~312 km NE (far)"},
+        {&close_r, true,  false, "nearby"},
+        {&close_r, true,  true,  "nearby"},
+        {&known_r, true,  false, "position known"},
+        {&known_r, true,  true,  "position known"},
+        {&near_r,  false, false, "claims ~120 m NE"},
+        {&close_r, false, false, "claims nearby"},
+        {&far_r,   false, false, "claims ~312 km NE (far for BLE)"},
+        {&known_r, false, false, "position claimed"},
+        {&near_r,  false, true,  ""},
+        {&far_r,   false, true,  ""},
+        {&close_r, false, true,  ""},
+        {&known_r, false, true,  ""},
+        {&none_r,  true,  false, ""},
+        {&none_r,  true,  true,  ""},
+        {&none_r,  false, false, ""},
+        {&none_r,  false, true,  ""},
+    };
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        observore_peer_reading_text(rows[i].r, rows[i].trusted, rows[i].screen,
+                                    buf, sizeof(buf));
+        CHECK(strcmp(buf, rows[i].want) == 0,
+              "row %u (kind %u, trusted %d, screen %d): wanted '%s', got '%s'",
+              (unsigned)i, (unsigned)rows[i].r->kind, (int)rows[i].trusted,
+              (int)rows[i].screen, rows[i].want, buf);
+    }
+    strcpy(buf, "stale");
+    CHECK(observore_peer_reading_text(NULL, true, false, buf, sizeof(buf)) == 0 &&
+              buf[0] == '\0',
+          "a NULL reading writes an empty string");
+    strcpy(buf, "stale");
+    CHECK(observore_peer_share_where(NULL, true, OWN_LAT, OWN_LON, false, buf,
+                                     sizeof(buf)) == 0 &&
+              buf[0] == '\0',
+          "a NULL share writes an empty string");
+
+    /* Fit and alphabet. */
+    const observore_peer_reading_t longest_r = {OBSERVORE_PEER_READ_BEARING, 1, true, 20015087};
+    char fit[OBSERVORE_PEER_WHERE_LEN];
+    size_t n = observore_peer_reading_text(&longest_r, false, false, fit, sizeof(fit));
+    CHECK(n == 33 && strcmp(fit, "claims ~20015 km NE (far for BLE)") == 0,
+          "the longest console text is 33 characters, got %u: '%s'", (unsigned)n, fit);
+    char fit_screen[OBSERVORE_PEER_WHERE_SCREEN_LEN];
+    n = observore_peer_reading_text(&longest_r, true, true, fit_screen,
+                                    sizeof(fit_screen));
+    CHECK(n == 18 && strcmp(fit_screen, "~20015 km NE (far)") == 0,
+          "the longest screen text is 18 characters, got %u: '%s'", (unsigned)n,
+          fit_screen);
+    char tiny[8];
+    n = observore_peer_reading_text(&longest_r, false, false, tiny, sizeof(tiny));
+    CHECK(n == 7 && strlen(tiny) == 7,
+          "an 8-byte buffer holds 7 and stays terminated, got %u", (unsigned)n);
+
+    static const char alphabet[] = "abcdefghijklmnopqrstuvwxyz"
+                                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ~.,()";
+    static const uint32_t dists[] = {0, 5, 994, 995, 9950, 312000, 20015087,
+                                     UINT32_MAX};
+    bool alphabet_ok = true;
+    size_t texts = 0;
+    for (unsigned kind = 0; kind <= OBSERVORE_PEER_READ_BEARING; kind++) {
+        for (int trusted = 0; trusted < 2; trusted++) {
+            for (int screen = 0; screen < 2; screen++) {
+                for (int far_ = 0; far_ < 2; far_++) {
+                    for (size_t d = 0; d < sizeof(dists) / sizeof(dists[0]); d++) {
+                        for (unsigned sector = 0; sector < 8; sector++) {
+                            observore_peer_reading_t rr = {(uint8_t)kind,
+                                                           (uint8_t)sector,
+                                                           far_ != 0, dists[d]};
+                            n = observore_peer_reading_text(&rr, trusted != 0,
+                                                            screen != 0, buf,
+                                                            sizeof(buf));
+                            texts++;
+                            if (strspn(buf, alphabet) != strlen(buf) ||
+                                strlen(buf) != n || n >= sizeof(buf)) {
+                                alphabet_ok = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    CHECK(alphabet_ok,
+          "every one of %u texts uses only letters, digits, space and ~.,() and fits",
+          (unsigned)texts);
+}
+
+/* One round of eight warnings for the score tests: two trusted bodycams, a
+ * trusted hunter, four stranger hunters with distinct ids, and a trusted
+ * drone heard longer ago than the table keeps anything. */
+static void score_warnings(observore_peer_warning_t *w, int64_t now_us,
+                           bool with_positions)
+{
+    static const struct {
+        uint16_t         node;
+        observore_class_t cls;
+        bool             trusted;
+        bool             stale;
+    } spec[OBSERVORE_PEER_MAX] = {
+        {0x00A1, OBSERVORE_CLASS_BODYCAM, true,  false},
+        {0x00A2, OBSERVORE_CLASS_BODYCAM, true,  false},
+        {0x00B1, OBSERVORE_CLASS_HUNTER,  true,  false},
+        {0x0101, OBSERVORE_CLASS_HUNTER,  false, false},
+        {0x0102, OBSERVORE_CLASS_HUNTER,  false, false},
+        {0x0103, OBSERVORE_CLASS_HUNTER,  false, false},
+        {0x0104, OBSERVORE_CLASS_HUNTER,  false, false},
+        {0x00C1, OBSERVORE_CLASS_DRONE,   true,  true},
+    };
+    /* Near, far, the same near position again, a different far one, a hand-built
+     * 0,0 claimed as a position, one past the pole, and two more near. */
+    static const int32_t lat[OBSERVORE_PEER_MAX] = {
+        515084000, 400000000, 515084000, -330000000, 0, 900000001, 515074500,
+        515084000};
+    static const int32_t lon[OBSERVORE_PEER_MAX] = {
+        -1263560, 100000000, -1263560, 1510000000, 0, 1000, -1278000, -1263560};
+    for (size_t i = 0; i < OBSERVORE_PEER_MAX; i++) {
+        memset(&w[i], 0, sizeof(w[i]));
+        w[i].node = spec[i].node;
+        w[i].cls = (uint8_t)spec[i].cls;
+        w[i].seq = 1;
+        w[i].trusted = spec[i].trusted;
+        w[i].heard_us = spec[i].stale ? 0 : now_us - SECS(5);
+        if (with_positions) {
+            w[i].have_pos = true;
+            w[i].lat_e7 = lat[i];
+            w[i].lon_e7 = lon[i];
+        }
+    }
+}
+
+/* Every part of a weight that decides a score, field by field. The position
+ * fields are left out on purpose: they are the only thing that may differ. */
+static bool same_score(const observore_peer_weight_t *a,
+                       const observore_peer_weight_t *b)
+{
+    if (a->total != b->total || a->trusted != b->trusted ||
+        a->stranger != b->stranger || a->n != b->n) {
+        return false;
+    }
+    for (size_t i = 0; i < a->n && i < OBSERVORE_PEER_MAX; i++) {
+        const observore_peer_share_t *x = &a->share[i];
+        const observore_peer_share_t *y = &b->share[i];
+        if (x->node != y->node || x->cls != y->cls || x->trusted != y->trusted ||
+            x->seen_here != y->seen_here || x->voices != y->voices ||
+            x->points != y->points || x->why != y->why || x->age_s != y->age_s) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void test_a_position_never_changes_a_score(void)
+{
+    banner("a position never changes a score");
+
+    /* Pure: the same warnings weighed without positions and with them. */
+    const int64_t now = SECS(2 * OBSERVORE_PEER_TTL_S);
+    observore_peer_warning_t plain[OBSERVORE_PEER_MAX];
+    observore_peer_warning_t placed[OBSERVORE_PEER_MAX];
+    score_warnings(plain, now, false);
+    score_warnings(placed, now, true);
+    const uint32_t counting[] = {0u, 1u << OBSERVORE_CLASS_HUNTER};
+    const uint32_t off[] = {0u, 1u << OBSERVORE_CLASS_DRONE};
+    const uint16_t base[] = {0, 3};
+    observore_peer_weight_t a, b;
+    unsigned combos = 0;
+    unsigned moved = 0;
+    for (size_t c = 0; c < 2; c++) {
+        for (size_t m = 0; m < 2; m++) {
+            for (size_t s = 0; s < 2; s++) {
+                observore_peer_weigh(plain, OBSERVORE_PEER_MAX, counting[c],
+                                     off[m], base[s], now, &a);
+                observore_peer_weigh(placed, OBSERVORE_PEER_MAX, counting[c],
+                                     off[m], base[s], now, &b);
+                combos++;
+                if (!same_score(&a, &b)) {
+                    moved++;
+                }
+                CHECK(same_score(&a, &b),
+                      "counting %u, monitors off %u, base %u: +%u/+%u/+%u and %u shares "
+                      "with positions vs +%u/+%u/+%u and %u without",
+                      (unsigned)counting[c], (unsigned)off[m], (unsigned)base[s],
+                      b.total, b.trusted, b.stranger, b.n, a.total, a.trusted,
+                      a.stranger, a.n);
+            }
+        }
+    }
+    CHECK(combos == 8 && moved == 0, "all %u combinations score the same, %u moved",
+          combos, moved);
+
+    /* The four strangers on their own: with the Flipper counted they earn their
+     * one point, and a position (here the first voice's, with a 0,0 and one
+     * past the pole among the others) leaves it exactly where it was. */
+    observore_peer_weigh(plain + 3, 4, counting[1], off[0], 0, now, &a);
+    observore_peer_weigh(placed + 3, 4, counting[1], off[0], 0, now, &b);
+    CHECK(a.stranger == 1 && a.trusted == 0 && same_score(&a, &b),
+          "four strangers add one point with or without positions: +%u vs +%u",
+          a.stranger, b.stranger);
+
+    observore_peer_weigh(plain, OBSERVORE_PEER_MAX, counting[1], off[0], 0, now, &a);
+    observore_peer_weigh(placed, OBSERVORE_PEER_MAX, counting[1], off[0], 0, now, &b);
+    CHECK(a.total > 0 && a.trusted > 0 && b.total == a.total,
+          "the scene scores something to compare: +%u (trusted %u, stranger %u)",
+          a.total, a.trusted, a.stranger);
+    bool plain_empty = true;
+    for (size_t i = 0; i < a.n; i++) {
+        plain_empty = plain_empty && !a.share[i].have_pos && a.share[i].pos_n == 0;
+    }
+    CHECK(plain_empty, "a warning with no position gives a share with none");
+    CHECK(b.share[0].have_pos && b.share[1].have_pos && b.share[2].have_pos &&
+              !b.share[4].have_pos && !b.share[5].have_pos,
+          "usable positions are carried (%d %d %d), 0,0 (%d) and one past the pole (%d) "
+          "are not",
+          (int)b.share[0].have_pos, (int)b.share[1].have_pos,
+          (int)b.share[2].have_pos, (int)b.share[4].have_pos,
+          (int)b.share[5].have_pos);
+    CHECK(b.share[4].lat_e7 == 0 && b.share[4].lon_e7 == 0 &&
+              b.share[5].lat_e7 == 0 && b.share[5].lon_e7 == 0,
+          "an unusable position leaves zero coordinates in the share");
+
+    /* Through the table: the same warnings sent without and with positions
+     * give the same score, level and peer points. Scene 0 is friends (and
+     * strangers shut out by the band they leave); scene 1 is strangers alone,
+     * which earn their point. */
+    for (int scene = 0; scene < 2; scene++) {
+        observore_status_t plain_st, placed_st;
+        for (int pass = 0; pass < 2; pass++) {
+            peer_scene_reset();
+            see_flipper(SECS(5));
+            const bool at = pass == 1;
+            if (scene == 0) {
+                if (at) {
+                    peer_say_at(0x00A1, OBSERVORE_CLASS_BODYCAM, 1, 0, true,
+                                515084000, -1263560, SECS(10));
+                    peer_say_at(0x00B1, OBSERVORE_CLASS_HUNTER, 1, 0, true,
+                                400000000, 100000000, SECS(11));
+                } else {
+                    peer_say(0x00A1, OBSERVORE_CLASS_BODYCAM, 1, 0, true, SECS(10));
+                    peer_say(0x00B1, OBSERVORE_CLASS_HUNTER, 1, 0, true, SECS(11));
+                }
+            }
+            if (at) {
+                peer_say_at(0x0101, OBSERVORE_CLASS_HUNTER, 1, 0, false, 515084000,
+                            -1263560, SECS(12));
+                peer_say_at(0x0102, OBSERVORE_CLASS_HUNTER, 1, 0, false, -330000000,
+                            1510000000, SECS(13));
+            } else {
+                peer_say(0x0101, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(12));
+                peer_say(0x0102, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(13));
+            }
+            observore_track_status(at ? &placed_st : &plain_st, SECS(30));
+        }
+        CHECK(plain_st.score == placed_st.score && plain_st.level == placed_st.level &&
+                  plain_st.peer_points == placed_st.peer_points &&
+                  plain_st.peer_trusted_points == placed_st.peer_trusted_points &&
+                  plain_st.peer_stranger_points == placed_st.peer_stranger_points &&
+                  plain_st.peer_points > 0,
+              "scene %d through observore_track_status(): score %u/%u, level %d/%d, "
+              "peer %u/%u (trusted %u/%u, stranger %u/%u)",
+              scene, plain_st.score, placed_st.score, (int)plain_st.level,
+              (int)placed_st.level, plain_st.peer_points, placed_st.peer_points,
+              plain_st.peer_trusted_points, placed_st.peer_trusted_points,
+              plain_st.peer_stranger_points, placed_st.peer_stranger_points);
+        if (scene == 1) {
+            CHECK(plain_st.peer_stranger_points == 1 && placed_st.score == 4,
+                  "strangers alone add their one point, got +%u and score %u",
+                  plain_st.peer_stranger_points, placed_st.score);
+        }
+    }
+
+    peer_scene_reset();
+}
+
+static void test_a_position_stays_with_its_sender(void)
+{
+    banner("a position stays with its sender");
+
+    observore_peer_weight_t pw;
+    observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX];
+    uint8_t started[OBSERVORE_PEER_MAX];
+    char buf[OBSERVORE_PEER_WHERE_LEN];
+
+    /* A folded stranger voice is a count, never one sender's position. The
+     * representative here (the lowest id) is the one that gave none. */
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x0111, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    peer_say_at(0x0222, OBSERVORE_CLASS_HUNTER, 1, 0, false, 515084000, -1263560,
+                SECS(11));
+    peer_say_at(0x0333, OBSERVORE_CLASS_HUNTER, 1, 0, false, 515104000, -1263560,
+                SECS(12));
+    observore_track_peer_weight(&pw, SECS(13));
+    const observore_peer_share_t *voice = NULL;
+    for (size_t i = 0; i < pw.n; i++) {
+        if (!pw.share[i].trusted && pw.share[i].voices > 1) {
+            voice = &pw.share[i];
+        }
+    }
+    CHECK(voice != NULL && voice->voices == 3 && voice->pos_n == 2,
+          "three strangers fold to one voice with two positions among them, got "
+          "voices %u pos_n %u", voice ? (unsigned)voice->voices : 0,
+          voice ? (unsigned)voice->pos_n : 0);
+    if (voice) {
+        observore_peer_share_where(voice, true, OWN_LAT, OWN_LON, false, buf,
+                                   sizeof(buf));
+        CHECK(strcmp(buf, "3 nodes, 2 with position") == 0, "console fold: '%s'", buf);
+        observore_peer_share_where(voice, true, OWN_LAT, OWN_LON, true, buf,
+                                   sizeof(buf));
+        CHECK(buf[0] == '\0', "screen fold is empty, got '%s'", buf);
+        observore_peer_share_where(voice, false, 0, 0, false, buf, sizeof(buf));
+        CHECK(strcmp(buf, "3 nodes, 2 with position") == 0,
+              "the fold does not depend on our own position: '%s'", buf);
+    }
+
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say(0x0111, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(10));
+    peer_say(0x0222, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(11));
+    peer_say(0x0333, OBSERVORE_CLASS_HUNTER, 1, 0, false, SECS(12));
+    observore_track_peer_weight(&pw, SECS(13));
+    voice = NULL;
+    for (size_t i = 0; i < pw.n; i++) {
+        if (!pw.share[i].trusted && pw.share[i].voices > 1) {
+            voice = &pw.share[i];
+        }
+    }
+    CHECK(voice != NULL && voice->voices == 3 && voice->pos_n == 0,
+          "three strangers with no position fold with none counted");
+    if (voice) {
+        strcpy(buf, "stale");
+        observore_peer_share_where(voice, true, OWN_LAT, OWN_LON, false, buf,
+                                   sizeof(buf));
+        CHECK(buf[0] == '\0', "no position among the folded reads nothing, got '%s'", buf);
+    }
+
+    peer_scene_reset();
+    see_flipper(SECS(5));
+    peer_say_at(0x0222, OBSERVORE_CLASS_HUNTER, 1, 0, false, 515084000, -1263560,
+                SECS(10));
+    observore_track_peer_weight(&pw, SECS(11));
+    CHECK(pw.n == 1 && pw.share[0].voices == 1 && pw.share[0].pos_n == 1,
+          "one stranger is one voice with one position");
+    observore_peer_share_where(&pw.share[0], true, OWN_LAT, OWN_LON, false, buf,
+                               sizeof(buf));
+    CHECK(strcmp(buf, "claims ~150 m NE") == 0,
+          "one stranger reads as its own claim: '%s'", buf);
+
+    /* The latest position replaces the earlier one. */
+    peer_scene_reset();
+    peer_say_at(0x3A7F, OBSERVORE_CLASS_BODYCAM, 1, 0, true, 515084000, -1263560,
+                SECS(10));
+    peer_say_at(0x3A7F, OBSERVORE_CLASS_BODYCAM, 2, 0, true, 515104000, -1263560,
+                SECS(20));
+    observore_peer_warning_t held[2];
+    size_t nheld = observore_peer_recent(held, 2, SECS(21));
+    observore_track_peer_weight(&pw, SECS(21));
+    CHECK(nheld == 1 && pw.n == 1 && pw.share[0].lat_e7 == held[0].lat_e7 &&
+              pw.share[0].lon_e7 == held[0].lon_e7 && pw.share[0].lat_e7 > 515090000,
+          "a second warning with a new position replaces the first: %ld,%ld",
+          (long)pw.share[0].lat_e7, (long)pw.share[0].lon_e7);
+
+    /* A trusted event follows the newest share. */
+    peer_scene_reset();
+    observore_peer_share_t friend_ = pshare(0x3A7F, OBSERVORE_CLASS_BODYCAM, true,
+                                            false, 1, 3, OBSERVORE_PEER_WHY_COUNTED);
+    friend_.have_pos = true;
+    friend_.pos_n = 1;
+    friend_.lat_e7 = 515084000;
+    friend_.lon_e7 = -1263560;
+    pweight(&pw, &friend_, 1);
+    size_t k = observore_peer_events_update(&pw, SECS(10), started, OBSERVORE_PEER_MAX);
+    CHECK(k == 1, "the friend's share starts one event");
+    friend_.lat_e7 = 515104000;
+    pweight(&pw, &friend_, 1);
+    observore_peer_events_update(&pw, SECS(20), started, OBSERVORE_PEER_MAX);
+    size_t n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(n == 1 && ev[0].share.have_pos && ev[0].share.lat_e7 == 515104000 &&
+              ev[0].share.lon_e7 == -1263560,
+          "a trusted event holds the newest position, got %ld", (long)ev[0].share.lat_e7);
+
+    /* Read time: the same event reads against whatever this node knows now. */
+    friend_.lat_e7 = 515084000;
+    pweight(&pw, &friend_, 1);
+    observore_peer_events_update(&pw, SECS(30), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    observore_peer_share_where(&ev[0].share, true, OWN_LAT, OWN_LON, false, buf,
+                               sizeof(buf));
+    CHECK(strcmp(buf, "~150 m NE") == 0, "an event with a position reads a distance: '%s'", buf);
+    observore_peer_share_where(&ev[0].share, false, 0, 0, false, buf, sizeof(buf));
+    CHECK(strcmp(buf, "position known") == 0,
+          "the same event with our position cleared reads: '%s'", buf);
+
+    /* A stranger event is named for the node its log line named. When another
+     * stranger starts speaking for the class, the position that arrives is not
+     * that node's, so the event drops it and keeps the count. */
+    peer_scene_reset();
+    observore_peer_share_t voice1 = pshare(0x1111, OBSERVORE_CLASS_HUNTER, false,
+                                           true, 1, 1, OBSERVORE_PEER_WHY_COUNTED);
+    voice1.have_pos = true;
+    voice1.pos_n = 1;
+    voice1.lat_e7 = 515084000;
+    voice1.lon_e7 = -1263560;
+    pweight(&pw, &voice1, 1);
+    k = observore_peer_events_update(&pw, SECS(10), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 1 && n == 1 && ev[0].share.node == 0x1111 && ev[0].share.have_pos &&
+              ev[0].share.lat_e7 == 515084000,
+          "the stranger event starts with its speaker's position");
+
+    observore_peer_share_t voice2 = pshare(0x0222, OBSERVORE_CLASS_HUNTER, false,
+                                           true, 1, 1, OBSERVORE_PEER_WHY_COUNTED);
+    voice2.have_pos = true;
+    voice2.pos_n = 1;
+    voice2.lat_e7 = 515104000;
+    voice2.lon_e7 = -1263560;
+    pweight(&pw, &voice2, 1);
+    k = observore_peer_events_update(&pw, SECS(20), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(k == 0 && n == 1 && ev[0].share.node == 0x1111 && !ev[0].share.have_pos &&
+              ev[0].share.lat_e7 == 0 && ev[0].share.lon_e7 == 0 &&
+              ev[0].share.pos_n == 1,
+          "another speaker's position is not shown under the first id: node %04X, "
+          "have_pos %d, %ld,%ld, pos_n %u", (unsigned)ev[0].share.node,
+          (int)ev[0].share.have_pos, (long)ev[0].share.lat_e7,
+          (long)ev[0].share.lon_e7, (unsigned)ev[0].share.pos_n);
+    strcpy(buf, "stale");
+    observore_peer_share_where(&ev[0].share, true, OWN_LAT, OWN_LON, false, buf,
+                               sizeof(buf));
+    CHECK(buf[0] == '\0', "and so it reads nothing, got '%s'", buf);
+
+    pweight(&pw, &voice1, 1);
+    observore_peer_events_update(&pw, SECS(30), started, OBSERVORE_PEER_MAX);
+    n = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+    CHECK(n == 1 && ev[0].share.node == 0x1111 && ev[0].share.have_pos &&
+              ev[0].share.lat_e7 == 515084000,
+          "the named node speaking again gets its position back");
+
+    peer_scene_reset();
+}
+
 static void test_bcd(void)
 {
     banner("the clock chip speaks BCD and nothing else here does");
@@ -8028,6 +8631,9 @@ int main(void)
     test_every_scene_stays_bounded();
     test_a_peer_report_is_written_down_once();
     test_a_trusted_position_reads_as_distance_and_bearing();
+    test_where_is_never_finer_than_the_position();
+    test_a_position_never_changes_a_score();
+    test_a_position_stays_with_its_sender();
     test_rssi_floor();
     test_table_pressure();
     test_snapshot_order();

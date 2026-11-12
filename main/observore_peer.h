@@ -458,7 +458,9 @@ void observore_peer_weigh_now(int64_t now_us, uint32_t counting_mask,
  * (the host test prints the size), so the ring is at most 320 bytes, and a
  * mesh of eight nodes in range cannot start events faster than they are read.
  * An event keeps the sender's latest coarse position with the rest of its
- * share, refreshed each round.
+ * share, refreshed each round. A stranger event drops the position when
+ * another stranger starts speaking for the class, because that position is
+ * not the position of the node id the event is named for.
  * RAM only, and deliberately: the persisted history has a fixed layout and a
  * migration to pay for, and a source that strangers can feed must never be
  * able to push a real detection out of the record that survives a restart.
