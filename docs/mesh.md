@@ -549,7 +549,7 @@ once and again at the next boot or window, and the console says why it emptied.
 
 Two settings: `cxsettings` holds the mode, the time and the channel, and
 `peercensus` holds what friends reported. The peer table holds 64 identities on
-ESP32-S3 builds and 32 on C5 and C6, 36 bytes each, and is written at most once
+ESP32-S3 builds and 21 on C5 and C6, 36 bytes each, and is written at most once
 a window and only when it changed. It is encrypted at rest on these chips. It is
 a table of its own, so it can never push out an identity this node learned
 itself.

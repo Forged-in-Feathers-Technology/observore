@@ -31,7 +31,7 @@ HDRS     = $(wildcard ../main/*.h)
 # table so that eviction is cheap to reach, and compiled out for
 # `run-nocensus`. Every default build is that second one, and the census
 # tests that were written for a node on its own must hold in both.
-CENSUS_ON = -DCONFIG_OBSERVORE_MESH_CENSUS=1 -DCONFIG_OBSERVORE_PEER_CENSUS_MAX=32
+CENSUS_ON = -DCONFIG_OBSERVORE_MESH_CENSUS=1 -DCONFIG_OBSERVORE_PEER_CENSUS_MAX=21
 
 run: $(SRCS) $(HDRS) ../main/observore_oui_table.h
 	$(CC) $(CFLAGS) $(CENSUS_ON) $(INCS) $(SRCS) -o run -lm

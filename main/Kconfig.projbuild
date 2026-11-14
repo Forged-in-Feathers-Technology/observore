@@ -238,16 +238,20 @@ config OBSERVORE_PEER_CENSUS_MAX
     int "Identities kept from the owner's other nodes"
     range 16 64
     default 64 if IDF_TARGET_ESP32S3
-    default 32
+    default 21
     help
         How many identities the table of what the owner's other nodes
         reported can hold. It is a table of its own, so it can never cost this
         node an identity it learned itself.
 
-        Each entry is 36 bytes of internal RAM, about 2.3 KB at 64 and 1.2 KB
-        at 32. The C5 and C6 boards run with the smallest internal heap (see
-        docs/memory.md), which is why they default to 32. The size is measured
-        in the phase gate rather than assumed.
+        Each entry is 36 bytes of internal RAM, about 2.3 KB at 64 and 0.8 KB
+        at 21. The C5 and C6 boards run with the smallest internal heap (see
+        docs/memory.md), which is why they default to 21: with the exchange
+        compiled in, everything it adds there (this table, the receive queue
+        and the rest of its state, and on a board with a screen the system
+        page's own status line) stays under 3 KB of static RAM, counted as
+        .bss plus .data because the table starts with a non-zero header word
+        and so lands in .data.
 
 endif
 
