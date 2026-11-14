@@ -341,6 +341,32 @@ size_t observore_census_blob(void *out, size_t cap);
  * empty. Returns false if the blob was rejected. */
 bool observore_census_restore(const void *blob, size_t len);
 
+/* The band's text while a census window is open, written into `buf` with
+ * snprintf semantics clamped to len - 1; returns the length written.
+ *
+ *   " CENSUS SHARE 18s  CAUTION 12"    exchange mode with something to send
+ *   " CENSUS LISTEN 18s  CAUTION 12"   listening only, or nothing to send
+ *
+ * The level word and the score stay in it. A node in a window is still a
+ * detector, and a transmission must not be a way to hide its verdict: the band
+ * is the one place a person at the device cannot miss, so the announcement and
+ * the verdict share it. One leading space, because the longest form (LISTEN, 30
+ * seconds, CAUTION, 99) is 30 characters and the narrowest panel is 31 columns:
+ * the level word and the score are never the part that is cut. A NULL level
+ * reads "?". Always compiled and pure, so the screen has no #if and the host
+ * suite pins the wording. */
+size_t observore_census_band_text(bool sharing, unsigned remaining_s,
+                                  const char *level, unsigned score,
+                                  char *buf, size_t len);
+
+/* The census part of the bar: "3 quiet, 1 via mesh". The via-mesh figure is
+ * part of the quiet total, not an addition to it (3 quiet, of which the owner's
+ * other nodes caused 1), so the total means what it meant before the exchange.
+ * "3 quiet" when friends caused none, and "" (length 0) when nothing is quiet.
+ * Snprintf semantics clamped to len - 1. */
+size_t observore_census_quiet_text(int quieted, int quieted_mesh, char *buf,
+                                   size_t len);
+
 #if CONFIG_OBSERVORE_MESH_CENSUS
 
 /* What the owner's other nodes have seen.

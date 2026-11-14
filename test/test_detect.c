@@ -10160,6 +10160,52 @@ static void test_the_census_window_keeps_its_bounds(void)
 }
 #endif
 
+/* The band says when the census is on the air, and the narrowest panel holds
+ * the whole of it. Compiled in both binaries: the helpers are pure and always
+ * present, so a build without the exchange pins the same wording. */
+static void test_the_band_says_the_census_is_on_the_air(void)
+{
+    banner("the band says when the census is on the air");
+
+    char buf[40];
+    size_t n = observore_census_band_text(true, 18, "CAUTION", 12, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS SHARE 18s  CAUTION 12") == 0 && n == strlen(buf),
+          "sharing reads SHARE with the countdown, the level and the score: '%s'", buf);
+    n = observore_census_band_text(false, 18, "CLEAR", 0, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS LISTEN 18s  CLEAR 0") == 0 && n == strlen(buf),
+          "listening reads LISTEN: '%s'", buf);
+    n = observore_census_band_text(false, 30, "CAUTION", 99, buf, sizeof(buf));
+    CHECK(n == 30 && strlen(buf) == 30,
+          "the longest band is 30 characters, got %zu", n);
+    CHECK(n <= 31, "the longest band fits the 31-column round panel");
+    CHECK(strstr(buf, "CAUTION 99") != NULL,
+          "the level word and the score are the end of the line, so never the cut part");
+    n = observore_census_band_text(true, 1, "ALERT", 99, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS SHARE 1s  ALERT 99") == 0 && n == strlen(buf),
+          "the last second reads 1s: '%s'", buf);
+    n = observore_census_band_text(true, 18, NULL, 12, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS SHARE 18s  ? 12") == 0 && n == strlen(buf),
+          "no level word reads a question mark: '%s'", buf);
+    char small[8];
+    n = observore_census_band_text(true, 18, "CAUTION", 12, small, sizeof(small));
+    CHECK(n == 7 && strlen(small) == 7 && strcmp(small, " CENSUS") == 0,
+          "a short buffer is clamped and terminated: '%s' (%zu)", small, n);
+    CHECK(observore_census_band_text(true, 18, "CAUTION", 12, buf, 0) == 0,
+          "no buffer, no text");
+
+    n = observore_census_quiet_text(3, 1, buf, sizeof(buf));
+    CHECK(strcmp(buf, "3 quiet, 1 via mesh") == 0 && n == strlen(buf),
+          "the via-mesh figure is part of the total: '%s'", buf);
+    n = observore_census_quiet_text(3, 0, buf, sizeof(buf));
+    CHECK(strcmp(buf, "3 quiet") == 0 && n == strlen(buf),
+          "friends caused none, so the bar says no more than it did: '%s'", buf);
+    buf[0] = 'x';
+    n = observore_census_quiet_text(0, 0, buf, sizeof(buf));
+    CHECK(n == 0 && buf[0] == '\0', "nothing quiet writes nothing");
+    n = observore_census_quiet_text(3, 1, small, sizeof(small));
+    CHECK(n == 7 && strlen(small) == 7, "a short buffer is clamped: '%s'", small);
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -10202,6 +10248,7 @@ int main(void)
     test_a_census_frame_reads_back();
     test_the_census_window_keeps_its_bounds();
 #endif
+    test_the_band_says_the_census_is_on_the_air();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();

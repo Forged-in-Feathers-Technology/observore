@@ -121,6 +121,15 @@ const char *observore_espnow_forget(void);
  * under the right reason, rather than at the next window. */
 void observore_espnow_secret_changed(void);
 
+/* Whether a census window is open at `now_us`, and if so how many seconds are
+ * left (rounded up, so it never reads 0 while the window is open) and whether
+ * this node is sending in it rather than only listening. The one question the
+ * screen and the LED ask, declared in every build and false without the option,
+ * so neither needs an #if, as with observore_ble_can_warn(). Safe from any task:
+ * it takes the exchange lock for a few instructions. `remaining_s` and `sharing`
+ * may be NULL. */
+bool observore_espnow_window(int64_t now_us, unsigned *remaining_s, bool *sharing);
+
 #if CONFIG_OBSERVORE_MESH_CENSUS
 
 /* Whether a window should open now, from live inputs: the clock, the owner's

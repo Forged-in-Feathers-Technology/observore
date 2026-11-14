@@ -8,6 +8,7 @@
 #include "observore_census.h"
 #include "observore_mute.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* One lock over both tables.
@@ -831,6 +832,46 @@ bool observore_census_restore(const void *blob, size_t len)
     s_count = hdr.count;
     CENSUS_UNLOCK();
     return true;
+}
+
+size_t observore_census_band_text(bool sharing, unsigned remaining_s,
+                                  const char *level, unsigned score,
+                                  char *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return 0;
+    }
+    int n = snprintf(buf, len, " CENSUS %s %us  %s %u",
+                     sharing ? "SHARE" : "LISTEN", remaining_s,
+                     level ? level : "?", score);
+    if (n < 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (size_t)n < len ? (size_t)n : len - 1;
+}
+
+size_t observore_census_quiet_text(int quieted, int quieted_mesh, char *buf,
+                                   size_t len)
+{
+    if (!buf || len == 0) {
+        return 0;
+    }
+    if (quieted <= 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    int n;
+    if (quieted_mesh > 0) {
+        n = snprintf(buf, len, "%d quiet, %d via mesh", quieted, quieted_mesh);
+    } else {
+        n = snprintf(buf, len, "%d quiet", quieted);
+    }
+    if (n < 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return (size_t)n < len ? (size_t)n : len - 1;
 }
 
 #if CONFIG_OBSERVORE_MESH_CENSUS

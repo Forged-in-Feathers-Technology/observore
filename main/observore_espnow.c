@@ -747,6 +747,28 @@ bool observore_espnow_is_open(void)
     return open;
 }
 
+bool observore_espnow_window(int64_t now_us, unsigned *remaining_s, bool *sharing)
+{
+    if (!s_cx_lock) {
+        return false;
+    }
+    CX_LOCK();
+    bool open = s_open;
+    int64_t opened = s_opened_us;
+    bool share = s_sharing;
+    CX_UNLOCK();
+    if (!open) {
+        return false;
+    }
+    if (remaining_s) {
+        *remaining_s = observore_cx_remaining_s(opened, now_us);
+    }
+    if (sharing) {
+        *sharing = share;
+    }
+    return true;
+}
+
 bool observore_espnow_soon(int64_t now_us, int lead_s)
 {
     if (!s_cx_lock) {
@@ -958,6 +980,14 @@ void observore_espnow_secret_changed(void)
 
 bool observore_espnow_available(void)
 {
+    return false;
+}
+
+bool observore_espnow_window(int64_t now_us, unsigned *remaining_s, bool *sharing)
+{
+    (void)now_us;
+    (void)remaining_s;
+    (void)sharing;
     return false;
 }
 
