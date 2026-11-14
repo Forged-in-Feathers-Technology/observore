@@ -22,6 +22,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_census.h"
+#include "observore_census_wire.h"
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
 #include "observore_tz.h"
@@ -9561,6 +9562,249 @@ static void test_csv_field(void)
     }
 }
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+static void cx_poke16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/* The census frame is a contract between firmware versions, so the bytes are
+ * written out here as literals and compared, rather than packed and read back
+ * through the same code: a round trip alone would pass a layout that was wrong
+ * in both directions. */
+static void test_a_census_frame_reads_back(void)
+{
+    banner("a census frame reads back the same, and a bad one is refused");
+
+    static const uint8_t golden_hdr[OBSERVORE_CX_HDR_LEN] = {
+        0x4F, 0x43, 0x01, 0x00, 0x7F, 0x3A, 0x2A, 0x23, 0xEF, 0xBE,
+        0x00, 0x01, 0x01,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+    };
+    static const uint8_t golden_entry[OBSERVORE_CX_ENTRY_LEN] = {
+        0x44, 0x33, 0x22, 0x11, 0x07, 0x00, 0x2A, 0x23, 0x34, 0x12,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00,
+    };
+
+    observore_cx_hdr_t h;
+    memset(&h, 0, sizeof(h));
+    h.node = 0x3A7F;
+    h.day = 9002;
+    h.window = 0xBEEF;
+    h.index = 0;
+    h.total = 1;
+    h.count = 1;
+    for (int i = 0; i < OBSERVORE_CX_NONCE_LEN; i++) {
+        h.nonce[i] = (uint8_t)i;
+    }
+    uint8_t buf[OBSERVORE_CX_FRAME_MAX + 2];
+    memset(buf, 0xAA, sizeof(buf));
+    size_t n = observore_cx_put_hdr(&h, buf);
+    CHECK(n == 25, "the header is twenty-five bytes, got %zu", n);
+    CHECK(memcmp(buf, golden_hdr, sizeof(golden_hdr)) == 0,
+          "the header packs to the golden bytes");
+    CHECK(buf[25] == 0xAA, "and writes nothing past itself");
+
+    observore_census_entry_t e;
+    memset(&e, 0, sizeof(e));
+    e.id = 0x11223344;
+    e.days = 0x0007;
+    e.last_day = 9002;
+    e.addr[0] = 0x1234;
+    e.addr_n = 1;
+    e.addr_over = 0;
+    e.addr[1] = 0xFFFF;           /* past addr_n: garbage that must not travel */
+    memset(buf, 0xAA, sizeof(buf));
+    n = observore_cx_put_entry(&e, buf);
+    CHECK(n == 26, "an entry is twenty-six bytes, got %zu", n);
+    CHECK(memcmp(buf, golden_entry, sizeof(golden_entry)) == 0,
+          "the entry packs to the golden bytes, hashes past addr_n as zero");
+    CHECK(buf[26] == 0xAA, "and writes nothing past itself");
+
+    /* A whole frame: header, eight entries, a tag, and every field back. */
+    observore_census_entry_t src[OBSERVORE_CX_ENTRIES_MAX];
+    uint8_t frame[OBSERVORE_CX_FRAME_MAX + 2];
+    memset(frame, 0xAA, sizeof(frame));
+    h.index = 7;
+    h.total = 8;
+    h.count = 8;
+    size_t at = observore_cx_put_hdr(&h, frame);
+    for (int i = 0; i < OBSERVORE_CX_ENTRIES_MAX; i++) {
+        memset(&src[i], 0, sizeof(src[i]));
+        src[i].id = 0xA0000001u + (uint32_t)i * 0x01010101u;
+        src[i].days = (uint16_t)(0x0001u | (1u << (i + 1)));
+        src[i].last_day = 9002;
+        src[i].addr_n = (uint8_t)(i + 1 > 8 ? 8 : i + 1);
+        for (int k = 0; k < src[i].addr_n; k++) {
+            src[i].addr[k] = (uint16_t)(0x1000u * (unsigned)(i + 1) + 0x11u * (unsigned)(k + 1));
+        }
+        src[i].addr_over = (uint8_t)(i & 1);
+        at += observore_cx_put_entry(&src[i], frame + at);
+    }
+    memset(frame + at, 0x5A, OBSERVORE_CX_TAG_LEN);
+    at += OBSERVORE_CX_TAG_LEN;
+    CHECK(at == OBSERVORE_CX_FRAME_MAX && at == 249,
+          "a full frame is 249 bytes, got %zu", at);
+
+    observore_cx_hdr_t back;
+    memset(&back, 0, sizeof(back));
+    CHECK(observore_cx_check_frame(frame, at, &back) == OBSERVORE_CX_FRAME_OK,
+          "a full frame passes");
+    CHECK(back.node == 0x3A7F && back.day == 9002 && back.window == 0xBEEF &&
+              back.index == 7 && back.total == 8 && back.count == 8,
+          "every header field is back: %04X %u %04X %u/%u x%u", back.node,
+          back.day, back.window, back.index, back.total, back.count);
+    CHECK(memcmp(back.nonce, h.nonce, OBSERVORE_CX_NONCE_LEN) == 0,
+          "and the nonce");
+    CHECK(observore_cx_check_frame(frame, at, NULL) == OBSERVORE_CX_FRAME_OK,
+          "a caller that wants only the verdict may pass no header");
+    for (int i = 0; i < OBSERVORE_CX_ENTRIES_MAX; i++) {
+        observore_census_entry_t got;
+        memset(&got, 0xEE, sizeof(got));
+        const uint8_t *p = frame + OBSERVORE_CX_HDR_LEN +
+                           (size_t)i * OBSERVORE_CX_ENTRY_LEN;
+        CHECK(observore_cx_get_entry(p, 9002, &got), "entry %d reads", i);
+        CHECK(got.id == src[i].id && got.days == src[i].days &&
+                  got.last_day == src[i].last_day &&
+                  got.addr_n == src[i].addr_n &&
+                  got.addr_over == src[i].addr_over &&
+                  memcmp(got.addr, src[i].addr, sizeof(got.addr)) == 0,
+              "entry %d is back field for field, all %d hashes", i,
+              src[i].addr_n);
+    }
+
+    /* Foreign: not Observore's, or too short to say. */
+    uint8_t bad[OBSERVORE_CX_FRAME_MAX + 2];
+    memcpy(bad, frame, at);
+    bad[0] = 0x4E;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "a wrong first magic byte is foreign");
+    memcpy(bad, frame, at);
+    bad[1] = 0x44;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "a wrong second magic byte is foreign");
+    CHECK(observore_cx_check_frame(frame, 24, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "a length of twenty-four is foreign");
+    CHECK(observore_cx_check_frame(frame, 0, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "and so is nothing at all");
+    CHECK(observore_cx_check_frame(NULL, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "and so is no frame");
+    memcpy(bad, frame, at);
+    bad[0] = 0x00;
+    bad[2] = 2;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "the magic is judged before the version");
+    memcpy(bad, frame, at);
+    bad[2] = 2;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_VERSION,
+          "version two is a version this code does not read");
+    memcpy(bad, frame, at);
+    bad[2] = 0;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_VERSION,
+          "and so is version zero");
+
+    /* Malformed: Observore's version one with a shape that cannot be one. */
+    struct { int off; uint8_t val; const char *what; } shape[] = {
+        {3, 1, "kind 1"},
+        {12, 0, "count 0"},
+        {12, 9, "count 9"},
+        {11, 0, "total 0"},
+        {11, 9, "total 9"},
+        {10, 8, "index equal to total"},
+        {10, 9, "index above total"},
+    };
+    for (size_t i = 0; i < sizeof(shape) / sizeof(shape[0]); i++) {
+        memcpy(bad, frame, at);
+        bad[shape[i].off] = shape[i].val;
+        CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+              "%s is malformed", shape[i].what);
+    }
+    CHECK(observore_cx_check_frame(frame, at - 1, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+          "a length one byte short is malformed");
+    CHECK(observore_cx_check_frame(frame, at + 1, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+          "and one byte long");
+    memcpy(bad, frame, at);
+    bad[12] = 7;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+          "a count that does not match the length is malformed");
+    memset(&back, 0x77, sizeof(back));
+    (void)observore_cx_check_frame(bad, at, &back);
+    CHECK(back.node == 0x7777, "and a refused frame fills no header");
+
+    /* Entries. One valid entry, then each refusal from it. */
+    uint8_t ent[OBSERVORE_CX_ENTRY_LEN];
+    observore_census_entry_t got;
+    memcpy(ent, golden_entry, sizeof(ent));
+    CHECK(observore_cx_get_entry(ent, 9002, &got) && got.id == 0x11223344 &&
+              got.addr[0] == 0x1234 && got.addr_n == 1,
+          "the golden entry is accepted");
+    CHECK(!observore_cx_get_entry(NULL, 9002, &got), "no bytes is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    memset(ent, 0, 4);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "id 0 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    ent[24] = 9;
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "addr_n 9 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    ent[25] = 2;
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "addr_over 2 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    CHECK(!observore_cx_get_entry(ent, 9001, &got),
+          "a last_day one day after the sender's day is refused");
+    CHECK(observore_cx_get_entry(ent, 9003, &got) && got.last_day == 9002 &&
+              got.days == 0x0007,
+          "a last_day one day before is kept as sent, not aligned");
+    cx_poke16(ent + 6, 8986);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got),
+          "a last_day sixteen days before the sender's day is refused");
+    cx_poke16(ent + 6, 8987);
+    CHECK(observore_cx_get_entry(ent, 9002, &got),
+          "fifteen days before still has its bit in the window");
+    memcpy(ent, golden_entry, sizeof(ent));
+    cx_poke16(ent + 4, 0);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "days 0 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    cx_poke16(ent + 4, 0x8000);
+    cx_poke16(ent + 6, 9001);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got),
+          "a lone day that has aged out of the window is refused");
+    cx_poke16(ent + 4, 0xC000);
+    CHECK(observore_cx_get_entry(ent, 9002, &got),
+          "but one with a second day behind it still counts");
+    memcpy(ent, golden_entry, sizeof(ent));
+    CHECK(!observore_cx_get_entry(ent, OBSERVORE_CENSUS_NO_DAY, &got),
+          "no sender day refuses everything");
+    CHECK(!observore_cx_get_entry(ent, OBSERVORE_CENSUS_DAY_MAX + 1, &got),
+          "and so does a day the record cannot hold");
+    memcpy(ent, golden_entry, sizeof(ent));
+    ent[24] = 3;
+    cx_poke16(ent + 8 + 2 * 4, 0xBEEF);          /* a hash past addr_n */
+    CHECK(observore_cx_get_entry(ent, 9002, &got) && got.addr[4] == 0 &&
+              got.addr[2] == 0,
+          "hashes past addr_n are read as zero, whatever was on the wire");
+
+    /* The day check. */
+    CHECK(observore_cx_day_ok(9002, 9002), "the same day passes");
+    CHECK(observore_cx_day_ok(9002, 9003), "a sender one day behind passes");
+    CHECK(observore_cx_day_ok(9003, 9002), "a sender one day ahead passes");
+    CHECK(!observore_cx_day_ok(9002, 9004), "two days apart fails");
+    CHECK(!observore_cx_day_ok(9004, 9002), "in either direction");
+    CHECK(!observore_cx_day_ok(OBSERVORE_CENSUS_NO_DAY, 9002),
+          "a sender with no day fails");
+    CHECK(!observore_cx_day_ok(9002, OBSERVORE_CENSUS_NO_DAY),
+          "a receiver with no day fails");
+    CHECK(!observore_cx_day_ok(OBSERVORE_CENSUS_NO_DAY, OBSERVORE_CENSUS_NO_DAY),
+          "and two nodes with no day agree on nothing");
+    CHECK(!observore_cx_day_ok(0, OBSERVORE_CENSUS_NO_DAY),
+          "no day is not one day before day 0");
+    CHECK(!observore_cx_day_ok(65536, 65535), "a day above the record's range fails");
+    CHECK(observore_cx_day_ok(65535, 65535), "the last day the record holds passes");
+}
+#endif
+
 int main(void)
 {
     test_oui_lookup();
@@ -9599,6 +9843,9 @@ int main(void)
     test_a_field_found_across_the_pieces();
     test_the_census_counts_addresses_not_just_days();
     test_census_rows_are_copies();
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    test_a_census_frame_reads_back();
+#endif
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();

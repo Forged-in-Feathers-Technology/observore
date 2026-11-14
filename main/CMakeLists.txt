@@ -12,6 +12,7 @@ idf_component_register(
         "observore_notify_fmt.c"
         "observore_version.c"
         "observore_census.c"
+        "observore_census_wire.c"
         "observore_odid.c"
         "observore_peer.c"
         "observore_meshkey.c"
