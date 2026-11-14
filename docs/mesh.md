@@ -37,9 +37,10 @@ What it will not warn about, and why each one matters:
 
 - **anything with its monitor off** — the owner said stop reporting this, and
   a warning is a report that leaves the box
-- **anything the census quieted** — household furniture is household *here*,
-  and broadcasting it asks the neighbours to carry a judgement about a room
-  they cannot see
+- **anything the census quieted** — household furniture is the owner's own
+  household, here or on the owner's other nodes, and is not a judgement to pass
+  to neighbours: broadcasting it asks them to carry a verdict about a room they
+  cannot see
 - **anything worth no points** — a peer detector or a fixture is a fact about
   the room rather than a threat in it, and the cheapest attack on a mesh is to
   fill it with true but useless statements
@@ -428,6 +429,143 @@ for, so the same warnings read the same whichever order they arrived in.
   the tag.
 - Two friends whose sixteen-bit node ids collide count as one node. That errs
   low: the board hears less than it was told, never more.
+
+## Sharing the household census
+
+A node learns the furniture of one place over days: the doorbell, the printer,
+the household's own phones. With more than one node at home, each learns its
+own corner, and a device that is furniture to the household can still be
+reported on a node that has not yet seen it three days. The census exchange
+lets the owner's own nodes tell each other what each has learned, so a device
+that is household on one node stops being reported on the others. It is a
+second thing this project can transmit, so it follows the same rules as the
+warnings: it is off by default, it is absent from a build that does not ask for
+it, and it says so while it runs.
+
+No census rule is loosened by it. Membership is still earned over distinct
+days, protected classes are still always reported, and a stranger still cannot
+quiet anything; only a node holding the household secret can add a day.
+
+### What it costs, and how to turn it on
+
+`CONFIG_OBSERVORE_MESH_CENSUS` is **off by default and absent from every board
+profile**. A build asks for it by layering `boards/mesh-census.defaults` after a
+board profile. Without it the exchange code is not compiled, so a stranger has
+no path to the radio window at all, and the option is independent of
+`CONFIG_OBSERVORE_MESH_TX`.
+
+It exists only on ESP32-S3, C5 and C6 builds. The classic ESP32 is excluded on
+purpose: its household secret sits in plaintext NVS, so a key lifted from a
+stolen board could forge census that quiets devices on every node. On those
+profiles the option resolves off however it is requested, and the build gate
+proves that from the resolved sdkconfig rather than from the defaults file.
+
+Even in a build that has it, the exchange is **off at first boot**. The console
+has three modes: off, listen only and exchange. Turning either of the other two
+on needs the household secret to be set first. A node in exchange mode can be
+found by direction-finding while it transmits, which is the cost the warnings
+carry too. Listen only emits nothing: it hears the owner's other nodes and
+merges what they say, and keeps that node's passivity.
+
+### The window
+
+The exchange happens once a day, at a time the owner sets (default 03:30, which
+is outside the hour that daylight saving skips or repeats), on a household
+channel the owner sets (default 1; 2.4 GHz channels 1 to 13; the same on every
+node). A window lasts at most 30 seconds, and that is a number the compiler
+holds the code to. While it is open the Wi-Fi patrol pauses, and BLE keeps
+scanning, so the node is never fully blind.
+
+A node on the uplink or serving the console leaves its network for the window
+and returns afterwards; the console cannot be reached during it, and says
+afterwards that it was away and for how long. With no clock there is no window,
+the rule the census already follows for days.
+
+For setup there is "exchange now". Pressing it on two nodes within about 20
+seconds of each other pairs them. A hand-opened window cannot follow another
+within five minutes, so a person or a script on the network cannot keep patrol
+switched off.
+
+While the window runs the node says so where a person at the device can see it:
+the coloured band on a screen reads the countdown beside the level and the
+score, a headless board's LED gives a double wink once a second (cyan on a pixel), and the log says it; a board with no LED has the console and the log. The
+console shows the scheduled window beforehand and the result afterwards, never
+during it. Each window leaves one row on the card where there is one, and the
+last window's result is in the console's history.
+
+### What goes on the air
+
+Each frame is encrypted and authenticated with AES-CCM, under a key derived
+from the household secret with a label used for the census and nothing else. An
+outsider can see that a node transmits, not what the household owns.
+
+A node sends only what it saw itself, and never relays what a friend told it,
+so every day traces to the node that saw it and nothing can loop between nodes.
+A node with nothing to share sends nothing.
+
+A frame that fails authentication or the day check is counted, and nothing else
+is kept from it, not even the sender's address. Frames from other ESP-NOW
+devices are counted as other traffic. ESP-NOW exists only between the opening
+and the closing of a window, so outside one nothing can deliver a frame to the
+node at all.
+
+### How a friend's census counts here
+
+Days add up across your nodes as distinct days: the same evening on two nodes is
+one day, and three distinct days in the 16-day window still make an identity
+household. Addresses add up as well, and can only push an identity toward half
+weight. Protected classes are always reported, as they are on one node. A
+friend's contribution fades only by its days ageing out, which takes about two
+weeks after a node is unplugged, and a friend's table never costs this node an
+identity it learned itself.
+
+It is shown wherever suppression is shown. The bar reads "3 quiet, 1 via mesh",
+where the one is part of the three; a half-weight device caused by friends adds
+"1 half via mesh"; the system page splits both totals; the console's census
+table marks identities that came from friends and names their node ids; a
+half-weight finding reads "half weight, household via mesh"; and the
+notification note says how many were quieted as household and how many via mesh.
+
+A device quieted because of a friend's days is also left out of this node's BLE
+warnings, for the same reason as one quieted locally: both go through the same
+verdict. That means a friend's census changes what the mesh says, which is
+consistent, and worth knowing.
+
+### Clocks and timezones
+
+A census day is a local calendar day. Set the same timezone and the same clock
+source on every node. A difference of one day between nodes is tolerated and two
+are refused. Nodes in different zones can count one evening as two days, because
+a day number is not sent with its zone; the console shows each node's zone next
+to the exchange status so the mismatch can be seen.
+
+### Forgetting, and changing the secret
+
+"Forget peer census" in the console empties what friends reported and keeps
+this node's own. Changing or clearing the household secret empties it too, at
+once and again at the next boot or window, and the console says why it emptied.
+
+### What is stored
+
+Two settings: `cxsettings` holds the mode, the time and the channel, and
+`peercensus` holds what friends reported. The peer table holds 64 identities on
+ESP32-S3 builds and 32 on C5 and C6, 36 bytes each, and is written at most once
+a window and only when it changed. It is encrypted at rest on these chips. It is
+a table of its own, so it can never push out an identity this node learned
+itself.
+
+The last window's result is kept in memory, on the card and in the log; on a
+board with no card it does not survive a reboot.
+
+### What it does not defend against
+
+- **Somebody holding the household secret.** One compromised node compromises
+  the tier. The remedy is changing the secret on the nodes you still trust.
+- **A replay of a captured authentic frame within the day tolerance.** It can
+  only re-deliver days that really happened, because the merge only adds.
+- **Timing so far apart that the windows do not overlap.** Nodes whose clocks
+  disagree by more than the window cannot meet; nothing wrong is merged, the
+  exchange simply does not happen.
 
 ## Hearing other nodes, without becoming findable
 
