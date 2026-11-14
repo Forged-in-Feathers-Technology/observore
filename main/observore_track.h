@@ -194,6 +194,12 @@ typedef struct {
      * the fix both times was not a better rule but a visible one. */
     int           census_quieted;
     int           census_dampened;
+    /* The parts of `census_quieted` and `census_dampened` that the owner's
+     * other nodes caused: devices this node alone would still report. Carried
+     * for the same reason `census_quieted` is -- suppression has to say where
+     * it came from. */
+    int           census_quieted_mesh;
+    int           census_dampened_mesh;
     /* How much other nodes' warnings added to `score`, and from whom.
      *
      * Carried in the status for the same reason `monitors_off` and

@@ -489,9 +489,18 @@ void observore_track_set_day(int day)
  * but still carrying points, or the reverse, is a device whose screen and
  * whose number tell different stories.
  *
+ * The verdict may now include days the owner's other nodes reported, and it
+ * stays the one definition of quieting for the score, the findings and the BLE
+ * warning choice. `via_mesh`, when given, is set when the owner's other nodes
+ * are why a device is quieted or dampened: this node alone would report it.
+ *
  * Called with the lock already held. */
-static observore_census_verdict_t census_says(const observore_event_t *e)
+static observore_census_verdict_t census_says(const observore_event_t *e,
+                                              bool *via_mesh)
 {
+    if (via_mesh) {
+        *via_mesh = false;
+    }
     if (s_census_day == OBSERVORE_CENSUS_NO_DAY) {
         return OBSERVORE_CENSUS_REPORT;
     }
@@ -499,7 +508,13 @@ static observore_census_verdict_t census_says(const observore_event_t *e)
     if (id == 0) {
         return OBSERVORE_CENSUS_REPORT;   /* nothing to key on */
     }
-    return observore_census_verdict(id, s_census_day, e->cls);
+    observore_census_why_t why;
+    observore_census_verdict_t cv =
+        observore_census_explain(id, s_census_day, e->cls, &why);
+    if (via_mesh) {
+        *via_mesh = why.via_mesh;
+    }
+    return cv;
 }
 
 /* The local half of the score: a sum over the devices counting right now.
@@ -545,10 +560,14 @@ static uint32_t local_sum(observore_status_t *out, uint32_t *counting_mask)
          * same reason the switched-off monitors do: suppression has to
          * announce itself. "Clear" and "clear, two quieted as household" are
          * different claims (#132). */
-        observore_census_verdict_t cv = census_says(e);
+        bool via = false;
+        observore_census_verdict_t cv = census_says(e, &via);
         if (cv == OBSERVORE_CENSUS_QUIET) {
             if (out) {
                 out->census_quieted++;
+                if (via) {
+                    out->census_quieted_mesh++;
+                }
             }
             continue;
         }
@@ -566,6 +585,9 @@ static uint32_t local_sum(observore_status_t *out, uint32_t *counting_mask)
         if (cv == OBSERVORE_CENSUS_DAMPEN) {
             if (out) {
                 out->census_dampened++;
+                if (via) {
+                    out->census_dampened_mesh++;
+                }
             }
             points = observore_census_dampen(points);
         }
@@ -766,7 +788,7 @@ static size_t collect(observore_event_t *out, size_t max, int want,
          * and a thing that still counts for something should still be
          * visible. */
         if (s_devices[i].classified &&
-            census_says(&s_devices[i].ev) == OBSERVORE_CENSUS_QUIET) {
+            census_says(&s_devices[i].ev, NULL) == OBSERVORE_CENSUS_QUIET) {
             continue;
         }
         const observore_event_t *ev = &s_devices[i].ev;

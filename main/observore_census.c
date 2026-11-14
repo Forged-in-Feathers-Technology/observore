@@ -54,6 +54,31 @@ static struct {
 #define s_tab   (s_store.e)
 #define s_count (s_store.hdr.count)
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* The same layout for what the owner's other nodes reported: the stored blob
+ * and the live table are the same bytes, so a save is a pointer and a length.
+ *
+ * The header carries four bytes of a check value derived from the household
+ * secret, so a table written under one secret is not read back under another.
+ * Eight bytes in all, which keeps the 36-byte entries four-aligned behind it. */
+typedef struct {
+    uint16_t version;
+    uint16_t count;
+    uint8_t  check[OBSERVORE_PEER_CENSUS_CHECK_LEN];
+} census_peer_hdr_t;
+
+_Static_assert(sizeof(census_peer_hdr_t) == 8,
+               "the peer blob header is eight bytes, so its entries stay four-aligned");
+
+static struct {
+    census_peer_hdr_t             hdr;
+    observore_peer_census_entry_t e[OBSERVORE_PEER_CENSUS_MAX];
+} s_peer = {.hdr = {.version = OBSERVORE_PEER_CENSUS_FORMAT}};
+
+#define p_tab   (s_peer.e)
+#define p_count (s_peer.hdr.count)
+#endif
+
 /* Days from 2000-01-01, from a civil date.
  *
  * Howard Hinnant's days_from_civil, with the era shifted to 2000 so the
@@ -121,28 +146,6 @@ uint32_t observore_census_id(const observore_event_t *e)
     return h ? h : 1u;   /* 0 means "no identity", so never return it */
 }
 
-observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
-                                                    observore_class_t cls)
-{
-    /* Checked first, and before membership, so that no later change to this
-     * function can reach a protected class by some other path. The classes
-     * this device exists to find are not the census's to touch -- not to
-     * silence and not to quieten, because reducing the alarm on a body camera
-     * is still reducing it. */
-    if (observore_mute_class_is_protected(cls)) {
-        return OBSERVORE_CENSUS_REPORT;
-    }
-    if (id == 0 || !observore_census_is_household(id, day)) {
-        return OBSERVORE_CENSUS_REPORT;
-    }
-    bool over = false;
-    int addrs = observore_census_addresses(id, &over);
-    if (over || addrs >= OBSERVORE_CENSUS_ADDRS) {
-        return OBSERVORE_CENSUS_DAMPEN;
-    }
-    return OBSERVORE_CENSUS_QUIET;
-}
-
 uint16_t observore_census_dampen(uint16_t points)
 {
     uint16_t half = (uint16_t)(points / 2);
@@ -153,6 +156,11 @@ void observore_census_init(void)
 {
     s_count = 0;
     memset(s_tab, 0, sizeof(s_tab));
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    p_count = 0;
+    memset(p_tab, 0, sizeof(p_tab));
+    memset(s_peer.hdr.check, 0, sizeof(s_peer.hdr.check));
+#endif
     census_load();
 }
 
@@ -166,15 +174,35 @@ static observore_census_entry_t *find(uint32_t id)
     return NULL;
 }
 
-/* Move an entry's window forward to `day`.
+/* A day mask as it reads from another day.
  *
- * The shift distance is bounded before it is used, which is the whole reason
- * this is a function. A shift of sixteen or more on a uint16_t is undefined
- * behaviour, not a zero, and the device is *guaranteed* to ask for one: every
- * run starts with the clock unset, and when SNTP answers, the day number
- * jumps from nothing to about nine thousand. Anything stored before that is
- * further in the past than the window is wide, so the answer is an empty
- * mask -- the same thing the shift would mean if C defined it. */
+ * Bit 0 of `mask` is `from_day`; the result has bit 0 as `to_day`. Later days
+ * shift left, and the shift distance is bounded before it is used: a shift of
+ * sixteen or more on a uint16_t is undefined behaviour, not a zero, and the
+ * device is *guaranteed* to ask for one -- every run starts with the clock
+ * unset, and when SNTP answers, the day number jumps from nothing to about
+ * nine thousand. Anything stored before that is further in the past than the
+ * window is wide, so the answer is an empty mask.
+ *
+ * Earlier days shift right, which is what a friend whose clock is a day ahead
+ * needs. It reports its own today, which is this node's tomorrow, and counting
+ * that day now would count a day early. The local window never asks for this:
+ * age_to() below keeps its rule that a past day leaves the stored window as it
+ * is. */
+static uint16_t align_mask(uint16_t mask, int from_day, int to_day)
+{
+    int d = to_day - from_day;
+    if (d == 0) {
+        return mask;
+    }
+    if (d > 0) {
+        return d >= OBSERVORE_CENSUS_WINDOW ? 0 : (uint16_t)(mask << d);
+    }
+    d = -d;
+    return d >= OBSERVORE_CENSUS_WINDOW ? 0 : (uint16_t)(mask >> d);
+}
+
+/* Move an entry's window forward to `day`, by align_mask()'s bounded shift. */
 static void age_to(observore_census_entry_t *e, int day)
 {
     int moved = day - (int)e->last_day;
@@ -186,11 +214,7 @@ static void age_to(observore_census_entry_t *e, int day)
          * better failure than shifting the mask the wrong way. */
         return;
     }
-    if (moved >= OBSERVORE_CENSUS_WINDOW) {
-        e->days = 0;
-    } else {
-        e->days = (uint16_t)(e->days << moved);
-    }
+    e->days = align_mask(e->days, e->last_day, day);
     e->last_day = (uint16_t)day;
 }
 
@@ -220,30 +244,40 @@ static uint16_t addr_hash(const uint8_t *mac)
     return (uint16_t)((h >> 16) ^ (h & 0xFFFFu));
 }
 
+/* Record an address hash in a set, if it is one the set has not seen.
+ *
+ * One rule for this node's own addresses and for the union a friend's
+ * addresses are merged into, so the ceiling means the same thing on both
+ * sides. Returns whether anything changed. */
+static bool note_hash(uint16_t *addr, uint8_t *addr_n, uint8_t *addr_over,
+                      uint16_t h)
+{
+    for (uint8_t i = 0; i < *addr_n; i++) {
+        if (addr[i] == h) {
+            return false;        /* already counted */
+        }
+    }
+    if (*addr_n < OBSERVORE_CENSUS_ADDRS) {
+        addr[(*addr_n)++] = h;
+        return true;
+    }
+    /* The set is full and this is a further address. The count saturates, but
+     * that it saturated is itself worth recording: at the limit, "eight" and
+     * "eight and still arriving" mean different things about the device. */
+    if (!*addr_over) {
+        *addr_over = 1;
+        return true;
+    }
+    return false;
+}
+
 /* Record an address against an entry, if it is one we have not seen. */
 static bool note_addr(observore_census_entry_t *e, const uint8_t *mac)
 {
     if (!mac) {
         return false;
     }
-    uint16_t h = addr_hash(mac);
-    for (uint8_t i = 0; i < e->addr_n; i++) {
-        if (e->addr[i] == h) {
-            return false;        /* already counted */
-        }
-    }
-    if (e->addr_n < OBSERVORE_CENSUS_ADDRS) {
-        e->addr[e->addr_n++] = h;
-        return true;
-    }
-    /* The set is full and this is a further address. The count saturates, but
-     * that it saturated is itself worth recording: at the limit, "eight" and
-     * "eight and still arriving" mean different things about the device. */
-    if (!e->addr_over) {
-        e->addr_over = 1;
-        return true;
-    }
-    return false;
+    return note_hash(e->addr, &e->addr_n, &e->addr_over, addr_hash(mac));
 }
 
 /* Which entry gives up its place when the table is full.
@@ -296,9 +330,7 @@ static observore_census_entry_t *evict(int day)
          * would mutate an entry we are only looking at. */
         int moved = day - (int)c->last_day;
         uint16_t mask = (moved <= 0) ? c->days
-                      : (moved >= OBSERVORE_CENSUS_WINDOW)
-                            ? 0
-                            : (uint16_t)(c->days << moved);
+                                     : align_mask(c->days, c->last_day, day);
         int days = popcount16(mask);
         int hh = (days >= OBSERVORE_CENSUS_MIN_DAYS) ? 1 : 0;
 
@@ -358,9 +390,8 @@ int observore_census_addresses(uint32_t id, bool *over)
     return e ? (int)e->addr_n : 0;
 }
 
-static uint16_t window_of(uint32_t id, int day)
+static uint16_t window_at(const observore_census_entry_t *e, int day)
 {
-    observore_census_entry_t *e = find(id);
     if (!e || day < 0) {
         return 0;
     }
@@ -378,6 +409,11 @@ static uint16_t window_of(uint32_t id, int day)
     return copy.days;
 }
 
+static uint16_t window_of(uint32_t id, int day)
+{
+    return window_at(find(id), day);
+}
+
 int observore_census_days_seen(uint32_t id, int day)
 {
     return popcount16(window_of(id, day));
@@ -386,6 +422,184 @@ int observore_census_days_seen(uint32_t id, int day)
 bool observore_census_is_household(uint32_t id, int day)
 {
     return observore_census_days_seen(id, day) >= OBSERVORE_CENSUS_MIN_DAYS;
+}
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+static observore_peer_census_entry_t *find_peer(uint32_t id)
+{
+    for (size_t i = 0; i < p_count; i++) {
+        if (p_tab[i].id == id) {
+            return &p_tab[i];
+        }
+    }
+    return NULL;
+}
+#endif
+
+/* Everything the verdict, the explanation and a console row need to know about
+ * one identity as of one day, worked out in one place so that they cannot
+ * disagree. `local_*` is this node's own days and addresses alone; the rest is
+ * the same joined with what the owner's other nodes reported. Without the
+ * exchange the two are the same by construction. */
+typedef struct {
+    uint16_t local_mask;
+    uint16_t mask;
+    int      local_addrs;
+    bool     local_over;
+    int      addrs;
+    bool     over;
+    bool     here;                    /* in this node's own table */
+    uint16_t last_day;
+    uint8_t  from_n;
+    uint16_t from[OBSERVORE_CENSUS_FROM];
+} census_view_t;
+
+static void view_of(uint32_t id, int day, census_view_t *v)
+{
+    memset(v, 0, sizeof(*v));
+    const observore_census_entry_t *e = find(id);
+    v->here        = e != NULL;
+    v->local_mask  = window_at(e, day);
+    v->local_addrs = e ? (int)e->addr_n : 0;
+    v->local_over  = e ? (e->addr_over != 0) : false;
+    v->last_day    = e ? e->last_day : 0;
+    v->mask        = v->local_mask;
+    v->addrs       = v->local_addrs;
+    v->over        = v->local_over;
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    const observore_peer_census_entry_t *p =
+        (day >= 0 && day <= OBSERVORE_CENSUS_DAY_MAX) ? find_peer(id) : NULL;
+    if (!p) {
+        return;
+    }
+    if (!e) {
+        v->last_day = p->last_day;
+    }
+    /* Every mask is read in the day the local window is read in: `day`, or the
+     * local entry's own last day when that is later, which is what
+     * window_at() returns the local mask against. With them on one day the
+     * union is a plain OR.
+     *
+     * Two properties follow from the construction and are what make this safe
+     * to act on. The merged mask contains the local mask, so a merge can never
+     * make a device this node already quiets or dampens report again; and the
+     * merged address set contains the local set, so a merge can only move an
+     * identity from QUIET toward DAMPEN, never the other way. A friend's day
+     * that is still in this node's future has been shifted out of the mask
+     * by align_mask(), so it does not count until this node's day reaches it. */
+    int a = (e && e->last_day > day) ? (int)e->last_day : day;
+    uint16_t mask = v->local_mask;
+    uint16_t nodes[OBSERVORE_CENSUS_FROM];
+    uint8_t n = 0;
+    for (int k = 0; k < OBSERVORE_CENSUS_FROM; k++) {
+        if (p->from[k].node == 0) {
+            continue;
+        }
+        uint16_t m = align_mask(p->from[k].days, p->last_day, a);
+        if (m) {
+            mask |= m;
+            nodes[n++] = p->from[k].node;
+        }
+    }
+    if (n == 0) {
+        return;           /* every friend's days have aged out: nothing to add */
+    }
+    for (uint8_t i = 1; i < n; i++) {         /* ascending, three at most */
+        uint16_t key = nodes[i];
+        uint8_t j = i;
+        while (j > 0 && nodes[j - 1] > key) {
+            nodes[j] = nodes[j - 1];
+            j--;
+        }
+        nodes[j] = key;
+    }
+    uint16_t addr[OBSERVORE_CENSUS_ADDRS] = {0};
+    uint8_t an = 0, over = 0;
+    if (e) {
+        memcpy(addr, e->addr, sizeof(addr));
+        an   = e->addr_n;
+        over = e->addr_over;
+    }
+    uint8_t pn = p->addr_n > OBSERVORE_CENSUS_ADDRS ? OBSERVORE_CENSUS_ADDRS
+                                                    : p->addr_n;
+    for (uint8_t i = 0; i < pn; i++) {
+        note_hash(addr, &an, &over, p->addr[i]);
+    }
+    if (p->addr_over) {
+        over = 1;
+    }
+    v->mask   = mask;
+    v->addrs  = (int)an;
+    v->over   = over != 0;
+    v->from_n = n;
+    memcpy(v->from, nodes, n * sizeof(nodes[0]));
+#endif
+}
+
+/* The ladder, from a day mask and an address set: not household reports;
+ * household at the address ceiling dampens; household below it quiets. */
+static observore_census_verdict_t ladder(uint16_t mask, int addrs, bool over)
+{
+    if (popcount16(mask) < OBSERVORE_CENSUS_MIN_DAYS) {
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    if (over || addrs >= OBSERVORE_CENSUS_ADDRS) {
+        return OBSERVORE_CENSUS_DAMPEN;
+    }
+    return OBSERVORE_CENSUS_QUIET;
+}
+
+observore_census_verdict_t observore_census_explain(uint32_t id, int day,
+                                                    observore_class_t cls,
+                                                    observore_census_why_t *why)
+{
+    /* Checked first, and before membership or any table, so that no later
+     * change to this function can reach a protected class by some other path.
+     * The classes this device exists to find are not the census's to touch --
+     * not to silence and not to quieten, because reducing the alarm on a body
+     * camera is still reducing it. That holds for days this node counted and
+     * for days another node reported alike. */
+    if (observore_mute_class_is_protected(cls)) {
+        if (why) {
+            memset(why, 0, sizeof(*why));
+            why->local  = OBSERVORE_CENSUS_REPORT;
+            why->merged = OBSERVORE_CENSUS_REPORT;
+        }
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    if (id == 0) {
+        if (why) {
+            memset(why, 0, sizeof(*why));
+        }
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    census_view_t v;
+    view_of(id, day, &v);
+    observore_census_verdict_t local  = ladder(v.local_mask, v.local_addrs,
+                                               v.local_over);
+    observore_census_verdict_t merged = ladder(v.mask, v.addrs, v.over);
+    if (why) {
+        memset(why, 0, sizeof(*why));
+        why->local    = local;
+        why->merged   = merged;
+        why->via_mesh = local == OBSERVORE_CENSUS_REPORT &&
+                        merged != OBSERVORE_CENSUS_REPORT;
+        why->from_n   = v.from_n;
+        memcpy(why->from, v.from, sizeof(why->from));
+    }
+    return merged;
+}
+
+observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
+                                                    observore_class_t cls)
+{
+    /* The same rule as observore_census_explain(), not a second copy of it, so
+     * the score and the reason given for the score cannot come apart. The
+     * protected-class check stays the first statement here as well. */
+    if (observore_mute_class_is_protected(cls)) {
+        return OBSERVORE_CENSUS_REPORT;
+    }
+    return observore_census_explain(id, day, cls, NULL);
 }
 
 void observore_census_counts(int day, int *household, int *tracked)
@@ -491,6 +705,127 @@ bool observore_census_restore(const void *blob, size_t len)
     s_count = hdr.count;
     return true;
 }
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+size_t observore_census_peer_count(void)
+{
+    return p_count;
+}
+
+/* Put an entry's contributors in node order, free places last, and its
+ * addresses in value order. The order a friend's entries arrive in is not
+ * something the owner controls, and nothing downstream depends on it, so the
+ * stored form is made the same whichever came first: a re-delivery in another
+ * order then compares equal and costs no flash write. */
+static void peer_canon(observore_peer_census_entry_t *p)
+{
+    for (int i = 1; i < OBSERVORE_CENSUS_FROM; i++) {
+        for (int j = i; j > 0; j--) {
+            uint32_t a = p->from[j - 1].node ? p->from[j - 1].node : 0x10000u;
+            uint32_t b = p->from[j].node ? p->from[j].node : 0x10000u;
+            if (a <= b) {
+                break;
+            }
+            uint16_t tn = p->from[j - 1].node;
+            uint16_t td = p->from[j - 1].days;
+            p->from[j - 1].node = p->from[j].node;
+            p->from[j - 1].days = p->from[j].days;
+            p->from[j].node = tn;
+            p->from[j].days = td;
+        }
+    }
+    for (int i = 1; i < p->addr_n; i++) {
+        uint16_t key = p->addr[i];
+        int j = i;
+        while (j > 0 && p->addr[j - 1] > key) {
+            p->addr[j] = p->addr[j - 1];
+            j--;
+        }
+        p->addr[j] = key;
+    }
+}
+
+observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
+                                                     const observore_census_entry_t *in)
+{
+    if (!in || node == 0 || in->id == 0 ||
+        my_day < 0 || my_day > OBSERVORE_CENSUS_DAY_MAX ||
+        in->addr_n > OBSERVORE_CENSUS_ADDRS || in->addr_over > 1 ||
+        in->days == 0 || (int)in->last_day > my_day + 1) {
+        return OBSERVORE_CENSUS_MERGE_REFUSED;
+    }
+    /* Days that left the window before this node's day have nothing to add,
+     * and are not worth a place in the table. A friend one day ahead is read
+     * in its own day, so its tomorrow is kept for tomorrow. */
+    int span = my_day > (int)in->last_day ? my_day : (int)in->last_day;
+    if (align_mask(in->days, in->last_day, span) == 0) {
+        return OBSERVORE_CENSUS_MERGE_SAME;
+    }
+
+    observore_peer_census_entry_t before;
+    observore_peer_census_entry_t *p = find_peer(in->id);
+    if (p) {
+        before = *p;
+    } else {
+        if (p_count >= OBSERVORE_PEER_CENSUS_MAX) {
+            return OBSERVORE_CENSUS_MERGE_REFUSED;
+        }
+        p = &p_tab[p_count++];
+        memset(p, 0, sizeof(*p));
+        p->id       = in->id;
+        p->last_day = in->last_day;
+        memset(&before, 0, sizeof(before));
+    }
+
+    /* Everything is held in the later of the two days, so that one shift rule
+     * moves every contributor's mask and the incoming one onto the same bit. */
+    int l = (int)p->last_day > (int)in->last_day ? (int)p->last_day
+                                                 : (int)in->last_day;
+    for (int k = 0; k < OBSERVORE_CENSUS_FROM; k++) {
+        if (p->from[k].node) {
+            p->from[k].days = align_mask(p->from[k].days, p->last_day, l);
+        }
+    }
+    p->last_day = (uint16_t)l;
+
+    /* This friend's own place if it has one, else a free place or one whose
+     * friend has nothing left inside the window: that friend has no claim on
+     * it any more. When there is none the friend's days are left out, which
+     * only ever makes an identity less household. */
+    int read_day = my_day > l ? my_day : l;
+    int slot = -1;
+    for (int k = 0; k < OBSERVORE_CENSUS_FROM && slot < 0; k++) {
+        if (p->from[k].node == node) {
+            slot = k;
+        }
+    }
+    for (int k = 0; k < OBSERVORE_CENSUS_FROM && slot < 0; k++) {
+        if (p->from[k].node == 0 ||
+            align_mask(p->from[k].days, l, read_day) == 0) {
+            slot = k;
+        }
+    }
+    if (slot >= 0) {
+        if (p->from[slot].node != node) {
+            p->from[slot].node = node;
+            p->from[slot].days = 0;
+        }
+        /* An OR and never a replace. A repeated, replayed or reordered entry
+         * can only re-deliver days that already happened, so the table never
+         * loses a day and never invents one. */
+        p->from[slot].days |= align_mask(in->days, in->last_day, l);
+    }
+    for (uint8_t i = 0; i < in->addr_n; i++) {
+        note_hash(p->addr, &p->addr_n, &p->addr_over, in->addr[i]);
+    }
+    if (in->addr_over) {
+        p->addr_over = 1;
+    }
+    peer_canon(p);
+    return memcmp(&before, p, sizeof(before)) != 0 ? OBSERVORE_CENSUS_MERGE_CHANGED
+                                                   : OBSERVORE_CENSUS_MERGE_SAME;
+}
+#endif /* CONFIG_OBSERVORE_MESH_CENSUS */
 
 #ifndef OBSERVORE_HOST_TEST
 static void census_load(void)

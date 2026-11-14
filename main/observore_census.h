@@ -7,6 +7,13 @@
 
 #include "observore_types.h"
 
+/* The exchange option is a build-time switch, so the header has to see it on
+ * the device. The host suite has no sdkconfig and names the option on the
+ * command line instead. */
+#ifndef OBSERVORE_HOST_TEST
+#include "sdkconfig.h"
+#endif
+
 /* What is always around.
  *
  * A stationary node learns the furniture: the doorbell, the printer, the
@@ -167,8 +174,49 @@ typedef enum {
     OBSERVORE_CENSUS_QUIET,
 } observore_census_verdict_t;
 
+/* The verdict that acts: this node's own days and the days the owner's other
+ * nodes reported, under one rule. It is observore_census_explain() without the
+ * explanation, so the score and the reason for it cannot disagree. */
 observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
                                                     observore_class_t cls);
+
+/* How many of the owner's other nodes one identity can name at once.
+ *
+ * Three covers a household of four nodes. A fourth friend competes for a place
+ * by the days it brings, and loses a tie to one already counted: dropping a
+ * contribution only ever makes an identity less household, which is the safe
+ * direction. */
+#define OBSERVORE_CENSUS_FROM 3
+
+/* Why a verdict is what it is.
+ *
+ *   local     the verdict from this node's own days and addresses alone.
+ *   merged    the verdict that acts: local days joined with the owner's other
+ *             nodes' days. This is what observore_census_verdict() returns.
+ *   via_mesh  true exactly when `local` is REPORT and `merged` is not -- a
+ *             device that this node alone would still report. A merge that
+ *             turns QUIET into DAMPEN raised the alarm, so it is not counted
+ *             as quieting the owner's other nodes caused.
+ *   from      the nodes whose days still fall inside the window, in ascending
+ *             order, so a screen can name the friend rather than say "mesh".
+ *             Empty when the exchange is not compiled in. */
+typedef struct {
+    observore_census_verdict_t local;
+    observore_census_verdict_t merged;
+    bool                       via_mesh;
+    uint8_t                    from_n;
+    uint16_t                   from[OBSERVORE_CENSUS_FROM];
+} observore_census_why_t;
+
+/* The merged verdict, and the reasoning behind it.
+ *
+ * `why` may be NULL. A protected class or an id of 0 gives REPORT and REPORT
+ * with no friends named, before any table is read: the classes this device
+ * exists to find are never the census's to quieten, from this node or any
+ * other. */
+observore_census_verdict_t observore_census_explain(uint32_t id, int day,
+                                                    observore_class_t cls,
+                                                    observore_census_why_t *why);
 
 /* How much of its weight a dampened sighting keeps: half, never less than
  * one. Halving a single point would round to silence, which is the one
@@ -251,3 +299,79 @@ size_t observore_census_blob(void *out, size_t cap);
  * own header, is refused: restoring half an entry is worse than starting
  * empty. Returns false if the blob was rejected. */
 bool observore_census_restore(const void *blob, size_t len);
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+
+/* What the owner's other nodes have seen.
+ *
+ * A friend's entries live in a table of their own, so a friend can never cost
+ * this node an identity it learned itself: the local table above is not
+ * touched by anything in this section.
+ *
+ * Each friend's days are kept separately rather than OR'd into one mask. That
+ * is what lets a friend be named only while its days are still inside the
+ * window, and what lets a merge be an OR that a repeat or a replay cannot
+ * change: the days a friend reports are days that happened, and receiving them
+ * twice or out of order leaves the table as it was.
+ *
+ * Addresses are one union, because the address ceiling asks how many, not who
+ * saw them. */
+#define OBSERVORE_PEER_CENSUS_MAX     CONFIG_OBSERVORE_PEER_CENSUS_MAX
+
+/* Which code wrote the stored table, for the same reason as
+ * OBSERVORE_CENSUS_FORMAT: record it rather than recognise the shape. */
+#define OBSERVORE_PEER_CENSUS_FORMAT  1
+
+/* How many bytes of the key check the stored table carries. */
+#define OBSERVORE_PEER_CENSUS_CHECK_LEN 4
+
+/* One identity as the owner's other nodes reported it. Every from[].days is
+ * aligned to `last_day`, as bit 0 is. Node 0 marks a free place, because a
+ * node id is never 0 (observore_peer_node_id() returns 1 in its place). */
+typedef struct {
+    uint32_t id;
+    uint16_t last_day;
+    uint16_t addr[OBSERVORE_CENSUS_ADDRS];
+    uint8_t  addr_n;
+    uint8_t  addr_over;
+    struct {
+        uint16_t node;
+        uint16_t days;
+    } from[OBSERVORE_CENSUS_FROM];
+} observore_peer_census_entry_t;
+
+_Static_assert(sizeof(observore_peer_census_entry_t) == 36,
+               "a peer census entry is 36 bytes, which the stored blob relies on");
+_Static_assert(OBSERVORE_PEER_CENSUS_MAX >= 16 && OBSERVORE_PEER_CENSUS_MAX <= 64,
+               "the peer table is sized between 16 and 64 identities");
+
+typedef enum {
+    OBSERVORE_CENSUS_MERGE_SAME = 0,   /* nothing changed */
+    OBSERVORE_CENSUS_MERGE_CHANGED,    /* the stored entry's bytes changed */
+    OBSERVORE_CENSUS_MERGE_REFUSED,    /* not a record this node will take */
+} observore_census_merge_t;
+
+/* Take one census entry a friend reported, as a record already parsed and
+ * authenticated by the caller.
+ *
+ * `node` is the friend's id and `my_day` this node's census day. The entry's
+ * days and addresses are added to what is held for that friend and nothing is
+ * ever taken away, so the merge is an OR: a repeated, replayed or reordered
+ * entry can only deliver days that already happened. It never touches this
+ * node's own table.
+ *
+ * Refused, with nothing written: no entry, node 0, id 0, an empty day mask, an
+ * address count above the ceiling, a `last_day` more than one day after
+ * `my_day` (a friend's clock is allowed to be one day ahead, not more), and
+ * `my_day` outside the days the record can hold, which includes
+ * OBSERVORE_CENSUS_NO_DAY. Days that fell out of the window before this node's
+ * day are not an error and are not stored: they leave the merge SAME.
+ *
+ * Returns CHANGED only when the stored entry's bytes changed. */
+observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
+                                                     const observore_census_entry_t *in);
+
+/* How many identities are held from the owner's other nodes. */
+size_t observore_census_peer_count(void);
+
+#endif /* CONFIG_OBSERVORE_MESH_CENSUS */

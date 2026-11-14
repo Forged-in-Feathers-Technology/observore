@@ -1079,6 +1079,213 @@ static void test_the_census_acts_carefully(void)
     observore_census_init();
 }
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* A census entry a friend reported, as the record the radio path will hand
+ * over once it has been authenticated and parsed. One address, the rest of the
+ * set empty. */
+static observore_census_entry_t friend_entry(uint32_t id, uint16_t days,
+                                             uint16_t last_day, uint16_t addr0)
+{
+    observore_census_entry_t e;
+    memset(&e, 0, sizeof(e));
+    e.id       = id;
+    e.days     = days;
+    e.last_day = last_day;
+    e.addr[0]  = addr0;
+    e.addr_n   = 1;
+    return e;
+}
+
+/* The slice the exchange is for, end to end: a doorbell this node has seen on
+ * one day only, and a friend that has seen it on two others. Neither node has
+ * earned it alone; together they have three distinct days, which is the rule
+ * the census has always had. It is checked all the way to the score, the
+ * findings and the count that says where the quieting came from. */
+static void test_days_from_a_friend_count_here(void)
+{
+    banner("days from a friend make a device household here");
+
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x11, 0x22, 0x33};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t o_ring = {
+        .mac = ring, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_mute_clear();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_ring, SECS(0)), "the doorbell is seen");
+    observore_event_t ev[8];
+    size_t n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1 && ev[0].cls == OBSERVORE_CLASS_CAMERA, "and it is a camera");
+    uint32_t id = observore_census_id(&ev[0]);
+    CHECK(id != 0, "with an identity to remember");
+
+    /* This node has seen it today and on no other day. */
+    observore_census_note(id, 9002, ring);
+    observore_track_set_day(9002);
+
+    observore_census_why_t why;
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "one day of its own is not furniture");
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT &&
+              why.merged == OBSERVORE_CENSUS_REPORT && !why.via_mesh &&
+              why.from_n == 0,
+          "and nobody else is named for it");
+
+    /* A friend saw it on the two days before, under a different address. */
+    observore_census_entry_t in = friend_entry(id, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &in) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a friend's days are taken");
+    CHECK(observore_census_peer_count() == 1, "into a table of their own");
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET,
+          "three distinct days across two nodes is furniture");
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT,
+          "this node alone would still report it");
+    CHECK(why.merged == OBSERVORE_CENSUS_QUIET && why.via_mesh,
+          "so the quieting is the friend's doing, and says so");
+    CHECK(why.from_n == 1 && why.from[0] == 0x3A7F,
+          "naming the friend that made it so");
+    CHECK(observore_census_verdict(id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "and the verdict that acts is the merged one");
+
+    /* Through the tracker, which is where it has to hold. */
+    observore_status_t st;
+    observore_track_status(&st, SECS(1));
+    CHECK(st.score == 0, "the score is quiet, got %u", st.score);
+    CHECK(st.census_quieted == 1 && st.census_quieted_mesh == 1,
+          "and says one was quieted, and that it came via mesh");
+    CHECK(st.census_dampened == 0 && st.census_dampened_mesh == 0,
+          "with nothing dampened");
+    CHECK(observore_track_snapshot(ev, 8) == 0,
+          "the doorbell is left out of the findings the warning path reads, "
+          "so it agrees with the score");
+
+    /* The same entry again is the normal case: windows repeat. */
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &in) ==
+              OBSERVORE_CENSUS_MERGE_SAME,
+          "the same entry again changes nothing");
+    CHECK(observore_census_peer_count() == 1, "and adds no entry");
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+                  OBSERVORE_CENSUS_QUIET && why.from_n == 1,
+          "nor the verdict");
+
+    /* What a node will not take, each leaving the table as it was. */
+    observore_census_entry_t bad = friend_entry(id, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "node 0 is refused");
+    bad = friend_entry(0, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "id 0 is refused");
+    bad = friend_entry(id, 0x0000, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "an empty day mask is refused");
+    bad = friend_entry(id, 0x0003, 9001, 0x1234);
+    bad.addr_n = OBSERVORE_CENSUS_ADDRS + 1;
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "more addresses than the ceiling is refused");
+    bad = friend_entry(id, 0x0003, 9004, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "a day two ahead is refused");
+    bad = friend_entry(id, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, OBSERVORE_CENSUS_NO_DAY, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "with no day of our own nothing is taken");
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, NULL) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "and no entry is no entry");
+    CHECK(observore_census_peer_count() == 1, "every refusal left the table alone");
+
+    /* Two friends on one identity are listed in node order, whichever arrived
+     * first. One saw it today, the other on the two days before. */
+    const uint32_t other = 0xC0FFEE;
+    observore_census_entry_t a = friend_entry(other, 0x0001, 9002, 0x0A01);
+    observore_census_entry_t b = friend_entry(other, 0x0003, 9001, 0x0B02);
+    CHECK(observore_census_peer_merge(0x91C2, 9002, &a) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "the first friend is taken");
+    CHECK(observore_census_explain(other, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "one friend with one day is not furniture");
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &b) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "the second friend is taken");
+    CHECK(observore_census_explain(other, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET,
+          "two friends between them make three days");
+    CHECK(why.from_n == 2 && why.from[0] == 0x3A7F && why.from[1] == 0x91C2,
+          "named in ascending order, got %u: %04X %04X", why.from_n,
+          why.from[0], why.from[1]);
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT && why.via_mesh,
+          "an identity only the friends have seen is theirs alone");
+
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+}
+#else
+/* Without the exchange there is one census, this node's, and the verdict, the
+ * explanation and every count are the rule they were before there was a
+ * second. */
+static void test_without_the_exchange_the_census_is_local(void)
+{
+    banner("without the exchange the census is this node alone");
+
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x11, 0x22, 0x33};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t o_ring = {
+        .mac = ring, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_mute_clear();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_ring, SECS(0)), "the doorbell is seen");
+    observore_event_t ev[8];
+    size_t n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1 && ev[0].cls == OBSERVORE_CLASS_CAMERA, "and it is a camera");
+    uint32_t id = observore_census_id(&ev[0]);
+
+    observore_census_note(id, 9002, ring);
+    observore_track_set_day(9002);
+
+    observore_census_why_t why;
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "one day is not furniture");
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT &&
+              why.merged == OBSERVORE_CENSUS_REPORT && !why.via_mesh &&
+              why.from_n == 0,
+          "and the merged view is the local one, with nobody named");
+
+    observore_status_t st;
+    observore_track_status(&st, SECS(1));
+    CHECK(st.census_quieted == 0 && st.census_quieted_mesh == 0 &&
+              st.census_dampened_mesh == 0,
+          "and nothing is counted as via mesh");
+
+    /* Furniture on this node's own days is quieted exactly as it always was,
+     * and never attributed to a friend that cannot exist. */
+    observore_census_init();
+    observore_census_note(id, 9000, ring);
+    observore_census_note(id, 9001, ring);
+    observore_census_note(id, 9002, ring);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET && why.local == OBSERVORE_CENSUS_QUIET,
+          "three days of its own is furniture");
+    CHECK(!why.via_mesh && why.from_n == 0, "and is nobody else's doing");
+    observore_track_status(&st, SECS(2));
+    CHECK(st.census_quieted == 1 && st.census_quieted_mesh == 0,
+          "one quieted, none via mesh");
+
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+}
+#endif
+
 /* Which answer about the time the device believes.
  *
  * This is the rule that decides whether a clock exists at all, and since the
@@ -8788,6 +8995,11 @@ int main(void)
     test_calibration_recovers_the_sheet();
     test_the_census_earns_membership_over_days();
     test_the_census_acts_carefully();
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    test_days_from_a_friend_count_here();
+#else
+    test_without_the_exchange_the_census_is_local();
+#endif
     test_a_guessed_clock_is_not_a_clock();
     test_a_full_census_still_learns();
     test_a_warning_survives_the_round_trip();
