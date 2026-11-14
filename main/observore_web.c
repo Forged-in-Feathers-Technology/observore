@@ -845,15 +845,25 @@ static esp_err_t history_handler(httpd_req_t *req)
     if (!observore_jb_full(&jb)) {
         observore_peer_event_t ev[OBSERVORE_PEER_EVENTS_MAX];
         size_t ne = observore_peer_events_copy(ev, OBSERVORE_PEER_EVENTS_MAX);
+        /* The events keep the sender's coordinates, and only the reading
+         * leaves here, computed when the history is read: if this node's own
+         * position has been cleared since, a distance reads "position known"
+         * from then on. No coordinate is written into this listing. */
+        int32_t own_lat = 0, own_lon = 0;
+        bool have_own = observore_nodepos_get(&own_lat, &own_lon);
         observore_jb_printf(&jb, "],\"peer_events\":[");
         for (size_t i = 0; i < ne && !observore_jb_full(&jb); i++) {
             const observore_peer_event_t *p = &ev[i];
             char first[24] = "", last[24] = "";
+            char where[OBSERVORE_PEER_WHERE_LEN];
+            observore_peer_share_where(&p->share, have_own, own_lat, own_lon,
+                                       false, where, sizeof(where));
             observore_clock_iso(p->first_us, first, sizeof(first));
             observore_clock_iso(p->last_us, last, sizeof(last));
             observore_jb_printf(&jb,
                 "%s{\"node\":%u,\"trusted\":%s,\"class\":\"%s\","
                 "\"points\":%u,\"seen_here\":%s,\"voices\":%u,"
+                "\"where\":\"%s\","
                 "\"first_s\":%lld,\"last_s\":%lld,"
                 "\"first_seen\":\"%s\",\"last_seen\":\"%s\","
                 "\"open\":%s,\"this_boot\":true}",
@@ -862,7 +872,7 @@ static esp_err_t history_handler(httpd_req_t *req)
                 observore_class_name((observore_class_t)p->share.cls),
                 (unsigned)p->share.points,
                 p->share.seen_here ? "true" : "false",
-                (unsigned)p->share.voices,
+                (unsigned)p->share.voices, where,
                 (long long)(p->first_us / 1000000),
                 (long long)(p->last_us / 1000000), first, last,
                 p->open ? "true" : "false");
@@ -1653,7 +1663,8 @@ static esp_err_t tz_set_handler(httpd_req_t *req)
  * and why it added no more (counts, points, seen_here, voices, why). The
  * shares are computed over the very snapshot the list shows, so share i
  * describes warning i, and the totals at the end are the score's own peer
- * points for that snapshot.
+ * points for that snapshot. Each warning also says where its sender is from
+ * this node, through the same reading every surface uses.
  */
 static esp_err_t peers_handler(httpd_req_t *req)
 {
@@ -1667,6 +1678,11 @@ static esp_err_t peers_handler(httpd_req_t *req)
     observore_track_local(&mask, &base);
     observore_peer_weigh(w, n, mask, observore_monitors_off_mask(), base, now,
                          &pw);
+
+    /* This node's own position, read once so every row of one response is
+     * measured from the same point. */
+    int32_t own_lat = 0, own_lon = 0;
+    bool have_own = observore_nodepos_get(&own_lat, &own_lon);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "{\"ok\":true,\"warnings\":[");
@@ -1689,6 +1705,37 @@ static esp_err_t peers_handler(httpd_req_t *req)
                  w[i].trusted ? "true" : "false",
                  w[i].have_pos ? "true" : "false", pos);
         httpd_resp_sendstr_chunk(req, item);
+
+        /* Where this warning's sender is, from the warning itself and not
+         * from its share: this list shows every warning one by one, stale,
+         * folded and zero-point ones included, and a stranger's individual
+         * claim stays visible here (worded as a claim). These stay on the
+         * stack on purpose: the one 8,192-byte httpd task serves every
+         * request and exists only while the console is up, whereas a static
+         * would be BSS that every board pays for its whole uptime. The
+         * reading is built from fixed words and digits, so it needs no
+         * escaping. loc holds the worst case of 120 bytes. */
+        observore_peer_reading_t r;
+        char where[OBSERVORE_PEER_WHERE_LEN];
+        char dist[48] = "";
+        char dir[16] = "";
+        char loc[128];
+        observore_peer_locate(have_own, own_lat, own_lon, w[i].have_pos,
+                              w[i].lat_e7, w[i].lon_e7, &r);
+        observore_peer_reading_text(&r, w[i].trusted, false, where,
+                                    sizeof(where));
+        if (r.kind == OBSERVORE_PEER_READ_NEARBY ||
+            r.kind == OBSERVORE_PEER_READ_BEARING) {
+            snprintf(dist, sizeof(dist), ",\"dist_m\":%lu,\"far\":%s",
+                     (unsigned long)r.dist_m, r.far ? "true" : "false");
+        }
+        if (r.kind == OBSERVORE_PEER_READ_BEARING) {
+            snprintf(dir, sizeof(dir), ",\"dir\":\"%s\"",
+                     observore_peer_sector_name(r.sector));
+        }
+        snprintf(loc, sizeof(loc), ",\"where\":\"%s\"%s%s", where, dist, dir);
+        httpd_resp_sendstr_chunk(req, loc);
+
         snprintf(extra, sizeof(extra),
                  ",\"counts\":%s,\"points\":%u,\"seen_here\":%s"
                  ",\"voices\":%u,\"why\":\"%s\"}",

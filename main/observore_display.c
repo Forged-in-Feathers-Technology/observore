@@ -84,6 +84,7 @@
 #include "observore_ble.h"
 #include "observore_census.h"
 #include "observore_peer.h"
+#include "observore_nodepos.h"
 #include "observore_track.h"
 #include "observore_touchcal.h"
 #include "observore_touch.h"
@@ -572,8 +573,13 @@ static size_t             s_snap_n;
 static int64_t            s_snap_now_us;
 /* What other nodes' warnings added to the score, as of the same moment. A
  * static, not a local: the drawing task has about a kilobyte of stack to
- * spare and this is nearly a hundred bytes. */
+ * spare and this is 164 bytes. */
 static observore_peer_weight_t s_snap_peer;
+/* The screen form of each share's reading, made on the main task so that the
+ * drawing task, whose 3 KB stack was measured thin, copies strings and never
+ * runs the distance maths. Empty for a stranger (the reading function gives a
+ * stranger nothing on the screen) and for a share without a usable position. */
+static char s_snap_where[OBSERVORE_PEER_MAX][OBSERVORE_PEER_WHERE_SCREEN_LEN];
 static bool               s_have_snap;
 static bool               s_dirty;
 
@@ -1725,7 +1731,27 @@ static void draw_watch(const observore_status_t *st,
      * explains the colour of the band. */
     uint8_t peer_order[OBSERVORE_PEER_MAX];
     const size_t peer_n = peer_row_order(peer_order);
-    const int findings_last = last_row - (peer_n < 2 ? (int)peer_n : 2);
+    /* Whether a row has room for its own reading is decided by the
+     * preprocessor, as for the label column below: a runtime test would leave
+     * the wide branch compiled on the narrow panel, where it cannot fit. A
+     * narrow panel puts one line under the first peer row instead. */
+#if COLS >= 56
+    const bool narrow = false;
+#else
+    const bool narrow = true;
+#endif
+    /* Zero-initialised so that no element is ever handed to the layout rule
+     * unfilled; with no peer rows it stays all false. */
+    bool peer_reading[OBSERVORE_PEER_MAX] = {false};
+    for (size_t k = 0; k < peer_n; k++) {
+        peer_reading[k] = s_snap_where[peer_order[k]][0] != '\0';
+    }
+    /* The reading line counts against the same two reserved rows, so local
+     * findings never lose more than two rows to peers. The rule lives beside
+     * the reading in observore_peer.c, where the host suite checks it; this
+     * function only draws what it returns. */
+    const int findings_last =
+        last_row - (int)observore_peer_screen_reserve(peer_reading, peer_n, narrow);
     for (size_t i = 0; i < n && row < findings_last; i++, row++) {
         char mac[OBSERVORE_MAC_STR_LEN];
         observore_mac_str(top[i].mac, mac);
@@ -1798,9 +1824,31 @@ static void draw_watch(const observore_status_t *st,
     }
     /* Peer rows are never written to the list of rows a tap can act on:
      * there is no address to ignore and no suppression path for a peer. */
-    for (size_t k = 0; k < peer_n && row < last_row; k++, row++) {
+    uint8_t slot[OBSERVORE_PEER_SCREEN_SLOTS];
+    const size_t slots = observore_peer_screen_slots(
+        peer_reading, peer_n, narrow,
+        row < last_row ? (size_t)(last_row - row) : 0, slot);
+    for (size_t j = 0; j < slots; j++, row++) {
+        if (slot[j] == OBSERVORE_PEER_SLOT_READING) {
+            /* Indented to the class column and grey like other secondary
+             * text: the reading of the row above it. */
+            snprintf(text, sizeof(text), "         %s",
+                     s_snap_where[peer_order[0]]);
+            line(row, text, C_GREY, C_BLACK);
+            continue;
+        }
+        const size_t k = slot[j];
         const observore_peer_share_t *sh = &s_snap_peer.share[peer_order[k]];
         peer_row_text(sh, text, sizeof(text));
+#if COLS >= 56
+        /* Room for the reading on the row itself: 39 characters of row, two
+         * spaces and at most 18 of reading fit the 72-byte buffer. */
+        if (peer_reading[k]) {
+            size_t at = strlen(text);
+            snprintf(text + at, sizeof(text) - at, "  %s",
+                     s_snap_where[peer_order[k]]);
+        }
+#endif
         line(row, text, sh->points > 0 ? C_WHITE : C_GREY, C_BLACK);
     }
     for (; row < last_row; row++) {
@@ -3246,9 +3294,23 @@ void observore_display_render(const observore_status_t *st,
      * one. Only the main loop calls here, so one static is enough. */
     static observore_peer_weight_t pw;
     observore_track_peer_weight(&pw, now_us);
+    /* The readings are made here, on the main task, so the drawing task only
+     * copies strings: its 3 KB stack is thin and the distance maths is
+     * avoidable work on it. This node's position is read once per render. */
+    static char where[OBSERVORE_PEER_MAX][OBSERVORE_PEER_WHERE_SCREEN_LEN];
+    int32_t own_lat = 0, own_lon = 0;
+    const bool have_own = observore_nodepos_get(&own_lat, &own_lon);
+    for (size_t i = 0; i < OBSERVORE_PEER_MAX; i++) {
+        where[i][0] = '\0';
+        if (i < pw.n) {
+            observore_peer_share_where(&pw.share[i], have_own, own_lat, own_lon,
+                                       true, where[i], sizeof(where[i]));
+        }
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_snap_st = *st;
     s_snap_peer = pw;
+    memcpy(s_snap_where, where, sizeof(s_snap_where));
     memcpy(s_snap_top, top, n * sizeof(s_snap_top[0]));
     s_snap_n = n;
     s_snap_now_us = now_us;

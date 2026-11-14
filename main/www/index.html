@@ -166,12 +166,14 @@
     lift the board to caution on its own. Strangers together add at most one
     point, and only to something this node already sees. A class whose
     monitor is switched off here takes nothing from peers either. Nothing a
-    peer sends can quiet anything.
+    peer sends can quiet anything. <em>where</em> is how far, and in which
+    direction, the sender says it is from this node when both know where
+    they are; a stranger&rsquo;s is only its claim.
   </p>
   <div class="wrap">
     <table>
       <thead>
-        <tr><th>node</th><th>trust</th><th>class</th><th>adds</th><th>why</th><th>seen here</th><th>age</th></tr>
+        <tr><th>node</th><th>trust</th><th>class</th><th>adds</th><th>why</th><th>seen here</th><th>age</th><th>where</th></tr>
       </thead>
       <tbody id="peerrows"></tbody>
     </table>
@@ -205,7 +207,7 @@
   <div class="wrap">
     <table>
       <thead>
-        <tr><th>class</th><th>from</th><th>adds</th><th>here</th><th>first</th><th>last</th></tr>
+        <tr><th>class</th><th>from</th><th>adds</th><th>here</th><th>where</th><th>first</th><th>last</th></tr>
       </thead>
       <tbody id="peerhistrows"></tbody>
     </table>
@@ -812,6 +814,7 @@ function renderHistory(h) {
     cell(tr, '', peerFrom(ev));
     cell(tr, '', '+' + ev.points);
     cell(tr, 'dim', ev.seen_here ? 'yes' : 'no');
+    cell(tr, 'dim', ev.where || '');
     cell(tr, 'dim', ev.first_seen ? stamp(ev.first_seen) : 'at ' + ev.first_s + ' s uptime');
     cell(tr, 'dim', (ev.last_seen ? stamp(ev.last_seen) : 'at ' + ev.last_s + ' s uptime') +
       (ev.open ? '' : ' \u00b7 ended'));
@@ -824,7 +827,7 @@ function renderHistory(h) {
     const tr = document.createElement('tr');
     cell(tr, 'dim', h.peer_events_omitted
       ? 'not shown: history response full'
-      : 'none this boot').colSpan = 6;
+      : 'none this boot').colSpan = 7;
     prow.appendChild(tr);
   }
 }
@@ -940,6 +943,7 @@ function renderPeers(p) {
     cell(tr, 'dim', w.why);
     cell(tr, 'dim', w.seen_here ? 'yes' : 'no');
     cell(tr, 'dim', (w.age_s + (w.heard_s || 0)) + 's');
+    cell(tr, w.trusted ? '' : 'dim', w.where || '');
     body.appendChild(tr);
   }
   $('peerinfo').textContent = list.length
