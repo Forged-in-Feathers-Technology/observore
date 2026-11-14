@@ -312,13 +312,10 @@ typedef struct {
     uint16_t from[OBSERVORE_CENSUS_FROM];
 } observore_census_row_t;
 
-/* How many rows there are: this node's own entries, then, with the exchange,
- * the identities only the owner's other nodes have seen. */
-size_t observore_census_row_count(void);
-
-/* Fill row `i` as of `day`. Returns false past the end. This node's own
- * entries come first in table order, then the others' in theirs. The table can
- * change between calls; each row is whole. */
+/* Fill row `i` as of `day`. Returns false past the end, so the listing is a
+ * loop that stops there. This node's own entries come first in table order,
+ * then, with the exchange, the identities only the owner's other nodes have
+ * seen, in theirs. The table can change between calls; each row is whole. */
 bool observore_census_row(size_t i, int day, observore_census_row_t *out);
 
 /* Whether the table is full.

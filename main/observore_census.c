@@ -718,21 +718,6 @@ int observore_census_household_at_ceiling(int day)
     return n;
 }
 
-size_t observore_census_row_count(void)
-{
-    CENSUS_LOCK();
-    size_t n = s_count;
-#if CONFIG_OBSERVORE_MESH_CENSUS
-    for (size_t i = 0; i < p_count; i++) {
-        if (!find(p_tab[i].id)) {
-            n++;               /* known only to the owner's other nodes */
-        }
-    }
-#endif
-    CENSUS_UNLOCK();
-    return n;
-}
-
 bool observore_census_row(size_t i, int day, observore_census_row_t *out)
 {
     if (!out) {

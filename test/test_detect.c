@@ -66,6 +66,19 @@ static void banner(const char *name)
     printf("== %s\n", name);
 }
 
+/* How many rows the console would list: the firmware reads the census one row
+ * at a time, so the suite counts the same way rather than through a helper
+ * nothing on the device calls. */
+static size_t census_rows_listed(void)
+{
+    observore_census_row_t r;
+    size_t n = 0;
+    while (observore_census_row(n, 9002, &r)) {
+        n++;
+    }
+    return n;
+}
+
 /* ---------------------------------------------------------------- */
 
 static void test_oui_lookup(void)
@@ -870,7 +883,7 @@ static void test_the_census_earns_membership_over_days(void)
     /* Persistence. The table is readable for saving, and the blob carries a
      * header saying which code wrote it -- see the address test for why a
      * bare array of entries is no longer enough. */
-    CHECK(observore_census_row_count() == 2, "the table is readable for saving");
+    CHECK(census_rows_listed() == 2, "the table is readable for saving");
     static uint8_t saved[2048];
     size_t len = observore_census_blob(saved, sizeof(saved));
 
@@ -1800,7 +1813,7 @@ static void test_census_rows_are_copies(void)
     banner("census rows are copies taken under the lock");
 
     observore_census_init();
-    CHECK(observore_census_row_count() == 0, "an empty census has no rows");
+    CHECK(census_rows_listed() == 0, "an empty census has no rows");
     observore_census_row_t r;
     CHECK(!observore_census_row(0, 9002, &r), "and no row 0");
 
@@ -1812,7 +1825,7 @@ static void test_census_rows_are_copies(void)
         observore_census_note(furniture, d, m2);
     }
     observore_census_note(visitor, 9002, m1);
-    CHECK(observore_census_row_count() == 2, "two entries make two rows");
+    CHECK(census_rows_listed() == 2, "two entries make two rows");
 
     CHECK(observore_census_row(0, 9002, &r), "the first row is there");
     bool over = true;
@@ -1849,7 +1862,7 @@ static void test_census_rows_are_copies(void)
     observore_census_entry_t e = friend_entry(visitor, 0x0003, 9001, 0x1234);
     CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
               OBSERVORE_CENSUS_MERGE_CHANGED, "a friend is taken");
-    CHECK(observore_census_row_count() == 1, "an identity both know is one row");
+    CHECK(census_rows_listed() == 1, "an identity both know is one row");
     CHECK(observore_census_row(0, 9002, &r) && r.id == visitor,
           "it is the visitor's row");
     CHECK(r.household && !r.household_local && r.via_mesh && r.here,
@@ -1864,7 +1877,7 @@ static void test_census_rows_are_copies(void)
     e = friend_entry(stranger, 0x0007, 9002, 0x4321);
     CHECK(observore_census_peer_merge(0x91C2, 9002, &e) ==
               OBSERVORE_CENSUS_MERGE_CHANGED, "a friend's own identity is taken");
-    CHECK(observore_census_row_count() == 2, "and makes a second row");
+    CHECK(census_rows_listed() == 2, "and makes a second row");
     CHECK(observore_census_row(1, 9002, &r) && r.id == stranger,
           "after this node's own");
     CHECK(!r.here && r.household && !r.household_local && r.via_mesh &&
