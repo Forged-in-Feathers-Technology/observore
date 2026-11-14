@@ -25,6 +25,7 @@
 #include "observore_clock.h"
 #include "observore_heapwatch.h"
 #include "observore_meshkey.h"
+#include "observore_nvs.h"
 #include "observore_peer.h"
 
 static const char *TAG = "observore.espnow";
@@ -100,13 +101,38 @@ static bool              s_cut;              /* ended for a reason other than ti
 static bool              s_send_logged;      /* a send error is said once a window */
 static int64_t           s_next_round_us;
 
-/* What the owner set. Starts as the defaults: off, channel 1, 03:30, and no
- * scheduled window yet run. */
-static uint8_t  s_mode     = OBSERVORE_CX_OFF;
-static uint8_t  s_channel  = 1;
-static uint16_t s_at_min   = OBSERVORE_CX_AT_DEFAULT;
-static int      s_last_day = -1;
-static bool     s_manual;                    /* set when the owner asks for a window now */
+/* What the owner set, and the one fact that has to outlive a reboot with it:
+ * the last local day a scheduled window ran, so a node that restarts during the
+ * grace does not run the day's window twice.
+ *
+ * Eight bytes, written as they are and read back the same way, with a version so
+ * that a later layout is recognised rather than guessed at. `reserved` is zero
+ * and keeps the two sixteen-bit fields aligned. A last_day of 0xFFFF is "none":
+ * 65535 is the last day the census can hold, and no window has run on it. */
+typedef struct cx_settings_t {
+    uint8_t  version;
+    uint8_t  mode;
+    uint8_t  channel;
+    uint8_t  reserved;
+    uint16_t at_min;
+    uint16_t last_day;
+} cx_settings_t;
+
+_Static_assert(sizeof(cx_settings_t) == 8, "the stored exchange settings are eight bytes");
+
+#define OBSERVORE_CX_SETTINGS_FORMAT 1
+#define OBSERVORE_CX_NO_DAY          0xFFFF
+
+/* The defaults are what a node has until the owner says otherwise: off, on
+ * channel 1, at 03:30, with no scheduled window yet run. */
+static cx_settings_t s_set = {
+    .version  = OBSERVORE_CX_SETTINGS_FORMAT,
+    .mode     = OBSERVORE_CX_OFF,
+    .channel  = 1,
+    .at_min   = OBSERVORE_CX_AT_DEFAULT,
+    .last_day = OBSERVORE_CX_NO_DAY,
+};
+static bool s_manual;                        /* set when the owner asks for a window now */
 
 static mbedtls_ccm_context s_ccm;
 static uint8_t             s_frame[OBSERVORE_CX_FRAME_MAX];
@@ -186,10 +212,74 @@ bool observore_espnow_available(void)
     return true;
 }
 
+/* Read the settings, which are the defaults when nothing is stored: the
+ * exchange is off at first boot even in a build that has it, and the owner turns
+ * it on. A blob of the wrong length, version or range is not guessed at either,
+ * because a node that transmits on a schedule nobody chose is the failure this
+ * option exists to avoid. */
+static void settings_load(void)
+{
+    s_set.version  = OBSERVORE_CX_SETTINGS_FORMAT;
+    s_set.mode     = OBSERVORE_CX_OFF;
+    s_set.channel  = 1;
+    s_set.reserved = 0;
+    s_set.at_min   = OBSERVORE_CX_AT_DEFAULT;
+    s_set.last_day = OBSERVORE_CX_NO_DAY;
+
+    observore_nvs_item_t item = {.key = "cxsettings", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = &s_set, .len = sizeof(s_set)};
+    observore_nvs_read(&item, 1);
+    if (!item.found) {
+        return;
+    }
+    if (item.len != sizeof(s_set) || s_set.version != OBSERVORE_CX_SETTINGS_FORMAT ||
+        s_set.mode > OBSERVORE_CX_EXCHANGE || !observore_cx_channel_ok(s_set.channel) ||
+        s_set.at_min >= 1440) {
+        s_set.version  = OBSERVORE_CX_SETTINGS_FORMAT;
+        s_set.mode     = OBSERVORE_CX_OFF;
+        s_set.channel  = 1;
+        s_set.reserved = 0;
+        s_set.at_min   = OBSERVORE_CX_AT_DEFAULT;
+        s_set.last_day = OBSERVORE_CX_NO_DAY;
+        ESP_LOGW(TAG, "the saved census exchange settings were not readable -- "
+                      "the exchange is off");
+    }
+}
+
+/* Write the settings. Called outside the lock, which it takes itself to copy
+ * them, so a flash commit never holds up the receive path's readers. */
+static void settings_save(void)
+{
+    cx_settings_t copy;
+    CX_LOCK();
+    copy = s_set;
+    CX_UNLOCK();
+    const observore_nvs_item_t item = {.key = "cxsettings", .type = OBSERVORE_NVS_BLOB,
+                                       .buf = &copy, .len = sizeof(copy)};
+    if (observore_nvs_write(&item, 1) != ESP_OK) {
+        ESP_LOGW(TAG, "could not save the census exchange settings");
+    }
+}
+
 void observore_espnow_init(void)
 {
     s_cx_lock = xSemaphoreCreateMutex();
     mbedtls_ccm_init(&s_ccm);
+    settings_load();
+
+    /* After the household secret is loaded, and from it: the peer table is kept
+     * only under the key check of the secret it was learned under. The check is
+     * four bytes of an HMAC under its own label, so it names the secret without
+     * being usable as a key, and the copy here is wiped once the table has been
+     * read. */
+    uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {0};
+    bool have_secret = observore_meshkey_derive(OBSERVORE_CX_CHECK_LABEL, check, sizeof(check));
+    observore_census_peer_load(check, have_secret);
+    mbedtls_platform_zeroize(check, sizeof(check));
+
+    ESP_LOGI(TAG, "census exchange %s, window %02u:%02u, channel %u",
+             observore_cx_mode_name(s_set.mode), (unsigned)(s_set.at_min / 60),
+             (unsigned)(s_set.at_min % 60), (unsigned)s_set.channel);
 }
 
 /* Everything the decision to open reads, gathered here so the decision touches
@@ -207,11 +297,11 @@ static void fill_when(observore_cx_when_t *w, int64_t now_us)
         localtime_r(&t, &lt);
         w->sod = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec;
     }
-    w->at_min        = s_at_min;
-    w->last_day      = s_last_day;
+    w->at_min        = s_set.at_min;
+    w->last_day      = s_set.last_day == OBSERVORE_CX_NO_DAY ? -1 : (int)s_set.last_day;
     w->now_us        = now_us;
     w->last_close_us = s_last_close_us;
-    w->mode          = s_mode;
+    w->mode          = s_set.mode;
     w->have_secret   = observore_meshkey_present();
 }
 
@@ -221,6 +311,7 @@ bool observore_espnow_should_open(int64_t now_us)
         return false;
     }
     observore_cx_when_t w;
+    bool save = false;
     CX_LOCK();
     fill_when(&w, now_us);
     w.manual = s_manual;
@@ -228,7 +319,8 @@ bool observore_espnow_should_open(int64_t now_us)
     if (d == OBSERVORE_CX_OPEN_NOW) {
         s_manual = false;
     } else if (d == OBSERVORE_CX_OPEN_SCHEDULED) {
-        s_last_day = w.today;
+        s_set.last_day = (uint16_t)w.today;
+        save = true;
     } else if (w.manual && d != OBSERVORE_CX_SKIP_TOO_SOON) {
         /* A request the decision refused is a request answered: it is not held
          * over to fire the moment the reason clears. */
@@ -238,6 +330,11 @@ bool observore_espnow_should_open(int64_t now_us)
     s_last_skip = d;
     CX_UNLOCK();
 
+    /* Recorded in flash as well, so a reboot inside the grace does not run the
+     * day's window a second time. */
+    if (save) {
+        settings_save();
+    }
     if (say) {
         switch (d) {
         case OBSERVORE_CX_SKIP_NO_SECRET:
@@ -293,6 +390,16 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
             goto refused;
         }
         key_set = true;
+
+        /* The secret may have changed since the peer table was saved, and a
+         * window is the moment a table learned under the old one would start
+         * to be believed. Emptied here, and written at close with the rest. */
+        uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {0};
+        if (observore_meshkey_derive(OBSERVORE_CX_CHECK_LABEL, check, sizeof(check)) &&
+            observore_census_peer_rekey(check)) {
+            ESP_LOGW(TAG, "the household secret changed: the peer census was emptied");
+        }
+        mbedtls_platform_zeroize(check, sizeof(check));
     }
 
 #if SOC_WIFI_SUPPORT_5G
@@ -307,7 +414,7 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
     banded = true;
 #endif
 
-    err = esp_wifi_set_channel(s_channel, WIFI_SECOND_CHAN_NONE);
+    err = esp_wifi_set_channel(s_set.channel, WIFI_SECOND_CHAN_NONE);
     if (err != ESP_OK) {
         why = "the household channel could not be set";
         goto failed;
@@ -357,12 +464,12 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
     s_window_id = (uint16_t)esp_random();
     memset(&s_heard, 0, sizeof(s_heard));
     memset(&s_result, 0, sizeof(s_result));
-    s_result.mode      = s_mode;
+    s_result.mode      = s_set.mode;
     s_result.day       = s_day;
     s_result.left_mode = left_mode;
     s_send_n  = 0;
     s_sharing = false;
-    if (s_mode == OBSERVORE_CX_EXCHANGE) {
+    if (s_set.mode == OBSERVORE_CX_EXCHANGE) {
         s_send_n  = observore_census_local_sendable(s_day, s_send, OBSERVORE_CENSUS_MAX);
         s_sharing = s_send_n > 0;
     }
@@ -372,7 +479,7 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
     s_next_round_us = now_us + (int64_t)OBSERVORE_CX_FIRST_ROUND_MS * 1000;
     s_open          = true;
     ESP_LOGI(TAG, "census window open: %s on channel %u for up to %ds (%u entries to share)",
-             s_sharing ? "share" : "listen", (unsigned)s_channel,
+             s_sharing ? "share" : "listen", (unsigned)s_set.channel,
              OBSERVORE_CX_WINDOW_MAX_S, (unsigned)s_send_n);
     CX_UNLOCK();
     return true;
@@ -477,7 +584,7 @@ bool observore_espnow_step(int64_t now_us)
         return false;
     }
     if (observore_clock_day() == OBSERVORE_CENSUS_NO_DAY || !observore_meshkey_present() ||
-        (s_mode != OBSERVORE_CX_LISTEN && s_mode != OBSERVORE_CX_EXCHANGE)) {
+        (s_set.mode != OBSERVORE_CX_LISTEN && s_set.mode != OBSERVORE_CX_EXCHANGE)) {
         s_cut = true;
         CX_UNLOCK();
         return false;
@@ -614,6 +721,10 @@ void observore_espnow_close(int64_t now_us, bool interrupted)
     s_open = false;
 
     observore_census_peer_prune(s_day);
+    /* At most one write a window, and only when the table changed. */
+    if (observore_census_peer_take_changed()) {
+        observore_census_peer_save();
+    }
 
     static char text[OBSERVORE_CX_RESULT_TEXT_LEN];
     observore_cx_result_text(&s_result, text, sizeof(text));

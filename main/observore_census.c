@@ -1223,6 +1223,76 @@ size_t observore_census_local_sendable(int day, observore_census_entry_t *out, s
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */
 
 #ifndef OBSERVORE_HOST_TEST
+#if CONFIG_OBSERVORE_MESH_CENSUS
+void observore_census_peer_save(void)
+{
+    /* No copy: the header already sits in front of the entries, as it does for
+     * the local census. */
+    CENSUS_LOCK();
+    s_peer.hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
+    const observore_nvs_item_t item = {
+        .key = "peercensus", .type = OBSERVORE_NVS_BLOB, .buf = &s_peer,
+        .len = sizeof(census_peer_hdr_t) +
+               (size_t)p_count * sizeof(observore_peer_census_entry_t)};
+    esp_err_t err = observore_nvs_write(&item, 1);
+    CENSUS_UNLOCK();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "could not save the peer census");
+    }
+}
+
+void observore_census_peer_load(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN],
+                                bool have_secret)
+{
+    /* Straight into the store, as the local census is read: a blob that does
+     * not validate empties the table, so there is nothing to protect by reading
+     * somewhere else first. */
+    observore_nvs_item_t item = {.key = "peercensus", .type = OBSERVORE_NVS_BLOB,
+                                 .buf = &s_peer, .len = sizeof(s_peer)};
+    observore_nvs_read(&item, 1);
+    const bool stored = item.found && item.len > sizeof(census_peer_hdr_t);
+
+    if (!have_secret) {
+        /* A table with no household secret behind it is nobody's report. It is
+         * read only to know whether flash still holds one: emptying RAM and
+         * leaving the old table in flash would bring it back under the next
+         * secret that happened to hash alike, or simply keep what the owner
+         * cleared. */
+        static const uint8_t none[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {0};
+        observore_census_peer_restore(NULL, 0, none);
+        observore_census_peer_forget(OBSERVORE_CENSUS_FORGOT_NO_SECRET);
+        if (stored) {
+            ESP_LOGI(TAG, "the saved peer census was kept without a household "
+                          "secret -- it starts empty");
+            observore_census_peer_save();
+        }
+        observore_census_peer_take_changed();
+        return;
+    }
+    if (!item.found) {
+        observore_census_peer_restore(NULL, 0, check);   /* empty, holding the check */
+        return;
+    }
+    if (observore_census_peer_restore(&s_peer, item.len, check)) {
+        if (observore_census_peer_count() > 0) {
+            ESP_LOGI(TAG, "peer census: %u identities from your other nodes",
+                     (unsigned)observore_census_peer_count());
+        }
+        return;
+    }
+    /* A refusal for the key is the only one that marks the table changed, so
+     * that is how the two reasons are told apart. */
+    if (observore_census_peer_take_changed()) {
+        ESP_LOGW(TAG, "the household secret changed since the peer census was "
+                      "saved -- it starts empty");
+    } else {
+        ESP_LOGW(TAG, "the saved peer census was written by an older build "
+                      "(%u bytes) -- starting empty", (unsigned)item.len);
+    }
+    observore_census_peer_save();
+}
+#endif /* CONFIG_OBSERVORE_MESH_CENSUS */
+
 static void census_load(void)
 {
     /* Straight into the store. A blob that does not validate leaves the

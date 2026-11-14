@@ -484,4 +484,25 @@ bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK
  * to say sends nothing. */
 size_t observore_census_local_sendable(int day, observore_census_entry_t *out, size_t max);
 
+#ifndef OBSERVORE_HOST_TEST
+/* Bring the peer table back from flash at boot, held under `check`, the key
+ * check of the household secret now set. Call once, after observore_census_init()
+ * (which empties the table and its check) and after the secret has been loaded.
+ *
+ * With no secret (`have_secret` false) the stored table is not trusted and not
+ * kept: whatever flash holds is read only to learn that it is there, the table
+ * starts empty with the reason recorded, and the empty table is written back so
+ * flash agrees with RAM. With a secret, the stored table is restored when it
+ * carries this check; one written by another build or under another secret
+ * starts the table empty, says which, and is overwritten at once. Nothing stored
+ * is the quiet first-boot case: an empty table, with the check held. */
+void observore_census_peer_load(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN],
+                                bool have_secret);
+
+/* Write the peer table to flash, header and entries as they stand. The radio
+ * path calls it at most once a window, when the table changed. A failure is
+ * logged and leaves the table in RAM as it was. */
+void observore_census_peer_save(void);
+#endif
+
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */
