@@ -467,4 +467,21 @@ bool observore_census_peer_restore(const void *blob, size_t len,
  * emptied, with FORGOT_SECRET recorded. The new check is stored either way. */
 bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN]);
 
+/* What this node may put on the air: its own census, as of `day`.
+ *
+ * This is the only way the local census reaches the air. It reads this node's
+ * own table and never the peer table, so a friend's days are never relayed and
+ * no day can loop between nodes: an identity only a friend has seen is not
+ * here, and one this node has seen carries only the days this node saw. Every
+ * entry with a day still inside the window is copied with its days aligned to
+ * `day` and last_day set to it, which is the form a receiver reads without
+ * knowing this node's clock.
+ *
+ * The table is copied under one lock hold, so a round of frames never mixes two
+ * states of it. Returns how many entries were written, at most `max`; 0 when
+ * the census is empty, when every day in it has aged out, and for
+ * OBSERVORE_CENSUS_NO_DAY or a day the record cannot hold. A node with nothing
+ * to say sends nothing. */
+size_t observore_census_local_sendable(int day, observore_census_entry_t *out, size_t max);
+
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */

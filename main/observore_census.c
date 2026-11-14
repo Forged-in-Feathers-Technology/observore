@@ -1199,6 +1199,27 @@ bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK
     CENSUS_UNLOCK();
     return emptied;
 }
+
+size_t observore_census_local_sendable(int day, observore_census_entry_t *out, size_t max)
+{
+    if (!out || max == 0 || day < 0 || day > OBSERVORE_CENSUS_DAY_MAX) {
+        return 0;
+    }
+    size_t n = 0;
+    CENSUS_LOCK();
+    for (size_t i = 0; i < s_count && n < max; i++) {
+        uint16_t mask = align_mask(s_tab[i].days, s_tab[i].last_day, day);
+        if (mask == 0) {
+            continue;                 /* every day it was seen has aged out */
+        }
+        out[n] = s_tab[i];
+        out[n].days = mask;
+        out[n].last_day = (uint16_t)day;
+        n++;
+    }
+    CENSUS_UNLOCK();
+    return n;
+}
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */
 
 #ifndef OBSERVORE_HOST_TEST

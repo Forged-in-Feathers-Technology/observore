@@ -165,4 +165,207 @@ bool observore_cx_get_entry(const uint8_t *in, int sender_day,
  * negative one, or one past what the record can hold agrees with nobody. */
 bool observore_cx_day_ok(int sender_day, int my_day);
 
+/* ---------------------------------------------------------------------
+ * The window: what is sent, who was heard, when it opens and when it closes.
+ *
+ * A window is a short stretch in which this node listens for the owner's other
+ * nodes, and in exchange mode sends its own census. Everything a window has to
+ * decide is a pure function below, so the radio path that drives it has nothing
+ * left to decide about bytes or time, and the suite pins every bound.
+ */
+
+/* Split `n` entries into frames of OBSERVORE_CX_ENTRIES_MAX, at most
+ * OBSERVORE_CX_CHUNKS_MAX of them. Nothing to send is zero frames, which is
+ * how a node with nothing to say stays silent. */
+uint8_t observore_cx_plan(size_t n);
+
+/* Where chunk `index` of `n` entries starts and how many entries it holds. An
+ * index past the last chunk is empty. */
+void observore_cx_chunk(size_t n, uint8_t index, size_t *first, uint8_t *count);
+
+/* How many friends one window keeps track of. A household has a handful of
+ * nodes; a ninth is counted and ignored, which bounds the table that a
+ * stranger's flood of valid-looking frames could otherwise fill. */
+#define OBSERVORE_CX_FRIENDS_MAX 8
+
+/* Who has been heard in this window, in the order they were first heard, and
+ * which of each one's chunks have arrived. `chunks` is a bit per chunk index.
+ * `crowded` counts frames from a ninth and later node. */
+typedef struct observore_cx_heard_t {
+    uint8_t  n;
+    uint16_t crowded;
+    struct {
+        uint16_t node;
+        uint16_t window;
+        uint8_t  chunks;
+    } f[OBSERVORE_CX_FRIENDS_MAX];
+} observore_cx_heard_t;
+
+typedef enum observore_cx_seen_t {
+    OBSERVORE_CX_NEW = 0,     /* a chunk not yet held */
+    OBSERVORE_CX_DUPLICATE,   /* held already, or not a chunk index at all */
+    OBSERVORE_CX_CROWDED,     /* a ninth friend: counted, not kept */
+} observore_cx_seen_t;
+
+/* Note one verified chunk. A friend is kept once however many chunks it sends;
+ * a known friend with a new window id starts again, since a new window is a
+ * new set of chunks, and stays one friend. Call it only for frames whose tag
+ * has verified: this table is where a repeated frame stops being news. */
+observore_cx_seen_t observore_cx_heard_note(observore_cx_heard_t *h, uint16_t node,
+                                            uint16_t window, uint8_t index);
+
+/* The three things the owner can set a node to. Off says nothing and hears
+ * nothing; listen hears and never sends; exchange does both. */
+#define OBSERVORE_CX_OFF      0
+#define OBSERVORE_CX_LISTEN   1
+#define OBSERVORE_CX_EXCHANGE 2
+
+/* "off", "listen", "exchange", and "?" for anything else. */
+const char *observore_cx_mode_name(uint8_t mode);
+
+/* Exactly one of those three words. `mode` is untouched on failure. */
+bool observore_cx_mode_parse(const char *s, uint8_t *mode);
+
+/* A time of day, exactly HH:MM from 00:00 to 23:59, as minutes since midnight.
+ * `minute_of_day` is untouched on failure. */
+bool observore_cx_at_parse(const char *s, uint16_t *minute_of_day);
+
+/* Whether `ch` may be the household channel: 1 to 13. That is a 2.4 GHz channel
+ * every chip and regulatory domain here allows, which also keeps a C5 off 5 GHz
+ * for the window. */
+bool observore_cx_channel_ok(int ch);
+
+/* How long a window may last, and no longer. Patrol is paused while one is open,
+ * and a detector that stops looking is one a stranger could use, so the bound is
+ * a number the compiler holds the code to. */
+#define OBSERVORE_CX_WINDOW_MAX_S 30
+
+_Static_assert(OBSERVORE_CX_WINDOW_MAX_S <= 30,
+               "patrol pauses for at most thirty seconds a window");
+
+/* How late after the target second a scheduled window may still open. A patrol
+ * cycle is about eight seconds, so two nodes whose clocks agree open within
+ * about ten seconds of each other; twenty seconds of grace lets a node whose
+ * loop was busy at the target still take part. */
+#define OBSERVORE_CX_GRACE_S 20
+
+/* The least time between a window closing and a hand-opened one starting.
+ *
+ * The same principle as the uplink window's hard ceiling: a user interface must
+ * not be able to blind the detector. Without a gap a person, or a script on the
+ * household network, could keep asking for a window and hold patrol off for as
+ * long as it liked. Five minutes leaves patrol more than ninety per cent of the
+ * time even then. */
+#define OBSERVORE_CX_MIN_GAP_S 300
+
+/* The default time of the daily window, 03:30 in minutes since midnight. It is
+ * outside the 02:00 to 03:00 hour that daylight saving skips or repeats in the
+ * US and EU; where a zone does shift at 03:30, the once-per-local-day rule loses
+ * or keeps one window, which is harmless. */
+#define OBSERVORE_CX_AT_DEFAULT 210
+
+/* Everything the decision to open a window reads, gathered by the caller so
+ * the decision itself touches no clock.
+ *
+ *   clock_valid, today, sod   whether the clock is real, the census day, and
+ *                             seconds since local midnight.
+ *   at_min                    the owner's window time, minutes since midnight.
+ *   last_day                  the census day a scheduled window last ran on.
+ *   now_us, last_close_us     the monotonic time now and when the last window
+ *                             closed; 0 when none has this boot.
+ *   mode, have_secret         what the owner set, and whether there is a
+ *                             household secret to derive the key from.
+ *   manual                    the owner asked for a window now. */
+typedef struct observore_cx_when_t {
+    bool     clock_valid;
+    int      today;
+    int      sod;
+    uint16_t at_min;
+    int      last_day;
+    int64_t  now_us;
+    int64_t  last_close_us;
+    uint8_t  mode;
+    bool     have_secret;
+    bool     manual;
+} observore_cx_when_t;
+
+typedef enum observore_cx_decision_t {
+    OBSERVORE_CX_WAIT = 0,         /* nothing to do yet */
+    OBSERVORE_CX_OPEN_SCHEDULED,   /* open, and mark today's window as run */
+    OBSERVORE_CX_OPEN_NOW,         /* open, and leave today's window unmarked */
+    OBSERVORE_CX_SKIP_OFF,
+    OBSERVORE_CX_SKIP_NO_SECRET,
+    OBSERVORE_CX_SKIP_NO_CLOCK,
+    OBSERVORE_CX_SKIP_TOO_SOON,
+} observore_cx_decision_t;
+
+/* Whether a window opens now, and why not when it does not.
+ *
+ * In this order: off refuses everything, then no household secret, then no clock
+ * (a manual window included: a window with no day has nothing to send and no
+ * day check to pass). Then a manual window opens unless the last window closed
+ * less than OBSERVORE_CX_MIN_GAP_S ago. Then a scheduled window waits if it has
+ * already run on this census day, and opens when the second of the day is inside
+ * [at, at + OBSERVORE_CX_GRACE_S).
+ *
+ * The gap applies to manual windows only, because a scheduled window already
+ * runs at most once a local day. A manual window does not consume the day's
+ * scheduled one: the caller marks the day only for OPEN_SCHEDULED. */
+observore_cx_decision_t observore_cx_decide(const observore_cx_when_t *w);
+
+/* True at or past OBSERVORE_CX_WINDOW_MAX_S seconds after `opened_us`. */
+bool observore_cx_should_close(int64_t opened_us, int64_t now_us);
+
+/* Whole seconds left in the window, rounded up, so it reads 1 in the last
+ * second and 0 only once the window is closed. */
+unsigned observore_cx_remaining_s(int64_t opened_us, int64_t now_us);
+
+/* Seconds until the next scheduled window may open: -1 when there will be none
+ * (off, no secret or no clock), 0 inside the grace when it has not yet run
+ * today, otherwise the time to the window time today, or tomorrow when today's
+ * has run or passed. */
+long observore_cx_seconds_until(const observore_cx_when_t *w);
+
+/* What one window did, as counts only. Nothing from a refused frame is kept,
+ * not even the sender's address: a stranger's frame leaves a number behind and
+ * nothing else.
+ *
+ *   mode, interrupted, secs   what ran, whether it was cut short, and for how
+ *                             long.
+ *   sent, rounds              entries and frame rounds this node sent.
+ *   friends, friend_node      who was heard, in the order first heard.
+ *   merged                    entries merged into the peer table.
+ *   bad_tag, day_skew         frames that failed authentication, and frames
+ *                             whose day was more than a day from ours.
+ *   malformed, foreign        frames of ours with an impossible shape, and
+ *                             other ESP-NOW traffic.
+ *   dropped, crowded          chunks held already, and frames from a ninth
+ *                             friend.
+ *   entries_bad               entries refused inside a verified frame.
+ *   left_mode, day, closed_us what the node went back to, the census day, and
+ *                             when the window closed. */
+typedef struct observore_cx_result_t {
+    uint8_t  mode;
+    bool     interrupted;
+    uint8_t  secs;
+    uint16_t sent;
+    uint8_t  rounds;
+    uint8_t  friends;
+    uint16_t friend_node[OBSERVORE_CX_FRIENDS_MAX];
+    uint16_t merged, bad_tag, day_skew, malformed, foreign, dropped, crowded, entries_bad;
+    uint8_t  left_mode;
+    int      day;
+    int64_t  closed_us;
+} observore_cx_result_t;
+
+/* Room for the longest text observore_cx_result_text() can write, with its
+ * terminator. */
+#define OBSERVORE_CX_RESULT_TEXT_LEN 224
+
+/* One line saying what a window did, counts and friend ids only, for the
+ * console, the card and the log. `share` is what the owner calls exchange.
+ * snprintf semantics: the text is clamped to len - 1 and always terminated, and
+ * the return value is the length written. */
+size_t observore_cx_result_text(const observore_cx_result_t *r, char *buf, size_t len);
+
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */

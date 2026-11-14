@@ -9805,6 +9805,333 @@ static void test_a_census_frame_reads_back(void)
 }
 #endif
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* The window is the one place this node transmits and stops looking, so what
+ * it sends, how long it lasts and how often a person can ask for one are
+ * pinned here as numbers rather than left to the radio code. */
+static void test_the_census_window_keeps_its_bounds(void)
+{
+    banner("the census window keeps its bounds");
+
+    /* What is sent: this node's own days, aligned, and nothing else. */
+    observore_census_entry_t out[OBSERVORE_CENSUS_MAX];
+    observore_census_init();
+    CHECK(observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX) == 0,
+          "an empty census has nothing to send");
+
+    observore_census_note(0xB00001, 9000, NULL);
+    observore_census_note(0xB00002, 9002, NULL);
+    size_t n = observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX);
+    CHECK(n == 2, "two entries inside the window, got %zu", n);
+    for (size_t i = 0; i < n; i++) {
+        CHECK(out[i].last_day == 9002, "each is aligned to the day asked for");
+        if (out[i].id == 0xB00001) {
+            CHECK(out[i].days == 0x0004, "day 9000 is bit 2 at 9002, got %04X",
+                  out[i].days);
+        } else if (out[i].id == 0xB00002) {
+            CHECK(out[i].days == 0x0001, "day 9002 is bit 0, got %04X", out[i].days);
+        } else {
+            CHECK(false, "an identity nobody saw: %06X", (unsigned)out[i].id);
+        }
+    }
+    CHECK(observore_census_local_sendable(9002, out, 1) == 1,
+          "max 1 returns one entry");
+    CHECK(observore_census_local_sendable(9002, out, 0) == 0, "max 0 returns none");
+    CHECK(observore_census_local_sendable(9002, NULL, 4) == 0, "no room returns none");
+    CHECK(observore_census_local_sendable(OBSERVORE_CENSUS_NO_DAY, out,
+                                          OBSERVORE_CENSUS_MAX) == 0,
+          "no day, nothing sent");
+    CHECK(observore_census_local_sendable(OBSERVORE_CENSUS_DAY_MAX + 1, out,
+                                          OBSERVORE_CENSUS_MAX) == 0,
+          "and a day the record cannot hold sends nothing");
+
+    observore_census_init();
+    observore_census_note(0xB00003, 8980, NULL);
+    CHECK(observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX) == 0,
+          "an entry last seen 22 days ago has aged out and is not sent");
+    CHECK(observore_census_local_sendable(8990, out, OBSERVORE_CENSUS_MAX) == 1 &&
+              out[0].days == 0x0400,
+          "but it is still inside the window ten days after it");
+
+    /* Never a relay: a friend's days are not ours to put on the air. */
+    observore_census_init();
+    observore_census_note(0xB00004, 9002, NULL);
+    observore_census_entry_t fr = friend_entry(0xB00004, 0x0007, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &fr) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a friend reports the same identity with more days");
+    fr = friend_entry(0xB00005, 0x0007, 9002, 0x0A02);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &fr) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "and one only the friend has seen");
+    n = observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX);
+    CHECK(n == 1 && out[0].id == 0xB00004, "only what this node saw is sent");
+    CHECK(out[0].days == 0x0001 && out[0].addr_n == 0,
+          "with this node's days and addresses alone, got %04X", out[0].days);
+    observore_census_init();
+
+    /* Plans: eight to a frame, eight frames. */
+    CHECK(observore_cx_plan(0) == 0, "nothing to send is no frames");
+    CHECK(observore_cx_plan(1) == 1 && observore_cx_plan(8) == 1,
+          "one to eight entries are one frame");
+    CHECK(observore_cx_plan(9) == 2, "nine are two");
+    CHECK(observore_cx_plan(64) == 8, "the whole census is eight");
+    CHECK(observore_cx_plan(65) == 8, "and no more than eight");
+    size_t first = 99;
+    uint8_t count = 99;
+    observore_cx_chunk(9, 1, &first, &count);
+    CHECK(first == 8 && count == 1, "the second of nine holds one, from 8");
+    observore_cx_chunk(9, 0, &first, &count);
+    CHECK(first == 0 && count == 8, "the first of nine holds eight");
+    observore_cx_chunk(64, 7, &first, &count);
+    CHECK(first == 56 && count == 8, "the last of 64 holds eight, from 56");
+    observore_cx_chunk(9, 2, &first, &count);
+    CHECK(count == 0, "a chunk past the end is empty");
+    observore_cx_chunk(0, 0, &first, &count);
+    CHECK(count == 0, "and so is any chunk of nothing");
+
+    /* Who was heard. */
+    observore_cx_heard_t hd;
+    memset(&hd, 0, sizeof(hd));
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0001, 0) == OBSERVORE_CX_NEW,
+          "a first chunk is new");
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0001, 1) == OBSERVORE_CX_NEW,
+          "so is the next");
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0001, 0) == OBSERVORE_CX_DUPLICATE,
+          "the first again is a duplicate");
+    CHECK(observore_cx_heard_note(&hd, 0x91C2, 0x0007, 0) == OBSERVORE_CX_NEW,
+          "a second friend is new");
+    CHECK(hd.n == 2 && hd.f[0].node == 0x3A7F && hd.f[1].node == 0x91C2,
+          "listed in the order first heard");
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0002, 0) == OBSERVORE_CX_NEW,
+          "a new window id from a known friend starts again");
+    CHECK(hd.n == 2, "and is still one friend, got %u", hd.n);
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0002, 8) == OBSERVORE_CX_DUPLICATE,
+          "a chunk index no frame has is no news");
+    memset(&hd, 0, sizeof(hd));
+    for (uint16_t k = 1; k <= 8; k++) {
+        CHECK(observore_cx_heard_note(&hd, (uint16_t)(0x1000 + k), 1, 0) ==
+                  OBSERVORE_CX_NEW,
+              "friend %u is kept", k);
+    }
+    CHECK(observore_cx_heard_note(&hd, 0x1009, 1, 0) == OBSERVORE_CX_CROWDED,
+          "a ninth friend is crowded out");
+    CHECK(hd.n == 8 && hd.crowded == 1, "the table stays at 8 and counts it: %u %u",
+          hd.n, hd.crowded);
+    CHECK(observore_cx_heard_note(&hd, 0x1001, 1, 1) == OBSERVORE_CX_NEW,
+          "a friend already kept still takes its chunks");
+
+    /* Modes, times and channels. */
+    uint8_t mode = 9;
+    CHECK(strcmp(observore_cx_mode_name(OBSERVORE_CX_OFF), "off") == 0 &&
+              strcmp(observore_cx_mode_name(OBSERVORE_CX_LISTEN), "listen") == 0 &&
+              strcmp(observore_cx_mode_name(OBSERVORE_CX_EXCHANGE), "exchange") == 0 &&
+              strcmp(observore_cx_mode_name(3), "?") == 0,
+          "the three modes have names, and a fourth is '?'");
+    CHECK(observore_cx_mode_parse("off", &mode) && mode == OBSERVORE_CX_OFF &&
+              observore_cx_mode_parse("listen", &mode) && mode == OBSERVORE_CX_LISTEN &&
+              observore_cx_mode_parse("exchange", &mode) && mode == OBSERVORE_CX_EXCHANGE,
+          "exactly those three words parse");
+    mode = 9;
+    CHECK(!observore_cx_mode_parse("Off", &mode) && !observore_cx_mode_parse("share", &mode) &&
+              !observore_cx_mode_parse("", &mode) && !observore_cx_mode_parse(NULL, &mode) &&
+              !observore_cx_mode_parse("exchange ", &mode) && mode == 9,
+          "nothing else does, and a refusal leaves the mode alone");
+    uint16_t minute = 7;
+    CHECK(observore_cx_at_parse("03:30", &minute) && minute == 210, "03:30 is 210");
+    CHECK(observore_cx_at_parse("00:00", &minute) && minute == 0, "00:00 is 0");
+    CHECK(observore_cx_at_parse("23:59", &minute) && minute == 1439, "23:59 is 1439");
+    minute = 7;
+    CHECK(!observore_cx_at_parse("24:00", &minute) && !observore_cx_at_parse("3:30", &minute) &&
+              !observore_cx_at_parse("03:60", &minute) && !observore_cx_at_parse("03:3x", &minute) &&
+              !observore_cx_at_parse("", &minute) && !observore_cx_at_parse("03-30", &minute) &&
+              !observore_cx_at_parse("03:300", &minute) && !observore_cx_at_parse(NULL, &minute) &&
+              minute == 7,
+          "anything but HH:MM is refused, and leaves the minute alone");
+    CHECK(observore_cx_channel_ok(1) && observore_cx_channel_ok(13), "channels 1 and 13");
+    CHECK(!observore_cx_channel_ok(0) && !observore_cx_channel_ok(14) &&
+              !observore_cx_channel_ok(36) && !observore_cx_channel_ok(-1),
+          "0, 14 and the 5 GHz channels are not the household channel");
+
+    /* When a window opens. 03:30 is second 12600 of the day. */
+    observore_cx_when_t w;
+    memset(&w, 0, sizeof(w));
+    w.clock_valid = true;
+    w.today = 9002;
+    w.sod = 12600;
+    w.at_min = OBSERVORE_CX_AT_DEFAULT;
+    w.last_day = 9001;
+    w.now_us = SECS(100000);
+    w.last_close_us = 0;
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.have_secret = true;
+    w.manual = false;
+    CHECK(OBSERVORE_CX_AT_DEFAULT == 210, "the default time is 03:30");
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "03:30:00 opens the scheduled window");
+    w.sod = 12619;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "and so does the last second of the grace");
+    w.sod = 12620;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_WAIT, "but not the next");
+    w.sod = 12599;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_WAIT, "nor the second before");
+    w.sod = 12600;
+    w.last_day = 9002;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_WAIT, "a window that ran today waits");
+    w.last_day = 9001;
+    w.mode = OBSERVORE_CX_LISTEN;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "listen mode has its window too");
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.last_close_us = w.now_us - SECS(10);
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "the minimum gap is for a hand-opened window, not the daily one");
+    w.last_close_us = 0;
+
+    w.mode = OBSERVORE_CX_OFF;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_OFF, "off opens nothing");
+    w.manual = true;
+    w.have_secret = false;
+    w.clock_valid = false;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_OFF,
+          "off refuses first, a hand-opened window included");
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_SECRET,
+          "then no household secret");
+    w.have_secret = true;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_CLOCK,
+          "then no clock, even for a hand-opened window");
+    w.clock_valid = true;
+    w.today = OBSERVORE_CENSUS_NO_DAY;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_CLOCK,
+          "and a clock with no day is no clock");
+    w.manual = false;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_CLOCK,
+          "scheduled included");
+    w.today = 9002;
+
+    w.manual = true;
+    w.last_close_us = w.now_us - SECS(299);
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_TOO_SOON,
+          "a hand-opened window 299 s after the last is too soon");
+    w.last_close_us = w.now_us - SECS(300);
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_NOW, "at 300 s it opens");
+    w.last_close_us = 0;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_NOW,
+          "with no window yet this boot it opens");
+    w.sod = 12600;
+    w.last_day = 9001;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_NOW,
+          "at the scheduled time a hand-opened window is still OPEN_NOW");
+    w.manual = false;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "so deciding it did not consume the day's scheduled window");
+
+    /* When it must close. */
+    CHECK(!observore_cx_should_close(0, 29999999), "29.999 s is still open");
+    CHECK(observore_cx_should_close(0, 30000000), "30.000 s is closed");
+    CHECK(observore_cx_should_close(SECS(5), SECS(5) + 30000000), "from any start");
+    CHECK(observore_cx_remaining_s(0, 0) == 30, "30 left at the opening");
+    CHECK(observore_cx_remaining_s(0, 29200000) == 1, "1 left at 29.2 s");
+    CHECK(observore_cx_remaining_s(0, 29999999) == 1, "never 0 while it is open");
+    CHECK(observore_cx_remaining_s(0, 30000000) == 0, "0 once it is closed");
+    CHECK(observore_cx_remaining_s(0, 31000000) == 0, "and after");
+    CHECK(observore_cx_remaining_s(SECS(5), 0) == 30, "a clock read early is not 31");
+
+    /* How long until the next. */
+    memset(&w, 0, sizeof(w));
+    w.clock_valid = true;
+    w.today = 9002;
+    w.sod = 12000;
+    w.at_min = 210;
+    w.last_day = 9001;
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.have_secret = true;
+    CHECK(observore_cx_seconds_until(&w) == 600, "ten minutes before 03:30");
+    w.sod = 12600;
+    CHECK(observore_cx_seconds_until(&w) == 0, "inside the grace it is now");
+    w.sod = 20000;
+    CHECK(observore_cx_seconds_until(&w) == 86400 - 20000 + 12600,
+          "a window that was missed waits for tomorrow");
+    w.sod = 12600;
+    w.last_day = 9002;
+    CHECK(observore_cx_seconds_until(&w) == 86400, "one that ran waits a day");
+    w.mode = OBSERVORE_CX_OFF;
+    CHECK(observore_cx_seconds_until(&w) == -1, "off has none");
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.have_secret = false;
+    CHECK(observore_cx_seconds_until(&w) == -1, "no secret has none");
+    w.have_secret = true;
+    w.clock_valid = false;
+    CHECK(observore_cx_seconds_until(&w) == -1, "no clock has none");
+
+    /* What one window says. */
+    char text[OBSERVORE_CX_RESULT_TEXT_LEN];
+    observore_cx_result_t r;
+    memset(&r, 0, sizeof(r));
+    r.mode = OBSERVORE_CX_EXCHANGE;
+    r.secs = 30;
+    r.sent = 40;
+    r.rounds = 6;
+    r.friends = 2;
+    r.friend_node[0] = 0x3A7F;
+    r.friend_node[1] = 0x91C2;
+    r.merged = 12;
+    r.bad_tag = 1;
+    r.foreign = 3;
+    size_t tn = observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strcmp(text,
+                 "share, 30 s: sent 40 entries in 6 rounds, heard 2 (3A7F 91C2), "
+                 "merged 12, rejected 1 bad tag, 0 day skew, 0 malformed, "
+                 "3 other ESP-NOW") == 0,
+          "an exchange window reads as the owner will see it: %s", text);
+    CHECK(tn == strlen(text), "and the length returned is the length written");
+
+    memset(&r, 0, sizeof(r));
+    r.mode = OBSERVORE_CX_LISTEN;
+    r.secs = 30;
+    r.friends = 1;
+    r.friend_node[0] = 0x3A7F;
+    r.merged = 5;
+    observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strcmp(text,
+                 "listen, 30 s: heard 1 (3A7F), merged 5, rejected 0 bad tag, "
+                 "0 day skew, 0 malformed, 0 other ESP-NOW") == 0,
+          "a listen window has no sent part: %s", text);
+    r.interrupted = true;
+    r.secs = 12;
+    observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strncmp(text, "listen, 12 s, interrupted: heard 1", 34) == 0,
+          "an interrupted window says so after its duration: %s", text);
+    r.friends = 0;
+    observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strstr(text, "heard 0, merged") != NULL && strchr(text, '(') == NULL,
+          "nobody heard is no list: %s", text);
+
+    memset(&r, 0, sizeof(r));
+    r.mode = OBSERVORE_CX_EXCHANGE;
+    r.interrupted = true;
+    r.secs = 255;
+    r.sent = r.merged = r.bad_tag = r.day_skew = r.malformed = r.foreign = 65535;
+    r.rounds = 255;
+    r.friends = OBSERVORE_CX_FRIENDS_MAX;
+    for (int i = 0; i < OBSERVORE_CX_FRIENDS_MAX; i++) {
+        r.friend_node[i] = 0xFFFF;
+    }
+    tn = observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(tn == strlen(text) && tn < sizeof(text) && strstr(text, "65535 other ESP-NOW") != NULL,
+          "the longest possible text fits with its terminator: %zu of %zu", tn,
+          sizeof(text));
+    char small[16];
+    tn = observore_cx_result_text(&r, small, sizeof(small));
+    CHECK(tn == sizeof(small) - 1 && small[sizeof(small) - 1] == '\0' &&
+              strlen(small) == tn,
+          "a short buffer is clamped and terminated");
+    CHECK(observore_cx_result_text(&r, small, 0) == 0, "no buffer, no text");
+}
+#endif
+
 int main(void)
 {
     test_oui_lookup();
@@ -9845,6 +10172,7 @@ int main(void)
     test_census_rows_are_copies();
 #if CONFIG_OBSERVORE_MESH_CENSUS
     test_a_census_frame_reads_back();
+    test_the_census_window_keeps_its_bounds();
 #endif
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
