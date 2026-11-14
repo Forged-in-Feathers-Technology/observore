@@ -73,6 +73,25 @@ jobs:
           grep -qx 'CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y' sdkconfig
           echo "transmit build confirmed: the role is on because the option selected it"
 
+  # CONFIG_OBSERVORE_MESH_CENSUS is off in every board profile too, so nothing
+  # else compiles the census exchange either. One job runs the same script people
+  # run locally, so the list of boards lives in release.yml and nowhere else, and
+  # it proves both halves of the rule: the S3, C5 and C6 compile the exchange and
+  # link its radio path, and the classic ESP32 refuses the option and links none
+  # of it. The script judges each board by the sdkconfig it resolved and the map
+  # it linked, because an option whose "depends on" is unmet vanishes from a
+  # defaults file without a word.
+  mesh-census:
+    name: Census exchange builds where it may, and only there
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build every board with the exchange requested
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          command: tools/build_every_board.sh -k --census
+
   boards:
     name: Board profile (${{ matrix.board }})
     runs-on: ubuntu-latest
@@ -162,6 +181,21 @@ jobs:
             grep OBSERVORE_BOARD sdkconfig || echo "  nothing"
             exit 1
           fi
+
+      # The other half of the census exchange's gate. It is off in every
+      # profile, so an ordinary build must not contain it: a default image that
+      # carried the radio path would transmit on a schedule nobody opted into.
+      - name: The census exchange is compiled out
+        run: |
+          if grep -qx 'CONFIG_OBSERVORE_MESH_CENSUS=y' sdkconfig; then
+            echo "the generated sdkconfig turned the census exchange on in a default build"
+            exit 1
+          fi
+          if grep -q 'observore_espnow_open' build/observore.map; then
+            echo "the census exchange's radio path is linked into a default build"
+            exit 1
+          fi
+          echo "default build: no census exchange compiled in"
 
   # Documentation has no compiler, and this project keeps proving it: renaming
   # the release assets broke the manual flashing instructions in two documents
