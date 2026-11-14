@@ -75,3 +75,15 @@ bool observore_meshkey_tag(const uint8_t *msg, size_t len, uint8_t *out);
  * node with no key trusts nothing rather than everything. */
 bool observore_meshkey_verify(const uint8_t *msg, size_t len,
                               const uint8_t *tag);
+
+/* A key for one purpose, derived from the household secret, or false with
+ * nothing written when no key is set, `label` is NULL or longer than
+ * OBSERVORE_MESHKEY_LABEL_MAX bytes, or `len` is 0 or above 32.
+ *
+ * This is one block of HKDF-Expand with the secret as the key: HMAC-SHA256
+ * over the label followed by a single 0x01 byte, the first `len` bytes of it.
+ * Each label gives a separate key, so the census never reuses the key that tags
+ * BLE warnings, and the secret itself still never leaves this file. Whoever
+ * receives a derived key can use it and cannot get back to the secret. */
+#define OBSERVORE_MESHKEY_LABEL_MAX 47
+bool observore_meshkey_derive(const char *label, uint8_t *out, size_t len);

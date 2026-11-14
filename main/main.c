@@ -35,6 +35,7 @@
 #include "observore_mute.h"
 #include "observore_monitors.h"
 #include "observore_meshkey.h"
+#include "observore_espnow.h"
 #include "observore_peer.h"
 #include "observore_nodepos.h"
 #include "observore_netcfg.h"
@@ -57,6 +58,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
@@ -89,6 +91,25 @@ static volatile bool s_baseline_requested;
 static bool    s_patrolled_since_boot;
 static bool    s_image_confirmed;
 static observore_level_t s_last_level = OBSERVORE_LEVEL_CLEAR;
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* The census window and the radio modes.
+ *
+ * A window runs from patrol, so main.c moves the radio there and back, and the
+ * button task can ask for a mode change at any moment. ESP-NOW must not be up
+ * while Wi-Fi is stopped and restarted, so every mode change takes this lock,
+ * and one asked for from another task while a window is open is not applied: it
+ * is kept in s_mode_request, and the main loop closes the window and applies it
+ * the moment it has. The owner's gesture wins, a few seconds late at worst.
+ *
+ * Recursive because the window orchestration calls enter_mode() while holding
+ * it, and enter_mode() calls itself when a join fails and falls back to
+ * patrol. */
+static TaskHandle_t         s_main_task;
+static SemaphoreHandle_t    s_mode_lock;
+static volatile int         s_mode_request = -1;
+static observore_mode_t     s_cx_prior;
+#endif
 
 /* Say when the internal-heap low-water mark moves, not just what it ended up
  * at -- and keep it, so the next morning's check can read when it happened
@@ -125,7 +146,14 @@ static void note_heap_low_water(int64_t now)
      * session's. */
     const char *what = observore_update_take_tls_mark()
                            ? "update"
-                           : observore_mode_name(observore_wifi_mode());
+#if CONFIG_OBSERVORE_MESH_CENSUS
+                           /* A census window holds its queue and its ESP-NOW
+                            * buffers for up to thirty seconds, so a dip while
+                            * one is open is the window's, not the mode's. */
+                           : observore_espnow_is_open()
+                                 ? "census"
+#endif
+                                 : observore_mode_name(observore_wifi_mode());
     if (observore_heapwatch_note(low, largest,
                                  (uint32_t)observore_notify_pending(),
                                  what, now)) {
@@ -135,7 +163,28 @@ static void note_heap_low_water(int64_t now)
     }
 }
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+static void enter_mode_locked(observore_mode_t next);
+
 static void enter_mode(observore_mode_t next)
+{
+    xSemaphoreTakeRecursive(s_mode_lock, portMAX_DELAY);
+    if (observore_espnow_is_open() && xTaskGetCurrentTaskHandle() != s_main_task) {
+        /* Not the radio's to switch from here while ESP-NOW is up. The main
+         * loop closes the window and applies this. */
+        s_mode_request = (int)next;
+        ESP_LOGI(TAG, "mode change waits for the census window to close");
+        xSemaphoreGiveRecursive(s_mode_lock);
+        return;
+    }
+    enter_mode_locked(next);
+    xSemaphoreGiveRecursive(s_mode_lock);
+}
+
+static void enter_mode_locked(observore_mode_t next)
+#else
+static void enter_mode(observore_mode_t next)
+#endif
 {
     s_mode_since_us = esp_timer_get_time();
 
@@ -541,7 +590,13 @@ static void mesh_warn(int64_t now_us)
      * the census quieted -- so the heaviest entry here is the heaviest thing
      * this node would report to its owner. Warning about exactly that keeps
      * the two consistent: a node never tells a neighbour something it would
-     * not tell the person holding it. */
+     * not tell the person holding it.
+     *
+     * With the census exchange the census verdict may include days the owner's
+     * other nodes reported. That is still the owner's own household, so a
+     * device a friend helped quiet is left out of a warning for the same
+     * reason as one this node quieted alone: it is furniture, and a warning
+     * about furniture is the cheapest noise a mesh can be filled with. */
     /* Static, not on the stack. An observore_event_t is 136 bytes and the
      * main task's stack is 1,536: putting one here was a stack protection
      * fault on the first burst, and the board boot-looped. The draw call two
@@ -595,6 +650,81 @@ static void mesh_warn(int64_t now_us)
     s_next_us = now_us + WARN_MIN_GAP_US + (int64_t)(esp_random() % span);
 }
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* The census window, from the main loop's side: the one place that moves the
+ * radio for it and puts it back. observore_espnow.c opens, steps and closes a
+ * window and never switches a Wi-Fi mode; what mode to be in, and what to return
+ * to, is this file's to decide.
+ *
+ * Returns whether a window is open, which is how the loop knows to skip the
+ * patrol cycle and the patrol and uplink alternation for the pass. */
+static bool census_window_pass(int64_t now)
+{
+    if (observore_espnow_is_open()) {
+        /* Closed at once when the mode moved underneath it, and when somebody
+         * asked for another one: the owner's gesture wins. Otherwise the step
+         * decides, and says no when the time is up, the clock is lost, the
+         * secret is cleared or the exchange is set to off. */
+        bool stop = s_mode_request >= 0 || observore_wifi_mode() != OBSERVORE_MODE_PATROL ||
+                    !observore_espnow_step(now);
+        if (!stop) {
+            return true;
+        }
+        xSemaphoreTakeRecursive(s_mode_lock, portMAX_DELAY);
+        int request = s_mode_request;
+        s_mode_request = -1;
+        bool in_patrol = observore_wifi_mode() == OBSERVORE_MODE_PATROL;
+        /* While the window still holds its memory, so a dip is the window's. */
+        note_heap_low_water(now);
+        observore_espnow_close(now, request >= 0 || !in_patrol);
+        if (request >= 0) {
+            enter_mode((observore_mode_t)request);
+        } else if (in_patrol && s_cx_prior != OBSERVORE_MODE_PATROL) {
+            /* Back to where the node was: uplink rejoins the network, and a
+             * node the owner put in console mode returns to console, because
+             * that was a deliberate choice. */
+            enter_mode(s_cx_prior);
+        }
+        xSemaphoreGiveRecursive(s_mode_lock);
+        return false;
+    }
+
+    if (!observore_espnow_should_open(now)) {
+        return false;
+    }
+    xSemaphoreTakeRecursive(s_mode_lock, portMAX_DELAY);
+    s_cx_prior = observore_wifi_mode();
+    /* Entering patrol is what stops the web server and leaves the radio in an
+     * unassociated station, the only mode in which ESP-NOW receive is documented
+     * to coexist stably with the BLE scan. A window is never run from the
+     * SoftAP or while associated. */
+    if (s_cx_prior != OBSERVORE_MODE_PATROL) {
+        enter_mode(OBSERVORE_MODE_PATROL);
+    }
+    bool open = observore_wifi_mode() == OBSERVORE_MODE_PATROL &&
+                observore_espnow_open(now, (uint8_t)s_cx_prior);
+    if (!open && s_cx_prior != OBSERVORE_MODE_PATROL) {
+        enter_mode(s_cx_prior);
+    }
+    xSemaphoreGiveRecursive(s_mode_lock);
+    return open;
+}
+#endif
+
+/* Whether a scheduled census window is about to open. A visit to the uplink
+ * can take a join of fifteen seconds with the loop held, and one that straddled
+ * the window would miss the grace; staying on patrol for the forty-five seconds
+ * before it costs a delayed visit and nothing else. */
+static bool census_window_soon(int64_t now)
+{
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    return observore_espnow_soon(now, 45);
+#else
+    (void)now;
+    return false;
+#endif
+}
+
 void app_main(void)
 {
     /* Before anything else, including the banner.
@@ -609,6 +739,14 @@ void app_main(void)
      * It does nothing at all on the nine boards that hold their own power
      * up, so it costs them a function call. */
     observore_power_hold();
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    /* Before anything can call enter_mode(): the lock every mode change takes,
+     * and the identity of the one task allowed to switch the radio while a
+     * census window is open. */
+    s_main_task = xTaskGetCurrentTaskHandle();
+    s_mode_lock = xSemaphoreCreateRecursiveMutex();
+#endif
 
     /* The banner names the build, not just the program.
      *
@@ -671,6 +809,9 @@ void app_main(void)
     observore_monitors_init();
     observore_peer_init();
     observore_meshkey_init();
+    /* After the key it derives from: the exchange reads the household secret
+     * that call has just loaded. */
+    observore_espnow_init();
     /* Started here rather than on the first uplink: it renews its servers on
      * every new IP, so one init covers every window the device is associated
      * for, and the times it hands back are retroactive anyway. */
@@ -876,6 +1017,20 @@ void app_main(void)
                      (unsigned)heap_caps_get_largest_free_block(OBSERVORE_HEAP_CAPS));
         }
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+        /* A census window takes the radio for up to thirty seconds. While one is
+         * open the patrol cycle and the alternation are skipped and nothing else:
+         * publishing, the BLE warning, the screen and the heartbeat all ran
+         * above, and BLE scanning is never touched. The clock is read afresh,
+         * because the passes above can take a while and the window's cap is
+         * measured against real time. */
+        now = esp_timer_get_time();
+        if (census_window_pass(now)) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+#endif
+
         /* Alternate patrol and uplink.  Console mode is never alternated out
          * of: it is chosen deliberately, usually because the network is not
          * reachable and the SoftAP is the only way in. */
@@ -923,7 +1078,8 @@ void app_main(void)
                     }
                 }
             } else if (now >= s_next_uplink_try_us &&
-                       in_mode >= (int64_t)CONFIG_OBSERVORE_PATROL_WINDOW_S * 1000000) {
+                       in_mode >= (int64_t)CONFIG_OBSERVORE_PATROL_WINDOW_S * 1000000 &&
+                       !census_window_soon(now)) {
                 ESP_LOGI(TAG, "patrol window done -- visiting the uplink");
                 enter_mode(OBSERVORE_MODE_UPLINK);
             }
