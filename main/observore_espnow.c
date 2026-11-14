@@ -26,9 +26,11 @@
 #include "observore_census_wire.h"
 #include "observore_clock.h"
 #include "observore_heapwatch.h"
+#include "observore_led.h"
 #include "observore_meshkey.h"
 #include "observore_nvs.h"
 #include "observore_peer.h"
+#include "observore_sdlog.h"
 
 static const char *TAG = "observore.espnow";
 
@@ -483,6 +485,7 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
     ESP_LOGI(TAG, "census window open: %s on channel %u for up to %ds (%u entries to share)",
              s_sharing ? "share" : "listen", (unsigned)s_set.channel,
              OBSERVORE_CX_WINDOW_MAX_S, (unsigned)s_send_n);
+    observore_led_set_census(true);
     CX_UNLOCK();
     return true;
 
@@ -685,6 +688,8 @@ void observore_espnow_close(int64_t now_us, bool interrupted)
     esp_now_unregister_recv_cb();
     esp_now_unregister_send_cb();
     esp_now_deinit();
+    /* The LED goes back to the level's rhythm as soon as the radio is done with. */
+    observore_led_set_census(false);
 
     QueueHandle_t q = s_rxq;
     s_rxq = NULL;
@@ -731,6 +736,8 @@ void observore_espnow_close(int64_t now_us, bool interrupted)
     static char text[OBSERVORE_CX_RESULT_TEXT_LEN];
     observore_cx_result_text(&s_result, text, sizeof(text));
     ESP_LOGI(TAG, "census window closed: %s", text);
+    /* One card row a window, on the main task, like the log line. */
+    observore_sdlog_census(text, now_us);
     ESP_LOGI(TAG, "main task stack: %u bytes unused after the census window",
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
     CX_UNLOCK();

@@ -814,6 +814,13 @@ static esp_err_t history_clear_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* Room the last census window needs in the history body, with margin for
+ * escapes in its text: the fixed keys, eight node ids and the 224-character
+ * result come to about 500. Below this the key is left out whole. */
+#define HISTORY_CENSUS_WINDOW_ROOM 640
+
+static void jb_node_ids(observore_jbuf_t *jb, const uint16_t *ids, size_t n);
+
 /* What the device saw before the last restart, and since.
  *
  * Deliberately separate from /api/devices: that reports the live table, which
@@ -916,9 +923,48 @@ static esp_err_t history_handler(httpd_req_t *req)
                 p->open ? "true" : "false");
         }
     }
+    /* The last census window, after the peer events and under the same rule:
+     * only when there is room. A body that filled before it leaves the key out,
+     * because a source strangers can feed must never push a real detection out
+     * of this listing. It is null before the first window of this boot, and
+     * always null in a build without the exchange. The result is kept in RAM
+     * and the card; a board without a card forgets it at a reboot, which is
+     * the form the owner chose. Room is checked for the whole object first, so
+     * it is never left half written; the text is counts and node ids, never an
+     * address, and still goes through the escaper. */
+    bool window_written = false;
+    if (!observore_jb_full(&jb) && jb.cap - jb.len > HISTORY_CENSUS_WINDOW_ROOM) {
+#if CONFIG_OBSERVORE_MESH_CENSUS
+        static observore_espnow_status_t cx;
+        const int64_t now_us = esp_timer_get_time();
+        observore_espnow_status(now_us, &cx);
+        if (cx.have_last) {
+            int64_t ago = (now_us - cx.last_closed_us) / 1000000;
+            observore_jb_printf(&jb,
+                "],\"census_window\":{\"share\":%s,\"interrupted\":%s,\"secs\":%u"
+                ",\"ago_s\":%lld,\"sent\":%u,\"friends\":[",
+                cx.last_share ? "true" : "false",
+                cx.last_interrupted ? "true" : "false", (unsigned)cx.last_secs,
+                (long long)(ago < 0 ? 0 : ago), (unsigned)cx.last_sent);
+            jb_node_ids(&jb, cx.last_friend, cx.last_friends);
+            observore_jb_printf(&jb,
+                "],\"merged\":%u,\"rejected\":%u,\"text\":\"",
+                (unsigned)cx.last_merged,
+                (unsigned)cx.last_bad_tag + (unsigned)cx.last_day_skew +
+                    (unsigned)cx.last_malformed);
+            observore_jb_escape(&jb, cx.last_text);
+            observore_jb_printf(&jb, "\"}");
+            window_written = true;
+        }
+#endif
+        if (!window_written) {
+            observore_jb_printf(&jb, "],\"census_window\":null");
+            window_written = true;
+        }
+    }
     observore_jb_close(&jb, observore_jb_full(&jb)
                                ? OBSERVORE_PEER_EVENTS_OMITTED_TAIL
-                               : "]}");
+                               : window_written ? "}" : "]}");
     return send_json(req, s_body);
 }
 

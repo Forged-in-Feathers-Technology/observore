@@ -11,6 +11,7 @@
 
 static volatile observore_level_t s_level = OBSERVORE_LEVEL_CLEAR;
 static volatile bool          s_console;
+static volatile bool          s_census;
 
 /* Two boards, two kinds of LED.  Everything above backend_show() is shared:
  * the blink rhythm is the same either way, and only the rendering differs.
@@ -48,7 +49,7 @@ static void backend_init(void)
     }
 }
 
-static void backend_show(bool lit, observore_level_t level, bool console)
+static void backend_show(bool lit, observore_level_t level, bool console, bool census)
 {
     if (!s_strip) {
         return;
@@ -61,6 +62,8 @@ static void backend_show(bool lit, observore_level_t level, bool console)
     uint8_t r, g, b;
     if (console) {
         r = 0;   g = 0;   b = 255;   /* blue: the console is up */
+    } else if (census) {
+        r = 0;   g = 160; b = 255;   /* cyan: a census window is on the air */
     } else {
         switch (level) {
             case OBSERVORE_LEVEL_ALERT:   r = 255; g = 0;   b = 0;   break;
@@ -93,10 +96,11 @@ static void backend_init(void)
     gpio_config(&cfg);
 }
 
-static void backend_show(bool lit, observore_level_t level, bool console)
+static void backend_show(bool lit, observore_level_t level, bool console, bool census)
 {
     (void)level;     /* one colour; the rhythm carries the level */
     (void)console;
+    (void)census;
 #if CONFIG_OBSERVORE_LED_ACTIVE_LOW
     gpio_set_level(LED_GPIO, lit ? 0 : 1);
 #else
@@ -109,9 +113,9 @@ static void backend_show(bool lit, observore_level_t level, bool console)
 /* No LED, and therefore no blink task: the level still reaches the panel, the
  * console and the notifier, which is every other way this device says it. */
 static void backend_init(void) {}
-static void backend_show(bool lit, observore_level_t level, bool console)
+static void backend_show(bool lit, observore_level_t level, bool console, bool census)
 {
-    (void)lit; (void)level; (void)console;
+    (void)lit; (void)level; (void)console; (void)census;
 }
 
 #endif
@@ -124,6 +128,7 @@ static void backend_show(bool lit, observore_level_t level, bool console)
  *   caution - a steady one-second pulse
  *   alert   - urgent fluttering
  *   console - solid on
+ *   census window - a double wink each second
  */
 static void pattern_for(observore_level_t level, uint32_t *on_ms, uint32_t *off_ms)
 {
@@ -142,8 +147,33 @@ static void led_task(void *arg)
     (void)arg;
     for (;;) {
         if (s_console) {
-            backend_show(true, s_level, true);
+            backend_show(true, s_level, true, false);
             vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        /* A census window is the one time this node transmits, so a headless
+         * board says so with a rhythm none of the levels uses: two winks close
+         * together and then a long dark, once a second. It replaces the level's
+         * rhythm for at most thirty seconds, the same precedent as the
+         * console's solid light, which replaces it for as long as the console
+         * is up; boards with a screen keep the level in the band throughout.
+         * The off-phase is sliced so the end of the window, or the console
+         * coming up, is seen within 200 ms. */
+        if (s_census) {
+            backend_show(true, s_level, false, true);
+            vTaskDelay(pdMS_TO_TICKS(60));
+            backend_show(false, s_level, false, true);
+            vTaskDelay(pdMS_TO_TICKS(140));
+            backend_show(true, s_level, false, true);
+            vTaskDelay(pdMS_TO_TICKS(60));
+            backend_show(false, s_level, false, true);
+            uint32_t dark = 0;
+            while (dark < 740 && s_census && !s_console) {
+                uint32_t slice = (740 - dark > 200) ? 200 : (740 - dark);
+                vTaskDelay(pdMS_TO_TICKS(slice));
+                dark += slice;
+            }
             continue;
         }
 
@@ -151,15 +181,15 @@ static void led_task(void *arg)
         observore_level_t level = s_level;
         pattern_for(level, &on_ms, &off_ms);
 
-        backend_show(true, level, false);
+        backend_show(true, level, false, false);
         vTaskDelay(pdMS_TO_TICKS(on_ms));
-        backend_show(false, level, false);
+        backend_show(false, level, false, false);
 
         /* Sleep the off-phase in slices so a level change is reflected within
          * a couple of hundred milliseconds rather than at the end of a
          * five-second clear-state gap. */
         uint32_t slept = 0;
-        while (slept < off_ms && s_level == level && !s_console) {
+        while (slept < off_ms && s_level == level && !s_console && !s_census) {
             uint32_t slice = (off_ms - slept > 200) ? 200 : (off_ms - slept);
             vTaskDelay(pdMS_TO_TICKS(slice));
             slept += slice;
@@ -172,7 +202,7 @@ static void led_task(void *arg)
 void observore_led_init(void)
 {
     backend_init();
-    backend_show(false, OBSERVORE_LEVEL_CLEAR, false);
+    backend_show(false, OBSERVORE_LEVEL_CLEAR, false, false);
 #if !CONFIG_OBSERVORE_LED_NONE
     xTaskCreate(led_task, "observore_led", 2560, NULL, 2, NULL);
 #endif
@@ -186,4 +216,9 @@ void observore_led_set_level(observore_level_t level)
 void observore_led_set_console(bool console)
 {
     s_console = console;
+}
+
+void observore_led_set_census(bool on)
+{
+    s_census = on;
 }

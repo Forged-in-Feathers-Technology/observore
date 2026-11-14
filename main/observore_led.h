@@ -10,3 +10,10 @@
 void observore_led_init(void);
 void observore_led_set_level(observore_level_t level);
 void observore_led_set_console(bool console);
+
+/* A census window is open: the node is transmitting (or listening for its
+ * friends' census on an unusual channel). A double wink once a second, cyan on a
+ * pixel, replaces the level's rhythm until it is cleared, which is at most thirty
+ * seconds. A board with no LED shows nothing here and relies on the console and
+ * the log. Safe from any task. */
+void observore_led_set_census(bool on);
