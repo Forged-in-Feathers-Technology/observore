@@ -1210,10 +1210,19 @@ static esp_err_t census_handler(httpd_req_t *req)
 
     /* Static, not on the stack: esp_http_server serves one request at a time,
      * so nothing else is in it, and the struct is about three hundred bytes of
-     * a stack that is already carrying the JSON builder. */
-    static observore_espnow_status_t cx;
+     * a stack that is already carrying the JSON builder.
+     *
+     * Without the exchange the answer never changes, so it is a constant that
+     * lives in flash: a build that cannot use the exchange does not pay three
+     * hundred bytes of RAM to say so. It is what observore_espnow_status()
+     * reports in that build. */
     const int64_t now_us = esp_timer_get_time();
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    static observore_espnow_status_t cx;
     observore_espnow_status(now_us, &cx);
+#else
+    static const observore_espnow_status_t cx = {.blocked = "", .next_s = -1};
+#endif
 
     char *body = s_body;
     observore_jbuf_t jb;

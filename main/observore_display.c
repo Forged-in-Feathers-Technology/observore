@@ -2386,7 +2386,10 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
 
     /* The census exchange is a second thing this node may transmit, so it gets
      * its own line where the first is said: what the owner set, and what the
-     * last window did. Only on a build that has it. */
+     * last window did. Only on a build that has it, and compiled only there:
+     * the status struct is about three hundred bytes of RAM that a build
+     * without the exchange has no use for. */
+#if CONFIG_OBSERVORE_MESH_CENSUS
     if (observore_espnow_available()) {
         static observore_espnow_status_t xst;
         observore_espnow_status(now_us, &xst);
@@ -2403,6 +2406,7 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
             line(r++, text, C_WHITE, C_BLACK);
         }
     }
+#endif
 
     /* What other nodes' warnings are adding to the score, and where it comes
      * from. Said even when the answer is nothing, because a listen-only node
