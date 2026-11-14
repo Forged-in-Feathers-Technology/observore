@@ -482,6 +482,14 @@ void observore_track_set_day(int day)
     OBSERVORE_UNLOCK();
 }
 
+int observore_track_day(void)
+{
+    OBSERVORE_LOCK();
+    int day = s_census_day;
+    OBSERVORE_UNLOCK();
+    return day;
+}
+
 /* What the census is entitled to do about this device.
  *
  * One function for the score and for the findings list, so the two views

@@ -1,5 +1,7 @@
 #include "observore_espnow.h"
 
+#include <string.h>
+
 #if CONFIG_OBSERVORE_MESH_CENSUS
 
 #include <stdlib.h>
@@ -758,6 +760,200 @@ bool observore_espnow_soon(int64_t now_us, int lead_s)
     return left >= 0 && left <= lead_s;
 }
 
+_Static_assert(OBSERVORE_ESPNOW_FRIENDS == OBSERVORE_CX_FRIENDS_MAX,
+               "the console's friend list is the exchange's");
+_Static_assert(OBSERVORE_ESPNOW_TEXT_LEN == OBSERVORE_CX_RESULT_TEXT_LEN,
+               "the console's result text is the exchange's");
+
+/* What the console reads. Each field of the settings and of the last result is
+ * copied under the exchange lock, and the census is asked for its own numbers
+ * afterwards, outside it, so the order of locks stays exchange then census and
+ * never the other way round. */
+void observore_espnow_status(int64_t now_us, observore_espnow_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->available = true;
+    out->blocked   = "";
+    out->next_s    = -1;
+    if (!s_cx_lock) {
+        return;
+    }
+
+    observore_cx_when_t w;
+    observore_cx_result_t r;
+    CX_LOCK();
+    fill_when(&w, now_us);
+    out->mode   = s_set.mode;
+    out->at_min = s_set.at_min;
+    out->channel = s_set.channel;
+    r = s_result;
+    CX_UNLOCK();
+
+    out->secret = w.have_secret;
+    out->next_s = observore_cx_seconds_until(&w);
+    switch (observore_cx_decide(&w)) {
+    case OBSERVORE_CX_SKIP_OFF:
+        out->blocked = "off";
+        break;
+    case OBSERVORE_CX_SKIP_NO_SECRET:
+        out->blocked = "no household secret";
+        break;
+    case OBSERVORE_CX_SKIP_NO_CLOCK:
+        out->blocked = "no clock";
+        break;
+    default:
+        break;
+    }
+
+    out->peer_entries = (unsigned)observore_census_peer_count();
+    out->peer_max     = OBSERVORE_PEER_CENSUS_MAX;
+    out->forgot       = (uint8_t)observore_census_peer_forgot();
+
+    /* closed_us is zero until the first window of this boot has closed. */
+    if (r.closed_us != 0) {
+        out->have_last        = true;
+        out->last_share       = r.mode == OBSERVORE_CX_EXCHANGE;
+        out->last_interrupted = r.interrupted;
+        out->last_secs        = r.secs;
+        out->last_left        = r.left_mode;
+        out->last_sent        = r.sent;
+        out->last_friends     = r.friends > OBSERVORE_CX_FRIENDS_MAX ? OBSERVORE_CX_FRIENDS_MAX
+                                                                      : r.friends;
+        for (uint8_t i = 0; i < out->last_friends; i++) {
+            out->last_friend[i] = r.friend_node[i];
+        }
+        out->last_merged    = r.merged;
+        out->last_bad_tag   = r.bad_tag;
+        out->last_day_skew  = r.day_skew;
+        out->last_malformed = r.malformed;
+        out->last_foreign   = r.foreign;
+        out->last_closed_us = r.closed_us;
+        observore_cx_result_text(&r, out->last_text, sizeof(out->last_text));
+    }
+}
+
+/* Each given value is parsed before anything is applied, so a refusal leaves the
+ * settings as they were. A mode other than off needs a household secret: the key
+ * the frames are sealed under comes from it, and an exchange that could not be
+ * keyed would be a node transmitting or listening for nothing. */
+const char *observore_espnow_configure(const char *mode, const char *at, const char *channel)
+{
+    uint8_t  new_mode = 0;
+    uint16_t new_at = 0;
+    int      new_chan = 0;
+
+    if (mode && !observore_cx_mode_parse(mode, &new_mode)) {
+        return "mode is off, listen or exchange";
+    }
+    if (at && !observore_cx_at_parse(at, &new_at)) {
+        return "time is HH:MM, 00:00 to 23:59";
+    }
+    if (channel) {
+        char *end = NULL;
+        long v = strtol(channel, &end, 10);
+        if (end == channel || *end != '\0' || !observore_cx_channel_ok((int)v)) {
+            return "channel is 1 to 13";
+        }
+        new_chan = (int)v;
+    }
+    if (mode && new_mode != OBSERVORE_CX_OFF && !observore_meshkey_present()) {
+        return "set a household secret first";
+    }
+    if (!s_cx_lock) {
+        return "the census exchange is not ready yet";
+    }
+
+    CX_LOCK();
+    if (mode) {
+        s_set.mode = new_mode;
+    }
+    if (at) {
+        s_set.at_min = new_at;
+    }
+    if (channel) {
+        s_set.channel = (uint8_t)new_chan;
+    }
+    uint8_t m = s_set.mode, ch = s_set.channel;
+    unsigned a = s_set.at_min;
+    CX_UNLOCK();
+
+    settings_save();
+    ESP_LOGI(TAG, "census exchange set to %s, window %02u:%02u, channel %u",
+             observore_cx_mode_name(m), a / 60, a % 60, (unsigned)ch);
+    return NULL;
+}
+
+/* A flag and nothing more. The decision is the one the schedule uses, run with
+ * the request marked, so the reasons a hand-opened window is refused are the
+ * reasons the main loop would refuse it: off, no secret, no clock, and a gap of
+ * under five minutes since the last one. */
+const char *observore_espnow_request_now(int64_t now_us)
+{
+    if (!s_cx_lock) {
+        return "the census exchange is not ready yet";
+    }
+    observore_cx_when_t w;
+    const char *why = NULL;
+    CX_LOCK();
+    if (s_open) {
+        why = "a census window is open now";
+    } else {
+        fill_when(&w, now_us);
+        w.manual = true;
+        switch (observore_cx_decide(&w)) {
+        case OBSERVORE_CX_OPEN_NOW:
+            s_manual = true;
+            break;
+        case OBSERVORE_CX_SKIP_OFF:
+            why = "the exchange is off";
+            break;
+        case OBSERVORE_CX_SKIP_NO_SECRET:
+            why = "set a household secret first";
+            break;
+        case OBSERVORE_CX_SKIP_NO_CLOCK:
+            why = "the clock is not set: no window can be dated";
+            break;
+        default:
+            why = "the last window closed under five minutes ago";
+            break;
+        }
+    }
+    CX_UNLOCK();
+    if (!why) {
+        ESP_LOGI(TAG, "census window requested from the console");
+    }
+    return why;
+}
+
+const char *observore_espnow_forget(void)
+{
+    observore_census_peer_forget(OBSERVORE_CENSUS_FORGOT_OWNER);
+    observore_census_peer_save();
+    ESP_LOGI(TAG, "peer census forgotten by the owner; this node's own census is kept");
+    return NULL;
+}
+
+/* Called after the console set or cleared the household secret. A window would
+ * notice at its next open, but the console reads the table before then, and a
+ * table kept under a secret that is gone would sit there saying nothing about
+ * why it is no longer believed. */
+void observore_espnow_secret_changed(void)
+{
+    uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {0};
+    if (observore_meshkey_derive(OBSERVORE_CX_CHECK_LABEL, check, sizeof(check))) {
+        observore_census_peer_rekey(check);
+    } else {
+        observore_census_peer_forget(OBSERVORE_CENSUS_FORGOT_NO_SECRET);
+    }
+    mbedtls_platform_zeroize(check, sizeof(check));
+
+    if (observore_census_peer_take_changed()) {
+        observore_census_peer_save();
+        ESP_LOGW(TAG, "the household secret %s: the peer census was emptied",
+                 observore_meshkey_present() ? "changed" : "was cleared");
+    }
+}
+
 #else /* !CONFIG_OBSERVORE_MESH_CENSUS */
 
 bool observore_espnow_available(void)
@@ -766,6 +962,37 @@ bool observore_espnow_available(void)
 }
 
 void observore_espnow_init(void)
+{
+}
+
+void observore_espnow_status(int64_t now_us, observore_espnow_status_t *out)
+{
+    (void)now_us;
+    memset(out, 0, sizeof(*out));
+    out->blocked = "";
+    out->next_s  = -1;
+}
+
+const char *observore_espnow_configure(const char *mode, const char *at, const char *channel)
+{
+    (void)mode;
+    (void)at;
+    (void)channel;
+    return "the census exchange is not in this build";
+}
+
+const char *observore_espnow_request_now(int64_t now_us)
+{
+    (void)now_us;
+    return "the census exchange is not in this build";
+}
+
+const char *observore_espnow_forget(void)
+{
+    return "the census exchange is not in this build";
+}
+
+void observore_espnow_secret_changed(void)
 {
 }
 

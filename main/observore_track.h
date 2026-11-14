@@ -235,6 +235,13 @@ void observore_track_set_journeys(uint32_t journeys);
  * one day from another, so it cannot know what is furniture. */
 void observore_track_set_day(int day);
 
+/* The day the score is judging the census against: what observore_track_set_day()
+ * last pushed in, OBSERVORE_CENSUS_NO_DAY until something has. A surface that
+ * marks a device as quieted or dampened must judge against this day and not
+ * read the clock again, so that a row's mark and the points it carries agree
+ * even in the moment between a day change and the next sweep. */
+int observore_track_day(void);
+
 /* Whether the board is at the far end of a journey: open once the
  * surroundings confirm it is somewhere else, closed half a minute later.
  *

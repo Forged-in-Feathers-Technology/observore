@@ -33,6 +33,94 @@ bool observore_espnow_available(void);
  * the household secret that call loads. Empty in a build without the exchange. */
 void observore_espnow_init(void);
 
+/* The console's side of the exchange. Everything from here to the #if below is
+ * declared in every build and answers sensibly without the option, so the web
+ * layer calls it with no #if at the call site, as it calls
+ * observore_ble_can_warn().
+ *
+ * The two sizes below equal OBSERVORE_CX_FRIENDS_MAX and
+ * OBSERVORE_CX_RESULT_TEXT_LEN; observore_espnow.c asserts it under the option,
+ * which keeps this header free of the option's types. */
+#define OBSERVORE_ESPNOW_FRIENDS  8
+#define OBSERVORE_ESPNOW_TEXT_LEN 224
+
+/* What the console shows of the exchange, copied out under the exchange's lock
+ * so a reader on the HTTP task sees a state that agrees with itself.
+ *
+ *   available     whether this build has the exchange at all. When false every
+ *                 other field is zero and the console shows no controls.
+ *   secret        whether a household secret is set. The secret itself, the key
+ *                 derived from it and its check never leave observore_meshkey.c.
+ *   mode, at_min, channel
+ *                 what the owner set: 0 off, 1 listen, 2 exchange (the order of
+ *                 observore_cx_mode_name()); the window time as minutes since
+ *                 local midnight; the household channel.
+ *   next_s        seconds until the next scheduled window, 0 inside its grace and
+ *                 -1 when there will be none.
+ *   blocked       why there will be none: "" when a window will come, otherwise
+ *                 "off", "no household secret" or "no clock".
+ *   peer_entries, peer_max
+ *                 identities held from the owner's other nodes, and the table's
+ *                 size.
+ *   forgot        why that table last emptied, as an observore_census_forget_t.
+ *   have_last     whether a window has closed since boot. The result is kept in
+ *                 RAM only: a board with no card forgets it at a reboot.
+ *   last_*        the last window's result, as observore_cx_result_t has it.
+ *                 last_share is true for exchange mode, last_interrupted for a
+ *                 window cut short, last_secs how long it ran, last_left the
+ *                 observore_mode_t the node was in before the window took it to
+ *                 patrol, and last_closed_us the monotonic time it closed.
+ *   last_text     the same result as one line, counts and node ids only. */
+typedef struct observore_espnow_status_t {
+    bool     available;
+    bool     secret;
+    uint8_t  mode;
+    uint16_t at_min;
+    uint8_t  channel;
+    long     next_s;
+    const char *blocked;
+    unsigned peer_entries;
+    unsigned peer_max;
+    uint8_t  forgot;
+    bool     have_last;
+    bool     last_share;
+    bool     last_interrupted;
+    uint8_t  last_secs;
+    uint8_t  last_left;
+    uint16_t last_sent;
+    uint8_t  last_friends;
+    uint16_t last_friend[OBSERVORE_ESPNOW_FRIENDS];
+    uint16_t last_merged, last_bad_tag, last_day_skew, last_malformed, last_foreign;
+    int64_t  last_closed_us;
+    char     last_text[OBSERVORE_ESPNOW_TEXT_LEN];
+} observore_espnow_status_t;
+
+/* Fill `out` from live state. `now_us` is the monotonic time, for the schedule. */
+void observore_espnow_status(int64_t now_us, observore_espnow_status_t *out);
+
+/* Set the owner's mode, window time and channel; each argument may be NULL for
+ * "unchanged". Every value given is validated before any is applied, so a
+ * refusal changes nothing. Returns NULL on success, or the reason as a sentence
+ * the console can show: a mode other than off is refused until a household
+ * secret is set. A valid change is saved. */
+const char *observore_espnow_configure(const char *mode, const char *at,
+                                       const char *channel);
+
+/* Ask for a window now. This only sets a flag, which the main loop takes in
+ * observore_espnow_should_open() within about a second: switching the radio's
+ * mode is main.c's alone to do, and a web handler must not block. Returns NULL
+ * when the request was taken, or why not: the exchange is off, there is no
+ * secret, there is no clock, or the last window closed under five minutes ago. */
+const char *observore_espnow_request_now(int64_t now_us);
+
+/* Empty the peer census, which is what the owner's other nodes reported; this
+ * node's own census is kept. Returns NULL, or why it could not. */
+const char *observore_espnow_forget(void);
+
+/* The household secret was just set or cleared: empty what friends reported now,
+ * under the right reason, rather than at the next window. */
+void observore_espnow_secret_changed(void);
+
 #if CONFIG_OBSERVORE_MESH_CENSUS
 
 /* Whether a window should open now, from live inputs: the clock, the owner's
