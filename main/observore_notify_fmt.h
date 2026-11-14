@@ -107,14 +107,15 @@ typedef struct {
  * the tie, because this header stays independent of the peer table. */
 #define OBSERVORE_DIGEST_STRANGER_NODES 2
 
-/* Room for the longest note, 104 characters (the host test prints the
- * length): every part present, two stranger nodes, 14 monitors off and 192
- * devices quieted. */
+/* Room for the longest note, 118 characters (the host test prints the
+ * length): every part present, two stranger nodes, 14 monitors off, 192
+ * devices quieted and all 192 of them via mesh. */
 #define OBSERVORE_DIGEST_NOTE_LEN 128
 
 typedef struct {
     int monitors_off;      /* monitors switched off: nothing is being looked for */
     int census_quieted;    /* household devices contributing nothing right now */
+    int census_quieted_mesh;    /* the part of census_quieted the owner's other nodes caused */
     int peer_trusted_points;    /* points trusted peers added to the score */
     int peer_stranger_points;   /* points strangers added; at most the cap */
     int peer_stranger_nodes;    /* how many of peer_stranger_node[] are set */

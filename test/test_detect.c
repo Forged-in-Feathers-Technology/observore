@@ -3315,6 +3315,31 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
     CHECK(observore_digest_note(NULL, big, sizeof(big)) == 0,
           "and NULL still writes nothing");
 
+    /* Quieting the owner's other nodes caused says so. The quieted total keeps
+     * its meaning and the via-mesh figure is the part of it that came from
+     * friends, so a push never reports a silence this node did not earn alone
+     * as though it had. */
+    observore_digest_note(&(observore_digest_notes_t){.census_quieted = 2,
+                                                      .census_quieted_mesh = 1},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(2 quieted as household, 1 via mesh)") == 0,
+          "quieting from friends says how much: %s", big);
+    observore_digest_note(&(observore_digest_notes_t){.census_quieted = 4,
+                                                      .census_quieted_mesh = 0},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(4 quieted as household)") == 0,
+          "with none from friends the note is as it was: %s", big);
+    observore_digest_note(&(observore_digest_notes_t){.monitors_off = 2,
+                                                      .census_quieted = 1,
+                                                      .census_quieted_mesh = 1},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(2 monitors off, 1 quieted as household, 1 via mesh)") == 0,
+          "the via-mesh part rides inside the census part: %s", big);
+    CHECK(observore_digest_note(&(observore_digest_notes_t){.census_quieted = 0,
+                                                            .census_quieted_mesh = 3},
+                                big, sizeof(big)) == 0 && big[0] == '\0',
+          "a part of nothing is nothing, so it writes no census part at all");
+
     /* The worst case fits whole and ends with its closing bracket. */
     size_t wn = observore_digest_note(
         &(observore_digest_notes_t){.peer_trusted_points = 6,
@@ -3322,14 +3347,16 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                     .peer_stranger_nodes = 2,
                                     .peer_stranger_node = {0xFFFF, 0xFFFE},
                                     .monitors_off = 14,
-                                    .census_quieted = 192},
+                                    .census_quieted = 192,
+                                    .census_quieted_mesh = 192},
         big, sizeof(big));
     printf("  worst-case note: %zu characters\n", wn);
     CHECK(strcmp(big, "(+6 from trusted peers, +2 from stranger nodes FFFE "
-                      "and FFFF, 14 monitors off, 192 quieted as household)") == 0,
+                      "and FFFF, 14 monitors off, 192 quieted as household, "
+                      "192 via mesh)") == 0,
           "the worst case reads whole: %s", big);
-    CHECK(wn == 104 && big[wn - 1] == ')' && wn < sizeof(big),
-          "and is 104 characters, inside its buffer, ending with ')': %zu", wn);
+    CHECK(wn == 118 && big[wn - 1] == ')' && wn < sizeof(big),
+          "and is 118 characters, inside its buffer, ending with ')': %zu", wn);
 
     /* The digest leads with the whole note: it is no longer passed through a
      * 64-byte local, so the long one is not cut at 63 characters. */
@@ -3346,7 +3373,8 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                     .peer_stranger_nodes = 2,
                                     .peer_stranger_node = {0xFFFF, 0xFFFE},
                                     .monitors_off = 14,
-                                    .census_quieted = 192},
+                                    .census_quieted = 192,
+                                    .census_quieted_mesh = 192},
         title, sizeof(title), body, sizeof(body));
     CHECK(strncmp(body, big, wn) == 0 && body[wn] == '\n',
           "the digest body leads with the whole worst-case note and a "

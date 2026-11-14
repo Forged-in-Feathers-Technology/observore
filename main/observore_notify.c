@@ -532,6 +532,7 @@ void observore_notify_pump(void)
     observore_digest_notes_t notes = {
         .monitors_off         = st.monitors_off,
         .census_quieted       = st.census_quieted,
+        .census_quieted_mesh  = st.census_quieted_mesh,
         .peer_trusted_points  = s_note_pw.trusted,
         .peer_stranger_points = s_note_pw.stranger,
     };

@@ -460,8 +460,16 @@ size_t observore_digest_note(const observore_digest_notes_t *notes,
                   notes->monitors_off == 1 ? "" : "s");
     }
     if (notes->census_quieted > 0) {
-        note_part(buf, len, &used, "%d quieted as household",
-                  notes->census_quieted);
+        /* The via-mesh figure is a part of the total, so it is written only
+         * inside the census part and only when something came from friends:
+         * with none the note is byte for byte what it was. */
+        if (notes->census_quieted_mesh > 0) {
+            note_part(buf, len, &used, "%d quieted as household, %d via mesh",
+                      notes->census_quieted, notes->census_quieted_mesh);
+        } else {
+            note_part(buf, len, &used, "%d quieted as household",
+                      notes->census_quieted);
+        }
     }
     if (used == 0) {
         return 0;
