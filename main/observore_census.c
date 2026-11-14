@@ -77,6 +77,12 @@ static struct {
 
 #define p_tab   (s_peer.e)
 #define p_count (s_peer.hdr.count)
+
+/* Why the peer table last emptied, so the console can say so rather than show
+ * an empty table with no explanation, and whether it differs from what was
+ * last saved. */
+static observore_census_forget_t s_peer_forgot = OBSERVORE_CENSUS_FORGOT_NONE;
+static bool                      s_peer_changed;
 #endif
 
 /* Days from 2000-01-01, from a civil date.
@@ -160,6 +166,8 @@ void observore_census_init(void)
     p_count = 0;
     memset(p_tab, 0, sizeof(p_tab));
     memset(s_peer.hdr.check, 0, sizeof(s_peer.hdr.check));
+    s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_NONE;
+    s_peer_changed = false;
 #endif
     census_load();
 }
@@ -712,6 +720,53 @@ size_t observore_census_peer_count(void)
     return p_count;
 }
 
+/* How many distinct days the owner's other nodes between them have on an
+ * identity, as of `day`. A friend one day ahead is read in its own day, so a
+ * day it has not yet reached here is still a day it has. */
+static int peer_days(const observore_peer_census_entry_t *p, int day)
+{
+    int a = day > (int)p->last_day ? day : (int)p->last_day;
+    uint16_t mask = 0;
+    for (int k = 0; k < OBSERVORE_CENSUS_FROM; k++) {
+        if (p->from[k].node) {
+            mask |= align_mask(p->from[k].days, p->last_day, a);
+        }
+    }
+    return popcount16(mask);
+}
+
+/* Which entry gives up its place when the peer table is full and a new
+ * identity arrives, or NULL when the newcomer ranks below every resident.
+ *
+ * The same ranking as evict() above, for the same reason: fewest days first,
+ * and the older of those, since the date alone ranks nothing on a stationary
+ * board where every entry carries today's. There is no household tier here,
+ * because what a friend reported is only worth keeping for the days it adds;
+ * an entry three days deep is simply the one with the most to lose.
+ *
+ * Nothing in this function or its caller touches s_store. That is the property
+ * the owner was promised: a friend, however many identities it reports, can
+ * only ever cost another friend's report, never an identity this node learned
+ * itself. */
+static observore_peer_census_entry_t *peer_evict(int day, int newcomer_days)
+{
+    observore_peer_census_entry_t *worst = NULL;
+    int worst_days = 0;
+    for (size_t i = 0; i < p_count; i++) {
+        observore_peer_census_entry_t *c = &p_tab[i];
+        int days = peer_days(c, day);
+        if (!worst || days < worst_days ||
+            (days == worst_days && c->last_day < worst->last_day)) {
+            worst = c;
+            worst_days = days;
+        }
+    }
+    if (!worst || worst_days > newcomer_days) {
+        return NULL;
+    }
+    return worst;
+}
+
 /* Put an entry's contributors in node order, free places last, and its
  * addresses in value order. The order a friend's entries arrive in is not
  * something the owner controls, and nothing downstream depends on it, so the
@@ -767,10 +822,15 @@ observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
     if (p) {
         before = *p;
     } else {
-        if (p_count >= OBSERVORE_PEER_CENSUS_MAX) {
-            return OBSERVORE_CENSUS_MERGE_REFUSED;
+        if (p_count < OBSERVORE_PEER_CENSUS_MAX) {
+            p = &p_tab[p_count++];
+        } else {
+            p = peer_evict(my_day,
+                           popcount16(align_mask(in->days, in->last_day, span)));
+            if (!p) {
+                return OBSERVORE_CENSUS_MERGE_REFUSED;
+            }
         }
-        p = &p_tab[p_count++];
         memset(p, 0, sizeof(*p));
         p->id       = in->id;
         p->last_day = in->last_day;
@@ -805,6 +865,24 @@ observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
             slot = k;
         }
     }
+    if (slot < 0) {
+        /* No place is free and none is stale. The newcomer takes the place of
+         * the friend with the fewest days inside the window if it brings
+         * strictly more, and otherwise its days are dropped, so a tie keeps
+         * the friend already counted. Dropping days only ever makes an
+         * identity less household, which is the safe direction. */
+        int worst = 0, worst_days = OBSERVORE_CENSUS_WINDOW + 1;
+        for (int k = 0; k < OBSERVORE_CENSUS_FROM; k++) {
+            int d = popcount16(align_mask(p->from[k].days, l, read_day));
+            if (d < worst_days) {
+                worst = k;
+                worst_days = d;
+            }
+        }
+        if (popcount16(align_mask(in->days, in->last_day, read_day)) > worst_days) {
+            slot = worst;
+        }
+    }
     if (slot >= 0) {
         if (p->from[slot].node != node) {
             p->from[slot].node = node;
@@ -822,8 +900,147 @@ observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
         p->addr_over = 1;
     }
     peer_canon(p);
-    return memcmp(&before, p, sizeof(before)) != 0 ? OBSERVORE_CENSUS_MERGE_CHANGED
-                                                   : OBSERVORE_CENSUS_MERGE_SAME;
+    if (memcmp(&before, p, sizeof(before)) == 0) {
+        return OBSERVORE_CENSUS_MERGE_SAME;
+    }
+    s_peer_changed = true;
+    return OBSERVORE_CENSUS_MERGE_CHANGED;
+}
+
+void observore_census_peer_prune(int day)
+{
+    if (day < 0 || day > OBSERVORE_CENSUS_DAY_MAX) {
+        return;           /* with no day nothing is known to have aged out */
+    }
+    size_t kept = 0;
+    for (size_t i = 0; i < p_count; i++) {
+        if (peer_days(&p_tab[i], day) > 0) {
+            if (kept != i) {
+                p_tab[kept] = p_tab[i];
+            }
+            kept++;
+        }
+    }
+    if (kept != p_count) {
+        memset(&p_tab[kept], 0, (p_count - kept) * sizeof(p_tab[0]));
+        p_count = (uint16_t)kept;
+        s_peer_changed = true;
+    }
+}
+
+void observore_census_peer_forget(observore_census_forget_t why)
+{
+    if (p_count > 0) {
+        s_peer_changed = true;
+    }
+    p_count = 0;
+    memset(p_tab, 0, sizeof(p_tab));
+    s_peer_forgot = why;
+}
+
+observore_census_forget_t observore_census_peer_forgot(void)
+{
+    return s_peer_forgot;
+}
+
+bool observore_census_peer_take_changed(void)
+{
+    bool was = s_peer_changed;
+    s_peer_changed = false;
+    return was;
+}
+
+size_t observore_census_peer_blob(void *out, size_t cap)
+{
+    size_t need = sizeof(census_peer_hdr_t) +
+                  (size_t)p_count * sizeof(observore_peer_census_entry_t);
+    if (!out || cap < need) {
+        return need;              /* how much room it wants */
+    }
+    census_peer_hdr_t hdr = s_peer.hdr;
+    hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
+    memcpy(out, &hdr, sizeof(hdr));
+    memcpy((char *)out + sizeof(hdr), p_tab,
+           (size_t)p_count * sizeof(observore_peer_census_entry_t));
+    return need;
+}
+
+/* Whether two key checks are the same, in time that does not depend on where
+ * they first differ. It is four bytes of an HMAC of the household secret, so it
+ * would confirm a guess at the secret offline: compared here, never logged and
+ * never served. */
+static bool check_equal(const uint8_t *a, const uint8_t *b)
+{
+    uint8_t diff = 0;
+    for (int i = 0; i < OBSERVORE_PEER_CENSUS_CHECK_LEN; i++) {
+        diff |= (uint8_t)(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+
+/* An empty table that carries the key check it is now held under. */
+static void peer_empty(const uint8_t *check)
+{
+    p_count = 0;
+    memset(p_tab, 0, sizeof(p_tab));
+    s_peer.hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
+    memcpy(s_peer.hdr.check, check, OBSERVORE_PEER_CENSUS_CHECK_LEN);
+}
+
+bool observore_census_peer_restore(const void *blob, size_t len,
+                                   const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN])
+{
+    census_peer_hdr_t hdr;
+    if (!blob || !check || len < sizeof(hdr)) {
+        if (check) {
+            peer_empty(check);
+        }
+        return false;
+    }
+    memcpy(&hdr, blob, sizeof(hdr));
+    /* The same refusals as the local table's, and one more. Another version, a
+     * count past the table and a length that disagrees with the header are
+     * not a table this code wrote, and a table that is half read is worse than
+     * an empty one, so the peer table is emptied rather than left as it was. */
+    if (hdr.version != OBSERVORE_PEER_CENSUS_FORMAT ||
+        hdr.count > OBSERVORE_PEER_CENSUS_MAX ||
+        len != sizeof(hdr) +
+               (size_t)hdr.count * sizeof(observore_peer_census_entry_t)) {
+        peer_empty(check);
+        return false;
+    }
+    /* A table kept under another household secret is another household's
+     * report. It is not read, and the owner is told why it is gone. */
+    if (!check_equal(hdr.check, check)) {
+        peer_empty(check);
+        s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_SECRET;
+        s_peer_changed = true;
+        return false;
+    }
+    const void *src = (const char *)blob + sizeof(hdr);
+    if (src != (const void *)p_tab) {
+        memcpy(p_tab, src,
+               (size_t)hdr.count * sizeof(observore_peer_census_entry_t));
+    }
+    p_count = hdr.count;
+    s_peer.hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
+    memcpy(s_peer.hdr.check, check, OBSERVORE_PEER_CENSUS_CHECK_LEN);
+    return true;
+}
+
+bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN])
+{
+    if (!check || check_equal(s_peer.hdr.check, check)) {
+        return false;
+    }
+    bool had = p_count > 0;
+    peer_empty(check);
+    if (!had) {
+        return false;         /* nothing was kept under the old secret */
+    }
+    s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_SECRET;
+    s_peer_changed = true;
+    return true;
 }
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */
 

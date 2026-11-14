@@ -374,4 +374,56 @@ observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
 /* How many identities are held from the owner's other nodes. */
 size_t observore_census_peer_count(void);
 
+/* Why the peer table last emptied. */
+typedef enum {
+    OBSERVORE_CENSUS_FORGOT_NONE = 0,
+    OBSERVORE_CENSUS_FORGOT_OWNER,       /* the owner asked */
+    OBSERVORE_CENSUS_FORGOT_SECRET,      /* the household secret changed */
+    OBSERVORE_CENSUS_FORGOT_NO_SECRET,   /* there is no household secret */
+} observore_census_forget_t;
+
+/* Empty the peer table and remember why. This node's own census is not
+ * touched. */
+void observore_census_peer_forget(observore_census_forget_t why);
+
+/* The last reason the peer table emptied: NONE until something forgot it. A
+ * later merge does not clear it, so the console can still say why the table
+ * started empty. */
+observore_census_forget_t observore_census_peer_forgot(void);
+
+/* Remove the entries none of whose friends has a day left inside the window as
+ * of `day`. A friend one day ahead keeps its tomorrow. With no day nothing is
+ * known to have aged out, and nothing is removed. */
+void observore_census_peer_prune(int day);
+
+/* True once after any change since the last call: a merge that changed an
+ * entry, a forget of a table that held something, a prune that removed
+ * something, a re-key that emptied the table. The radio path saves the table
+ * at the close of a window only when this is true, which keeps the flash
+ * writes to one a window. */
+bool observore_census_peer_take_changed(void);
+
+/* Serialise the peer table, header and all, into `out`, as
+ * observore_census_blob() does for this node's own: the size needed is
+ * returned, and with `out` NULL or `cap` too small nothing is written. */
+size_t observore_census_peer_blob(void *out, size_t cap);
+
+/* Replace the peer table from a blob previously saved, held under the key
+ * check `check` (four bytes of an HMAC of the household secret).
+ *
+ * Refused, and the table emptied rather than left half read: another format
+ * version, a count above the table, a length that is not exactly the header
+ * plus that many entries. A table saved under a different key check is refused
+ * too, emptied, and the reason recorded as FORGOT_SECRET: what another
+ * household secret reported is not this household's. The check is stored with
+ * the table either way. Restoring into the store itself skips the copy, as the
+ * local restore does. Returns false when the blob was refused. */
+bool observore_census_peer_restore(const void *blob, size_t len,
+                                   const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN]);
+
+/* The household secret may have changed: hold the table under `check`. Returns
+ * true when the stored check differed and a table that held something was
+ * emptied, with FORGOT_SECRET recorded. The new check is stored either way. */
+bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN]);
+
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */
