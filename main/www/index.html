@@ -348,6 +348,43 @@
       do. On this bench every identity at the ceiling had become household,
       which is why the ceiling dampens rather than silences.</span>
   </div>
+  <div id="cxpanel" hidden>
+    <div class="add">
+      <span class="note"><strong>Sharing the census with your other nodes.</strong>
+        At the time set here, nodes that hold the same household secret meet on
+        one channel for up to 30 seconds and swap what each has learned, so a
+        device that is furniture to your household stops being reported on every
+        node. The traffic is encrypted. A node transmits only in
+        <em>exchange</em> mode and only when it has something to share;
+        <em>listen only</em> hears friends and sends nothing. Patrol and this
+        console pause for the window, and the console says afterwards that it
+        did. Three separate days are still what earns a household, wherever
+        they were seen.</span>
+    </div>
+    <div class="add"><span class="note" id="cxstatus"></span></div>
+    <div class="add">
+      <select id="cxmode" title="what this node does in the window">
+        <option value="off">off</option>
+        <option value="listen">listen only: hear friends, send nothing</option>
+        <option value="exchange">exchange</option>
+      </select>
+      <input id="cxat" type="time" step="60" style="min-width:0"
+             title="the window time, in this node&rsquo;s own local time">
+      <input id="cxchan" type="number" min="1" max="13" style="min-width:0;width:70px"
+             title="the household channel, 1 to 13: the same on every node">
+      <button id="cxsave">save</button>
+      <button id="cxnow" class="mini">exchange now</button>
+      <button id="cxforget" class="mini">forget peer census</button>
+      <span class="note" id="cxnote"></span>
+    </div>
+    <div class="add">
+      <span class="note">To pair two nodes by hand, press &ldquo;exchange
+        now&rdquo; on both within about 20 seconds of each other.</span>
+    </div>
+    <div class="add"><span class="note" id="cxlast"></span></div>
+    <div class="add"><span class="note" id="cxfriends"></span></div>
+    <div class="add"><span class="note warn" id="cxpaused"></span></div>
+  </div>
   <div class="rules" id="census"></div>
 </div>
 
@@ -576,8 +613,15 @@ function renderStatus(s) {
   const pst = (s.peers && s.peers.stranger_points) || 0;
   if (pp > 0) { notes.push('+' + pp + ' from peers (' + ptr + ' trusted, ' + pst + ' stranger)'); }
   if (monOff) { notes.push(monOff + ' monitor' + (monOff === 1 ? '' : 's') + ' off'); }
-  if (quiet)  { notes.push(quiet + ' quieted as household'); }
-  if (half)   { notes.push(half + ' at half weight'); }
+  // The total keeps its meaning; the part in brackets is the share of it that
+  // the owner's other nodes caused, so a quiet this node did not earn alone
+  // is never reported as though it had.
+  const quietMesh = (s.census && s.census.quieted_mesh) || 0;
+  const halfMesh = (s.census && s.census.dampened_mesh) || 0;
+  if (quiet)  { notes.push(quiet + ' quieted as household' +
+                           (quietMesh > 0 ? ' (' + quietMesh + ' via mesh)' : '')); }
+  if (half)   { notes.push(half + ' at half weight' +
+                           (halfMesh > 0 ? ' (' + halfMesh + ' via mesh)' : '')); }
   $('level').textContent = notes.length
     ? s.level + ' \u2014 ' + notes.join(', ')
     : s.level;
@@ -739,7 +783,13 @@ function renderDevices(list) {
     cell(tr, '', d.detail);
     cell(tr, '', d.rssi + ' dBm');
     cell(tr, 'dim', d.source);
-    cell(tr, 'dim', d.evidence);
+    // A device the census halved says so here, in the list that still shows
+    // it, and says whose days did it when this node alone would not have.
+    // d.census_from is hex the device formatted; it goes in as text.
+    cell(tr, 'dim', d.evidence + (d.census === 'half'
+      ? ' \u00b7 half weight' +
+        (d.census_mesh ? ', household via mesh ' + d.census_from : '')
+      : ''));
     // Hits, and how many addresses they were collected under. A random
     // address that has rotated and is still here is the clearest thing the
     // table can say about persistence.
@@ -832,13 +882,91 @@ function renderHistory(h) {
   }
 }
 
+// Whether the owner has touched the exchange's controls since they were last
+// filled from the device. The page repaints every two seconds, and a control
+// that snapped back while a mode was being chosen would be worse than none.
+let cxDirty = false;
+
+function cxSet(el, value) {
+  if (cxDirty || document.activeElement === el) return;
+  el.value = value;
+}
+
+function renderExchange(c) {
+  const x = c.exchange;
+  const panel = $('cxpanel');
+  if (!x || !x.available) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+
+  const words = { off: 'off', listen: 'listen only', exchange: 'exchange' };
+  let line = 'Exchange is ' + (words[x.mode] || x.mode);
+  if (x.next_s >= 0) {
+    line += ' · next window ' + x.at + ' local, ' +
+      (x.next_s === 0 ? 'now' : 'in ' + (x.next_s < 60 ? x.next_s + ' s' : dur(x.next_s)));
+  } else {
+    line += ' · ' + (x.blocked === 'off' ? 'no window while it is off'
+                                                : 'no window: ' + x.blocked);
+  }
+  line += ' · channel ' + x.channel;
+  // One evening can count as two days if two nodes draw the line between days
+  // in different places, and the census adds days up across nodes.
+  line += ' · ' + (x.clock === 'none' ? 'clock not set' : 'clock from the ' + x.clock) +
+    ', zone ' + x.tz +
+    ' — set the same zone and clock source on every node, or one evening can count as two days';
+  line += ' · ' + x.peer_entries + ' of ' + x.peer_max + ' identities from friends';
+  const why = { owner: 'by you', secret: 'because the household secret changed',
+                'no secret': 'because no household secret is set' };
+  if (x.forgot) {
+    line += ' · emptied ' + (why[x.forgot] || x.forgot);
+  }
+  $('cxstatus').textContent = line;
+
+  const mode = $('cxmode');
+  mode.disabled = !x.secret && x.mode === 'off';
+  mode.title = mode.disabled ? 'set a household secret first'
+                             : 'what this node does in the window';
+  cxSet(mode, x.mode);
+  cxSet($('cxat'), x.at);
+  cxSet($('cxchan'), x.channel);
+
+  const l = x.last;
+  $('cxlast').textContent = l ? 'Last window: ' + l.text + ' · ' + ago(l.ago_s) + ' ago'
+                              : 'No window yet.';
+
+  // Who was heard in the last window, and who is behind the household marks
+  // in the table now: they differ, because a friend's days stay counted for
+  // two weeks after it was heard.
+  const heard = l ? l.friends : [];
+  const behind = [...new Set((c.members || []).flatMap(m => m.from || []))].sort();
+  let fr = 'heard: ' + (heard.length ? heard.join(' ') : 'nobody');
+  if (behind.length) {
+    fr += ' · contributing: ' + behind.join(' ');
+  }
+  $('cxfriends').textContent = fr;
+
+  // The console went away for the window, which only the page after it can
+  // say. Quiet again after fifteen minutes.
+  $('cxpaused').textContent =
+    (l && l.left !== 'patrol' && l.ago_s < 900)
+      ? 'This console was unavailable for ' + l.secs + ' s, ' + ago(l.ago_s) +
+        ' ago, while this node ' +
+        (l.share ? 'shared its census' : 'listened for its friends’ census')
+      : '';
+}
+
 function renderCensus(c) {
+  renderExchange(c);
   const box = $('census');
   box.textContent = '';
   const n = (c.members || []).length;
   const hh = (c.members || []).filter(m => m.household).length;
+  const viaMesh = (c.members || []).filter(m => m.household && m.via_mesh).length;
   $('censusinfo').textContent = n
-    ? hh + ' household of ' + n + ' known \u2014 ' + c.min_days +
+    ? hh + ' household' + (viaMesh > 0 ? ' (' + viaMesh + ' via mesh)' : '') +
+      ' of ' + n + ' known — ' + c.min_days +
       ' separate days in ' + c.window + ' earns it'
     : 'nothing learned yet';
   if (!n) {
@@ -848,7 +976,7 @@ function renderCensus(c) {
   }
   const t = document.createElement('table');
   const head = document.createElement('tr');
-  ['identity', 'days', 'addresses', ''].forEach(h => {
+  ['identity', 'days', 'addresses', 'from', ''].forEach(h => {
     const th = document.createElement('th');
     th.textContent = h;
     head.appendChild(th);
@@ -859,13 +987,20 @@ function renderCensus(c) {
   for (const m of rows) {
     const tr = document.createElement('tr');
     cell(tr, 'mac', m.id);
-    cell(tr, '', m.days + ' / ' + c.min_days);
+    // An identity only the owner's other nodes have seen is not one this
+    // node's own radio has met, and the table says so rather than let its days
+    // read as local.
+    cell(tr, '', m.days + ' / ' + c.min_days + (m.here === false ? ' (not seen here)' : ''));
     /* "and counting" matters: at the limit the count has stopped being a
        count, and that is exactly when it is being compared to a limit. */
     cell(tr, '', m.addresses + (m.more ? '+' : ''));
+    cell(tr, 'dim', (m.from || []).join(' '));
     tagCell(tr, m.household ? 'clear' : 'dim',
-            m.household ? 'household' : 'seen');
-    if (m.addresses >= c.addr_limit) {
+            m.household ? (m.via_mesh ? 'household via mesh' : 'household') : 'seen');
+    if (m.via_mesh) {
+      tr.title = 'Household because your other nodes saw it on enough separate days; ' +
+                 'this node alone has seen it on ' + m.local_days + '.';
+    } else if (m.addresses >= c.addr_limit) {
       tr.title = 'Seen under ' + m.addresses + (m.more ? ' or more' : '') +
                  ' addresses: one device rotating, or several alike. ' +
                  'Cannot be told apart from here.';
@@ -1004,7 +1139,8 @@ async function refreshLive() {
   renderNearby((await getJSON('/api/nearby', { nearby: [] })).nearby);
   renderHistory(await getJSON('/api/history', { history: [], peer_events: [] }));
   renderCensus(await getJSON('/api/census',
-    { members: [], min_days: 3, window: 16, addr_limit: 8, day: -1 }));
+    { members: [], min_days: 3, window: 16, addr_limit: 8, day: -1,
+      exchange: { available: false } }));
   $('updated').textContent = 'updated ' + new Date().toLocaleTimeString() +
     (errors.length ? ' — failed: ' + errors.join('; ') : '');
 }
@@ -1260,6 +1396,32 @@ $('settz').onclick = () =>
   post('/api/tz?tz=' + encodeURIComponent($('tzpick').value),
        'timezone stored; days already counted keep the boundary they had');
 
+
+// The census exchange's controls. Each posts through post(), which says what
+// the device answered in the note beside the buttons.
+for (const id of ['cxmode', 'cxat', 'cxchan']) {
+  $(id).addEventListener('input', () => { cxDirty = true; });
+}
+$('cxsave').onclick = async () => {
+  await post('/api/census?mode=' + encodeURIComponent($('cxmode').value) +
+             '&at=' + encodeURIComponent($('cxat').value) +
+             '&channel=' + encodeURIComponent($('cxchan').value),
+             'saved', 'cxnote');
+  cxDirty = false;
+};
+$('cxnow').onclick = () => {
+  if (!confirm('Open a census window now?\n\nThis console goes away for up to ' +
+               '30 seconds while the node is on the household channel. To pair ' +
+               'two nodes, press this on the other node within 20 seconds.')) return;
+  post('/api/census?action=now',
+       'a window opens within a few seconds; this console will go away while it runs',
+       'cxnote');
+};
+$('cxforget').onclick = () => {
+  if (!confirm('Forget what your other nodes reported?\n\n' +
+               'This node\'s own census is kept.')) return;
+  post('/api/census?action=forget', 'forgotten', 'cxnote');
+};
 
 async function post(query, okMsg, noteEl) {
   try {
