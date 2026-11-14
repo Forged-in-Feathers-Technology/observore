@@ -1,0 +1,14 @@
+# The census exchange, for the build that requests it.
+#
+# CONFIG_OBSERVORE_MESH_CENSUS is off in every board profile, by design -- it
+# spends the device's passivity in a daily window and is nobody's default. With
+# it off the exchange code is not compiled at all. This layer asks for it, and
+# is layered last, after a board profile:
+#
+#   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/<board>.defaults;boards/mesh-census.defaults"
+#
+# On a classic ESP32 profile the option cannot resolve, because the household
+# secret there sits in plaintext NVS: the symbol is unavailable and this line
+# is dropped without a word. That is the intended exclusion, so the build gate
+# checks the resolved sdkconfig rather than this file.
+CONFIG_OBSERVORE_MESH_CENSUS=y

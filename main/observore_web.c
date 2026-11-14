@@ -1112,8 +1112,6 @@ static esp_err_t census_handler(httpd_req_t *req)
      * those apart. How often that happens is what decides whether suppression
      * keyed on a fingerprint is viable at all, and it is invisible without
      * this. */
-    const observore_census_entry_t *tab = NULL;
-    size_t n = observore_census_entries(&tab);
     int day = observore_clock_day();
 
     char *body = s_body;
@@ -1125,16 +1123,17 @@ static esp_err_t census_handler(httpd_req_t *req)
         day, OBSERVORE_CENSUS_MIN_DAYS, OBSERVORE_CENSUS_WINDOW,
         OBSERVORE_CENSUS_ADDRS, OBSERVORE_CENSUS_MAX,
         observore_census_full() ? "true" : "false");
-    for (size_t i = 0; i < n; i++) {
-        bool over = false;
-        int addrs = observore_census_addresses(tab[i].id, &over);
+    /* Each row is a copy taken under the census lock, and the lock is never
+     * held while the body is sent, so a table that grows mid-listing yields
+     * rows that are each consistent with themselves. */
+    observore_census_row_t r;
+    for (size_t i = 0; observore_census_row(i, day, &r); i++) {
         observore_jb_printf(&jb,
             "%s{\"id\":\"%08lx\",\"days\":%d,\"household\":%s"
             ",\"addresses\":%d,\"more\":%s,\"last_day\":%u}",
-            i ? "," : "", (unsigned long)tab[i].id,
-            observore_census_days_seen(tab[i].id, day),
-            observore_census_is_household(tab[i].id, day) ? "true" : "false",
-            addrs, over ? "true" : "false", (unsigned)tab[i].last_day);
+            i ? "," : "", (unsigned long)r.id, r.days,
+            r.household ? "true" : "false",
+            r.addrs, r.more ? "true" : "false", (unsigned)r.last_day);
     }
     observore_jb_close(&jb, "]}");
     return send_json(req, body);

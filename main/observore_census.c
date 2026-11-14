@@ -10,6 +10,32 @@
 
 #include <string.h>
 
+/* One lock over both tables.
+ *
+ * The census is written by the main task and read by the HTTP task, the
+ * display task and, with the exchange, the radio path's merges, and on the
+ * dual-core boards they really do run at once. Every public function that
+ * reads or writes either table takes it once and gives it before it returns,
+ * and nothing hands out a pointer into a table, so a reader can only ever see
+ * a copy. It is recursive because the tracker's lock is held when the verdict
+ * is asked for, and static so it needs no heap and no creation order beyond
+ * observore_census_init(), which app_main runs before the console, the screen,
+ * the BLE host and the radio path exist.
+ *
+ * On the host the suite is single-threaded and the macros are empty, as the
+ * tracker's are. */
+#ifdef OBSERVORE_HOST_TEST
+#define CENSUS_LOCK()   do {} while (0)
+#define CENSUS_UNLOCK() do {} while (0)
+#else
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static StaticSemaphore_t s_lock_buf;
+static SemaphoreHandle_t s_lock;
+#define CENSUS_LOCK()   xSemaphoreTakeRecursive(s_lock, portMAX_DELAY)
+#define CENSUS_UNLOCK() xSemaphoreGiveRecursive(s_lock)
+#endif
+
 #ifdef OBSERVORE_HOST_TEST
 /* No flash and no log on the host: the day arithmetic and the membership rule
  * are the whole of what is worth testing, and both are pure. */
@@ -160,6 +186,11 @@ uint16_t observore_census_dampen(uint16_t points)
 
 void observore_census_init(void)
 {
+#ifndef OBSERVORE_HOST_TEST
+    if (!s_lock) {
+        s_lock = xSemaphoreCreateRecursiveMutexStatic(&s_lock_buf);
+    }
+#endif
     s_count = 0;
     memset(s_tab, 0, sizeof(s_tab));
 #if CONFIG_OBSERVORE_MESH_CENSUS
@@ -322,7 +353,10 @@ static bool note_addr(observore_census_entry_t *e, const uint8_t *mac)
  * place is exactly the one that should be given up. */
 bool observore_census_full(void)
 {
-    return s_count >= OBSERVORE_CENSUS_MAX;
+    CENSUS_LOCK();
+    bool full = s_count >= OBSERVORE_CENSUS_MAX;
+    CENSUS_UNLOCK();
+    return full;
 }
 
 static observore_census_entry_t *evict(int day)
@@ -362,6 +396,7 @@ void observore_census_note(uint32_t id, int day, const uint8_t *mac)
         return;
     }
 
+    CENSUS_LOCK();
     observore_census_entry_t *e = find(id);
     if (!e) {
         if (s_count < OBSERVORE_CENSUS_MAX) {
@@ -387,15 +422,19 @@ void observore_census_note(uint32_t id, int day, const uint8_t *mac)
     if (e->days != before || new_addr) {
         census_save();
     }
+    CENSUS_UNLOCK();
 }
 
 int observore_census_addresses(uint32_t id, bool *over)
 {
+    CENSUS_LOCK();
     observore_census_entry_t *e = find(id);
+    int n = e ? (int)e->addr_n : 0;
     if (over) {
         *over = e ? (e->addr_over != 0) : false;
     }
-    return e ? (int)e->addr_n : 0;
+    CENSUS_UNLOCK();
+    return n;
 }
 
 static uint16_t window_at(const observore_census_entry_t *e, int day)
@@ -424,12 +463,18 @@ static uint16_t window_of(uint32_t id, int day)
 
 int observore_census_days_seen(uint32_t id, int day)
 {
-    return popcount16(window_of(id, day));
+    CENSUS_LOCK();
+    int n = popcount16(window_of(id, day));
+    CENSUS_UNLOCK();
+    return n;
 }
 
 bool observore_census_is_household(uint32_t id, int day)
 {
-    return observore_census_days_seen(id, day) >= OBSERVORE_CENSUS_MIN_DAYS;
+    CENSUS_LOCK();
+    bool hh = popcount16(window_of(id, day)) >= OBSERVORE_CENSUS_MIN_DAYS;
+    CENSUS_UNLOCK();
+    return hh;
 }
 
 #if CONFIG_OBSERVORE_MESH_CENSUS
@@ -582,7 +627,9 @@ observore_census_verdict_t observore_census_explain(uint32_t id, int day,
         return OBSERVORE_CENSUS_REPORT;
     }
     census_view_t v;
+    CENSUS_LOCK();
     view_of(id, day, &v);
+    CENSUS_UNLOCK();
     observore_census_verdict_t local  = ladder(v.local_mask, v.local_addrs,
                                                v.local_over);
     observore_census_verdict_t merged = ladder(v.mask, v.addrs, v.over);
@@ -612,23 +659,27 @@ observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
 
 void observore_census_counts(int day, int *household, int *tracked)
 {
+    CENSUS_LOCK();
     if (tracked) {
         *tracked = (int)s_count;
     }
     if (household) {
         int n = 0;
         for (size_t i = 0; i < s_count; i++) {
-            if (observore_census_is_household(s_tab[i].id, day)) {
+            if (popcount16(window_at(&s_tab[i], day)) >=
+                OBSERVORE_CENSUS_MIN_DAYS) {
                 n++;
             }
         }
         *household = n;
     }
+    CENSUS_UNLOCK();
 }
 
 void observore_census_addr_spread(int *one, int *few, int *many)
 {
     int a = 0, b = 0, c = 0;
+    CENSUS_LOCK();
     for (size_t i = 0; i < s_count; i++) {
         /* Saturated counts as "many" whatever the stored number says: at the
          * ceiling the count has stopped being a count, and that is exactly
@@ -644,6 +695,7 @@ void observore_census_addr_spread(int *one, int *few, int *many)
          * to attribute -- is in none of the buckets. It says nothing either
          * way about whether a fingerprint names one device. */
     }
+    CENSUS_UNLOCK();
     if (one)  { *one = a; }
     if (few)  { *few = b; }
     if (many) { *many = c; }
@@ -652,36 +704,101 @@ void observore_census_addr_spread(int *one, int *few, int *many)
 int observore_census_household_at_ceiling(int day)
 {
     int n = 0;
+    CENSUS_LOCK();
     for (size_t i = 0; i < s_count; i++) {
         bool at_cap = s_tab[i].addr_over ||
                       s_tab[i].addr_n >= OBSERVORE_CENSUS_ADDRS;
-        if (at_cap && observore_census_is_household(s_tab[i].id, day)) {
+        if (at_cap && popcount16(window_at(&s_tab[i], day)) >=
+                          OBSERVORE_CENSUS_MIN_DAYS) {
             n++;
         }
     }
+    CENSUS_UNLOCK();
     return n;
 }
 
-size_t observore_census_entries(const observore_census_entry_t **out)
+size_t observore_census_row_count(void)
 {
-    if (out) {
-        *out = s_tab;
+    CENSUS_LOCK();
+    size_t n = s_count;
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    for (size_t i = 0; i < p_count; i++) {
+        if (!find(p_tab[i].id)) {
+            n++;               /* known only to the owner's other nodes */
+        }
     }
-    return s_count;
+#endif
+    CENSUS_UNLOCK();
+    return n;
+}
+
+bool observore_census_row(size_t i, int day, observore_census_row_t *out)
+{
+    if (!out) {
+        return false;
+    }
+    bool ok = false;
+    uint32_t id = 0;
+    census_view_t v = {0};
+    CENSUS_LOCK();
+    if (i < s_count) {
+        id = s_tab[i].id;
+        ok = true;
+    }
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    else {
+        size_t skip = i - s_count;
+        for (size_t k = 0; k < p_count && !ok; k++) {
+            if (find(p_tab[k].id)) {
+                continue;
+            }
+            if (skip == 0) {
+                id = p_tab[k].id;
+                ok = true;
+            } else {
+                skip--;
+            }
+        }
+    }
+#endif
+    if (ok) {
+        view_of(id, day, &v);
+    }
+    CENSUS_UNLOCK();
+    if (!ok) {
+        return false;
+    }
+    /* From the same view the verdict is judged on, so a row and a verdict
+     * cannot disagree about what is household. */
+    memset(out, 0, sizeof(*out));
+    out->id              = id;
+    out->days            = popcount16(v.mask);
+    out->local_days      = popcount16(v.local_mask);
+    out->household       = out->days >= OBSERVORE_CENSUS_MIN_DAYS;
+    out->household_local = out->local_days >= OBSERVORE_CENSUS_MIN_DAYS;
+    out->via_mesh        = out->household && !out->household_local;
+    out->here            = v.here;
+    out->addrs           = v.addrs;
+    out->more            = v.over;
+    out->last_day        = v.last_day;
+    out->from_n          = v.from_n;
+    memcpy(out->from, v.from, sizeof(out->from));
+    return true;
 }
 
 size_t observore_census_blob(void *out, size_t cap)
 {
+    CENSUS_LOCK();
     size_t need = sizeof(census_blob_hdr_t) +
                   s_count * sizeof(observore_census_entry_t);
-    if (!out || cap < need) {
-        return need;              /* how much room it wants */
+    if (out && cap >= need) {
+        census_blob_hdr_t hdr = {OBSERVORE_CENSUS_FORMAT, (uint16_t)s_count};
+        memcpy(out, &hdr, sizeof(hdr));
+        memcpy((char *)out + sizeof(hdr), s_tab,
+               s_count * sizeof(observore_census_entry_t));
     }
-    census_blob_hdr_t hdr = {OBSERVORE_CENSUS_FORMAT, (uint16_t)s_count};
-    memcpy(out, &hdr, sizeof(hdr));
-    memcpy((char *)out + sizeof(hdr), s_tab,
-           s_count * sizeof(observore_census_entry_t));
-    return need;
+    CENSUS_UNLOCK();
+    return need;                  /* with no room, how much it wants */
 }
 
 bool observore_census_restore(const void *blob, size_t len)
@@ -707,17 +824,22 @@ bool observore_census_restore(const void *blob, size_t len)
      * with identical pointers is undefined behaviour rather than a harmless
      * no-op, so it is skipped rather than relied upon. */
     const void *src = (const char *)blob + sizeof(hdr);
+    CENSUS_LOCK();
     if (src != (const void *)s_tab) {
         memcpy(s_tab, src, (size_t)hdr.count * sizeof(observore_census_entry_t));
     }
     s_count = hdr.count;
+    CENSUS_UNLOCK();
     return true;
 }
 
 #if CONFIG_OBSERVORE_MESH_CENSUS
 size_t observore_census_peer_count(void)
 {
-    return p_count;
+    CENSUS_LOCK();
+    size_t n = p_count;
+    CENSUS_UNLOCK();
+    return n;
 }
 
 /* How many distinct days the owner's other nodes between them have on an
@@ -800,43 +922,12 @@ static void peer_canon(observore_peer_census_entry_t *p)
     }
 }
 
-observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
-                                                     const observore_census_entry_t *in)
+/* Add one friend's entry to the stored entry `p`: the days into that friend's
+ * place, the addresses into the union. Called under the lock, with `p` either
+ * found or freshly emptied for this identity. */
+static void peer_take(observore_peer_census_entry_t *p, uint16_t node,
+                      int my_day, const observore_census_entry_t *in)
 {
-    if (!in || node == 0 || in->id == 0 ||
-        my_day < 0 || my_day > OBSERVORE_CENSUS_DAY_MAX ||
-        in->addr_n > OBSERVORE_CENSUS_ADDRS || in->addr_over > 1 ||
-        in->days == 0 || (int)in->last_day > my_day + 1) {
-        return OBSERVORE_CENSUS_MERGE_REFUSED;
-    }
-    /* Days that left the window before this node's day have nothing to add,
-     * and are not worth a place in the table. A friend one day ahead is read
-     * in its own day, so its tomorrow is kept for tomorrow. */
-    int span = my_day > (int)in->last_day ? my_day : (int)in->last_day;
-    if (align_mask(in->days, in->last_day, span) == 0) {
-        return OBSERVORE_CENSUS_MERGE_SAME;
-    }
-
-    observore_peer_census_entry_t before;
-    observore_peer_census_entry_t *p = find_peer(in->id);
-    if (p) {
-        before = *p;
-    } else {
-        if (p_count < OBSERVORE_PEER_CENSUS_MAX) {
-            p = &p_tab[p_count++];
-        } else {
-            p = peer_evict(my_day,
-                           popcount16(align_mask(in->days, in->last_day, span)));
-            if (!p) {
-                return OBSERVORE_CENSUS_MERGE_REFUSED;
-            }
-        }
-        memset(p, 0, sizeof(*p));
-        p->id       = in->id;
-        p->last_day = in->last_day;
-        memset(&before, 0, sizeof(before));
-    }
-
     /* Everything is held in the later of the two days, so that one shift rule
      * moves every contributor's mask and the incoming one onto the same bit. */
     int l = (int)p->last_day > (int)in->last_day ? (int)p->last_day
@@ -900,11 +991,55 @@ observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
         p->addr_over = 1;
     }
     peer_canon(p);
-    if (memcmp(&before, p, sizeof(before)) == 0) {
+}
+
+observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
+                                                     const observore_census_entry_t *in)
+{
+    if (!in || node == 0 || in->id == 0 ||
+        my_day < 0 || my_day > OBSERVORE_CENSUS_DAY_MAX ||
+        in->addr_n > OBSERVORE_CENSUS_ADDRS || in->addr_over > 1 ||
+        in->days == 0 || (int)in->last_day > my_day + 1) {
+        return OBSERVORE_CENSUS_MERGE_REFUSED;
+    }
+    /* Days that left the window before this node's day have nothing to add,
+     * and are not worth a place in the table. A friend one day ahead is read
+     * in its own day, so its tomorrow is kept for tomorrow. */
+    int span = my_day > (int)in->last_day ? my_day : (int)in->last_day;
+    if (align_mask(in->days, in->last_day, span) == 0) {
         return OBSERVORE_CENSUS_MERGE_SAME;
     }
-    s_peer_changed = true;
-    return OBSERVORE_CENSUS_MERGE_CHANGED;
+
+    observore_census_merge_t result = OBSERVORE_CENSUS_MERGE_SAME;
+    observore_peer_census_entry_t before = {0};
+    CENSUS_LOCK();
+    observore_peer_census_entry_t *p = find_peer(in->id);
+    if (p) {
+        before = *p;
+    } else {
+        if (p_count < OBSERVORE_PEER_CENSUS_MAX) {
+            p = &p_tab[p_count++];
+        } else {
+            p = peer_evict(my_day,
+                           popcount16(align_mask(in->days, in->last_day, span)));
+        }
+        if (p) {
+            memset(p, 0, sizeof(*p));
+            p->id       = in->id;
+            p->last_day = in->last_day;
+        }
+    }
+    if (!p) {
+        result = OBSERVORE_CENSUS_MERGE_REFUSED;
+    } else {
+        peer_take(p, node, my_day, in);
+        if (memcmp(&before, p, sizeof(before)) != 0) {
+            s_peer_changed = true;
+            result = OBSERVORE_CENSUS_MERGE_CHANGED;
+        }
+    }
+    CENSUS_UNLOCK();
+    return result;
 }
 
 void observore_census_peer_prune(int day)
@@ -912,6 +1047,7 @@ void observore_census_peer_prune(int day)
     if (day < 0 || day > OBSERVORE_CENSUS_DAY_MAX) {
         return;           /* with no day nothing is known to have aged out */
     }
+    CENSUS_LOCK();
     size_t kept = 0;
     for (size_t i = 0; i < p_count; i++) {
         if (peer_days(&p_tab[i], day) > 0) {
@@ -926,43 +1062,52 @@ void observore_census_peer_prune(int day)
         p_count = (uint16_t)kept;
         s_peer_changed = true;
     }
+    CENSUS_UNLOCK();
 }
 
 void observore_census_peer_forget(observore_census_forget_t why)
 {
+    CENSUS_LOCK();
     if (p_count > 0) {
         s_peer_changed = true;
     }
     p_count = 0;
     memset(p_tab, 0, sizeof(p_tab));
     s_peer_forgot = why;
+    CENSUS_UNLOCK();
 }
 
 observore_census_forget_t observore_census_peer_forgot(void)
 {
-    return s_peer_forgot;
+    CENSUS_LOCK();
+    observore_census_forget_t why = s_peer_forgot;
+    CENSUS_UNLOCK();
+    return why;
 }
 
 bool observore_census_peer_take_changed(void)
 {
+    CENSUS_LOCK();
     bool was = s_peer_changed;
     s_peer_changed = false;
+    CENSUS_UNLOCK();
     return was;
 }
 
 size_t observore_census_peer_blob(void *out, size_t cap)
 {
+    CENSUS_LOCK();
     size_t need = sizeof(census_peer_hdr_t) +
                   (size_t)p_count * sizeof(observore_peer_census_entry_t);
-    if (!out || cap < need) {
-        return need;              /* how much room it wants */
+    if (out && cap >= need) {
+        census_peer_hdr_t hdr = s_peer.hdr;
+        hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
+        memcpy(out, &hdr, sizeof(hdr));
+        memcpy((char *)out + sizeof(hdr), p_tab,
+               (size_t)p_count * sizeof(observore_peer_census_entry_t));
     }
-    census_peer_hdr_t hdr = s_peer.hdr;
-    hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
-    memcpy(out, &hdr, sizeof(hdr));
-    memcpy((char *)out + sizeof(hdr), p_tab,
-           (size_t)p_count * sizeof(observore_peer_census_entry_t));
-    return need;
+    CENSUS_UNLOCK();
+    return need;                  /* with no room, how much it wants */
 }
 
 /* Whether two key checks are the same, in time that does not depend on where
@@ -990,57 +1135,69 @@ static void peer_empty(const uint8_t *check)
 bool observore_census_peer_restore(const void *blob, size_t len,
                                    const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN])
 {
-    census_peer_hdr_t hdr;
-    if (!blob || !check || len < sizeof(hdr)) {
-        if (check) {
-            peer_empty(check);
-        }
+    if (!check) {
         return false;
     }
-    memcpy(&hdr, blob, sizeof(hdr));
-    /* The same refusals as the local table's, and one more. Another version, a
-     * count past the table and a length that disagrees with the header are
-     * not a table this code wrote, and a table that is half read is worse than
-     * an empty one, so the peer table is emptied rather than left as it was. */
-    if (hdr.version != OBSERVORE_PEER_CENSUS_FORMAT ||
-        hdr.count > OBSERVORE_PEER_CENSUS_MAX ||
-        len != sizeof(hdr) +
-               (size_t)hdr.count * sizeof(observore_peer_census_entry_t)) {
-        peer_empty(check);
-        return false;
+    census_peer_hdr_t hdr = {0};
+    bool shaped = blob && len >= sizeof(hdr);
+    if (shaped) {
+        memcpy(&hdr, blob, sizeof(hdr));
+        /* The same refusals as the local table's. Another version, a count
+         * past the table and a length that disagrees with the header are not
+         * a table this code wrote, and a table that is half read is worse
+         * than an empty one, so the peer table is emptied rather than left as
+         * it was. */
+        shaped = hdr.version == OBSERVORE_PEER_CENSUS_FORMAT &&
+                 hdr.count <= OBSERVORE_PEER_CENSUS_MAX &&
+                 len == sizeof(hdr) +
+                        (size_t)hdr.count * sizeof(observore_peer_census_entry_t);
     }
     /* A table kept under another household secret is another household's
      * report. It is not read, and the owner is told why it is gone. */
-    if (!check_equal(hdr.check, check)) {
+    bool keyed = shaped && check_equal(hdr.check, check);
+    bool ok = false;
+    CENSUS_LOCK();
+    if (keyed) {
+        const void *src = (const char *)blob + sizeof(hdr);
+        if (src != (const void *)p_tab) {
+            memcpy(p_tab, src,
+                   (size_t)hdr.count * sizeof(observore_peer_census_entry_t));
+        }
+        p_count = hdr.count;
+        s_peer.hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
+        memcpy(s_peer.hdr.check, check, OBSERVORE_PEER_CENSUS_CHECK_LEN);
+        ok = true;
+    } else {
         peer_empty(check);
-        s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_SECRET;
-        s_peer_changed = true;
-        return false;
+        if (shaped) {
+            s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_SECRET;
+            s_peer_changed = true;
+        }
     }
-    const void *src = (const char *)blob + sizeof(hdr);
-    if (src != (const void *)p_tab) {
-        memcpy(p_tab, src,
-               (size_t)hdr.count * sizeof(observore_peer_census_entry_t));
-    }
-    p_count = hdr.count;
-    s_peer.hdr.version = OBSERVORE_PEER_CENSUS_FORMAT;
-    memcpy(s_peer.hdr.check, check, OBSERVORE_PEER_CENSUS_CHECK_LEN);
-    return true;
+    CENSUS_UNLOCK();
+    return ok;
 }
 
 bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN])
 {
-    if (!check || check_equal(s_peer.hdr.check, check)) {
+    if (!check) {
         return false;
     }
-    bool had = p_count > 0;
-    peer_empty(check);
-    if (!had) {
-        return false;         /* nothing was kept under the old secret */
+    bool emptied = false;
+    CENSUS_LOCK();
+    if (!check_equal(s_peer.hdr.check, check)) {
+        /* Nothing was kept under the old secret when the table is empty, so
+         * there is nothing to say about it; the new check is stored either
+         * way. */
+        emptied = p_count > 0;
+        peer_empty(check);
+        if (emptied) {
+            s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_SECRET;
+            s_peer_changed = true;
+        }
     }
-    s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_SECRET;
-    s_peer_changed = true;
-    return true;
+    CENSUS_UNLOCK();
+    return emptied;
 }
 #endif /* CONFIG_OBSERVORE_MESH_CENSUS */
 

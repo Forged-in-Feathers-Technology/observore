@@ -223,6 +223,13 @@ observore_census_verdict_t observore_census_explain(uint32_t id, int day,
  * outcome this is designed to avoid. */
 uint16_t observore_census_dampen(uint16_t points);
 
+/* Lock order. The tracker's lock is taken first and the census lock inside it,
+ * never the other way, because the tracker asks for the verdict with its own
+ * lock held. Nothing under the census lock calls into the tracker or takes the
+ * mute store's lock: the protected-class check reads a constant descriptor.
+ * Readers copy out and never hold the census lock across network I/O.
+ *
+ * Call this before anything else touches the census: it creates the lock. */
 void observore_census_init(void);
 
 /* Record that `id` was seen on `day`, at address `mac` (six bytes, or NULL
@@ -276,9 +283,43 @@ void observore_census_addr_spread(int *one, int *few, int *many);
  * by a person before anything is built on it. */
 int observore_census_household_at_ceiling(int day);
 
-/* The table, for persistence and for the console. Returns the number of
- * entries and points `out` at them. */
-size_t observore_census_entries(const observore_census_entry_t **out);
+/* One identity as the console lists it: a copy, taken under the census lock,
+ * so a reader sees a row that is consistent with itself while the table goes
+ * on changing. Nothing here points into a table.
+ *
+ *   days, household, addrs, more   merged: this node's days and addresses
+ *                                  joined with the owner's other nodes'.
+ *   local_days, household_local    this node's own alone.
+ *   via_mesh                       household, and not household_local: the
+ *                                  owner's other nodes are why.
+ *   here                           false for an identity only the owner's other
+ *                                  nodes have seen.
+ *   last_day                       this node's entry's, or the other nodes'
+ *                                  when `here` is false.
+ *   from                           the nodes whose days count, ascending. */
+typedef struct {
+    uint32_t id;
+    int      days;
+    int      local_days;
+    bool     household;
+    bool     household_local;
+    bool     via_mesh;
+    bool     here;
+    int      addrs;
+    bool     more;
+    uint16_t last_day;
+    uint8_t  from_n;
+    uint16_t from[OBSERVORE_CENSUS_FROM];
+} observore_census_row_t;
+
+/* How many rows there are: this node's own entries, then, with the exchange,
+ * the identities only the owner's other nodes have seen. */
+size_t observore_census_row_count(void);
+
+/* Fill row `i` as of `day`. Returns false past the end. This node's own
+ * entries come first in table order, then the others' in theirs. The table can
+ * change between calls; each row is whole. */
+bool observore_census_row(size_t i, int day, observore_census_row_t *out);
 
 /* Whether the table is full.
  *

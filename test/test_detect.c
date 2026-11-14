@@ -869,9 +869,7 @@ static void test_the_census_earns_membership_over_days(void)
     /* Persistence. The table is readable for saving, and the blob carries a
      * header saying which code wrote it -- see the address test for why a
      * bare array of entries is no longer enough. */
-    const observore_census_entry_t *tab = NULL;
-    size_t n = observore_census_entries(&tab);
-    CHECK(n == 2 && tab != NULL, "the table is readable for saving");
+    CHECK(observore_census_row_count() == 2, "the table is readable for saving");
     static uint8_t saved[2048];
     size_t len = observore_census_blob(saved, sizeof(saved));
 
@@ -1792,6 +1790,91 @@ static void test_without_the_exchange_the_census_is_local(void)
     observore_census_init();
 }
 #endif
+
+/* The console reads the census while the main task writes it. What it gets is
+ * a copy of one row, taken under the lock, and never a pointer into the table:
+ * a row stays what it was when it was taken, whatever the table does next. */
+static void test_census_rows_are_copies(void)
+{
+    banner("census rows are copies taken under the lock");
+
+    observore_census_init();
+    CHECK(observore_census_row_count() == 0, "an empty census has no rows");
+    observore_census_row_t r;
+    CHECK(!observore_census_row(0, 9002, &r), "and no row 0");
+
+    const uint32_t furniture = 0xC0001, visitor = 0xC0002;
+    uint8_t m1[6] = {0x02, 0, 0, 0, 0, 0x71};
+    uint8_t m2[6] = {0x02, 0, 0, 0, 0, 0x72};
+    for (int d = 9000; d <= 9002; d++) {
+        observore_census_note(furniture, d, m1);
+        observore_census_note(furniture, d, m2);
+    }
+    observore_census_note(visitor, 9002, m1);
+    CHECK(observore_census_row_count() == 2, "two entries make two rows");
+
+    CHECK(observore_census_row(0, 9002, &r), "the first row is there");
+    bool over = true;
+    CHECK(r.id == furniture, "in table order");
+    CHECK(r.days == observore_census_days_seen(furniture, 9002) && r.days == 3,
+          "it carries the days seen, got %d", r.days);
+    CHECK(r.household == observore_census_is_household(furniture, 9002) &&
+              r.household && r.household_local && !r.via_mesh && r.here,
+          "and whether it is household, on this node's own days");
+    CHECK(r.addrs == observore_census_addresses(furniture, &over) &&
+              r.addrs == 2 && r.more == over && !r.more,
+          "and the addresses");
+    CHECK(r.last_day == 9002 && r.from_n == 0, "and the last day, naming nobody");
+    CHECK(observore_census_row(1, 9002, &r) && r.id == visitor &&
+              r.days == 1 && !r.household && r.addrs == 1,
+          "the second row is the visitor, seen once");
+    CHECK(!observore_census_row(2, 9002, &r), "and there is no third");
+    CHECK(!observore_census_row(0, 9002, NULL), "a row with nowhere to go is not written");
+
+    /* A copy stays what it was. */
+    observore_census_row_t copy;
+    CHECK(observore_census_row(1, 9002, &copy), "a row is taken");
+    observore_census_note(visitor, 9003, m1);
+    observore_census_note(visitor, 9004, m2);
+    CHECK(copy.days == 1 && copy.addrs == 1 && copy.last_day == 9002,
+          "the copy taken does not move when the table does");
+    CHECK(observore_census_row(1, 9004, &r) && r.days == 3 && r.addrs == 2,
+          "while a row taken now has the news");
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    /* A friend makes this node's own sighting household. */
+    observore_census_init();
+    observore_census_note(visitor, 9002, m1);
+    observore_census_entry_t e = friend_entry(visitor, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "a friend is taken");
+    CHECK(observore_census_row_count() == 1, "an identity both know is one row");
+    CHECK(observore_census_row(0, 9002, &r) && r.id == visitor,
+          "it is the visitor's row");
+    CHECK(r.household && !r.household_local && r.via_mesh && r.here,
+          "household because of the friend, and here as well");
+    CHECK(r.days == 3 && r.local_days == 1 && r.addrs == 2,
+          "three days between them, one of them this node's: got %d %d %d",
+          r.days, r.local_days, r.addrs);
+    CHECK(r.from_n == 1 && r.from[0] == 0x3A7F, "naming the friend");
+
+    /* An identity only the friend has seen, listed after this node's own. */
+    const uint32_t stranger = 0xC0003;
+    e = friend_entry(stranger, 0x0007, 9002, 0x4321);
+    CHECK(observore_census_peer_merge(0x91C2, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "a friend's own identity is taken");
+    CHECK(observore_census_row_count() == 2, "and makes a second row");
+    CHECK(observore_census_row(1, 9002, &r) && r.id == stranger,
+          "after this node's own");
+    CHECK(!r.here && r.household && !r.household_local && r.via_mesh &&
+              r.local_days == 0 && r.days == 3 && r.addrs == 1 &&
+              r.last_day == 9002 && r.from_n == 1 && r.from[0] == 0x91C2,
+          "household through the friend alone, and not seen here");
+    CHECK(!observore_census_row(2, 9002, &r), "and there is no third");
+#endif
+
+    observore_census_init();
+}
 
 /* Which answer about the time the device believes.
  *
@@ -9515,6 +9598,7 @@ int main(void)
     test_the_font_icons_are_not_boxes();
     test_a_field_found_across_the_pieces();
     test_the_census_counts_addresses_not_just_days();
+    test_census_rows_are_copies();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();
