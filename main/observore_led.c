@@ -154,13 +154,15 @@ static void led_task(void *arg)
 
         /* A census window is the one time this node transmits, so a headless
          * board says so with a rhythm none of the levels uses: two winks close
-         * together and then a long dark, once a second. It replaces the level's
-         * rhythm for at most thirty seconds, the same precedent as the
-         * console's solid light, which replaces it for as long as the console
-         * is up; boards with a screen keep the level in the band throughout.
-         * The off-phase is sliced so the end of the window, or the console
-         * coming up, is seen within 200 ms. */
-        if (s_census) {
+         * together and then a long dark, once a second. Only while the level
+         * is clear, though. A caution or an alert keeps its own rhythm and
+         * colour through the window: the LED is how a headless board says
+         * something is watching, and announcing a transmission must never be
+         * what hides that, even for thirty seconds. The window is still in the
+         * log, the console and the card. The off-phase is sliced so the end of
+         * the window, a change of level or the console coming up is seen
+         * within 200 ms. */
+        if (s_census && s_level == OBSERVORE_LEVEL_CLEAR) {
             backend_show(true, s_level, false, true);
             vTaskDelay(pdMS_TO_TICKS(60));
             backend_show(false, s_level, false, true);
@@ -169,7 +171,8 @@ static void led_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(60));
             backend_show(false, s_level, false, true);
             uint32_t dark = 0;
-            while (dark < 740 && s_census && !s_console) {
+            while (dark < 740 && s_census && !s_console &&
+                   s_level == OBSERVORE_LEVEL_CLEAR) {
                 uint32_t slice = (740 - dark > 200) ? 200 : (740 - dark);
                 vTaskDelay(pdMS_TO_TICKS(slice));
                 dark += slice;
@@ -189,7 +192,8 @@ static void led_task(void *arg)
          * a couple of hundred milliseconds rather than at the end of a
          * five-second clear-state gap. */
         uint32_t slept = 0;
-        while (slept < off_ms && s_level == level && !s_console && !s_census) {
+        while (slept < off_ms && s_level == level && !s_console &&
+               !(s_census && level == OBSERVORE_LEVEL_CLEAR)) {
             uint32_t slice = (off_ms - slept > 200) ? 200 : (off_ms - slept);
             vTaskDelay(pdMS_TO_TICKS(slice));
             slept += slice;

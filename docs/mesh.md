@@ -496,7 +496,7 @@ switched off.
 
 While the window runs the node says so where a person at the device can see it:
 the coloured band on a screen reads the countdown beside the level and the
-score, a headless board's LED gives a double wink once a second (cyan on a pixel), and the log says it; a board with no LED has the console and the log. The
+score, a headless board's LED gives a double wink once a second (cyan on a pixel) while the level is clear, and the log says it; a caution or an alert keeps its own rhythm through the window, because announcing a transmission must never hide a threat; a board with no LED has the console and the log. The
 console shows the scheduled window beforehand and the result afterwards, never
 during it. Each window leaves one row on the card where there is one, and the
 last window's result is in the console's history.
