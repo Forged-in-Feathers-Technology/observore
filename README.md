@@ -191,8 +191,9 @@ Those are the exceptions, and each is off in every default build. The warning
 bursts are one; see [Warning the neighbours](docs/mesh.md#warning-the-neighbours)
 for what they cost and how a build without them cannot send at all. The census
 window is the other: it is compiled only into ESP32-S3, C5 and C6 builds that ask
-for it, it is off at first boot even then, and it lasts at most 30 seconds a
-day, while the screen, the LED and the log say so. It is described in [Sharing
+for it, it is off at first boot even then, and each window lasts at most 30
+seconds: one a day at the owner's time, and one by hand no sooner than five
+minutes after the last, while the screen, the LED and the log say so. It is described in [Sharing
 the household census](docs/mesh.md#sharing-the-household-census). Listen-only
 mode hears the owner's other nodes and emits nothing.
 
