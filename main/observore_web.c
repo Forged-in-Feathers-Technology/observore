@@ -1256,8 +1256,10 @@ static esp_err_t census_handler(httpd_req_t *req)
         observore_clock_source_name(observore_clock_source()));
     observore_jb_escape(&jb, observore_tz_get());
     observore_jb_printf(&jb,
-        "\",\"peer_entries\":%u,\"peer_max\":%u,\"forgot\":\"%s\",\"last\":",
-        cx.peer_entries, cx.peer_max, FORGOT[cx.forgot < 4 ? cx.forgot : 0]);
+        "\",\"peer_entries\":%u,\"peer_max\":%u,\"forgot\":\"%s\""
+        ",\"low_mem\":%u,\"min_heap\":%u,\"last\":",
+        cx.peer_entries, cx.peer_max, FORGOT[cx.forgot < 4 ? cx.forgot : 0],
+        (unsigned)cx.low_mem, (unsigned)OBSERVORE_ESPNOW_MIN_HEAP);
     if (!cx.have_last) {
         observore_jb_printf(&jb, "null");
     } else {

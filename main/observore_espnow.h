@@ -44,6 +44,10 @@ void observore_espnow_init(void);
 #define OBSERVORE_ESPNOW_FRIENDS  8
 #define OBSERVORE_ESPNOW_TEXT_LEN 224
 
+/* The largest free block of internal memory a window needs to open; with less
+ * it is skipped. Why this much is beside its use in observore_espnow.c. */
+#define OBSERVORE_ESPNOW_MIN_HEAP 8192
+
 /* What the console shows of the exchange, copied out under the exchange's lock
  * so a reader on the HTTP task sees a state that agrees with itself.
  *
@@ -58,7 +62,8 @@ void observore_espnow_init(void);
  *   next_s        seconds until the next scheduled window, 0 inside its grace and
  *                 -1 when there will be none.
  *   blocked       why there will be none: "" when a window will come, otherwise
- *                 "off", "no household secret" or "no clock".
+ *                 "off", "no household secret", "no clock", or "no memory at
+ *                 boot" when the exchange's state could not be allocated.
  *   peer_entries, peer_max
  *                 identities held from the owner's other nodes, and the table's
  *                 size.
@@ -70,7 +75,13 @@ void observore_espnow_init(void);
  *                 window cut short, last_secs how long it ran, last_left the
  *                 observore_mode_t the node was in before the window took it to
  *                 patrol, and last_closed_us the monotonic time it closed.
- *   last_text     the same result as one line, counts and node ids only. */
+ *   last_text     the same result as one line, counts and node ids only.
+ *   low_mem       the largest free internal block the last window found when it
+ *                 was skipped for memory, against OBSERVORE_ESPNOW_MIN_HEAP; 0
+ *                 when the last window to try did open. A board can be built
+ *                 with the exchange and still never have the memory for it,
+ *                 and without this the console would only ever say a window
+ *                 is coming. */
 typedef struct observore_espnow_status_t {
     bool     available;
     bool     secret;
@@ -91,6 +102,7 @@ typedef struct observore_espnow_status_t {
     uint8_t  last_friends;
     uint16_t last_friend[OBSERVORE_ESPNOW_FRIENDS];
     uint16_t last_merged, last_bad_tag, last_day_skew, last_malformed, last_foreign;
+    uint16_t low_mem;            /* in the padding before the int64_t: no growth */
     int64_t  last_closed_us;
     char     last_text[OBSERVORE_ESPNOW_TEXT_LEN];
 } observore_espnow_status_t;

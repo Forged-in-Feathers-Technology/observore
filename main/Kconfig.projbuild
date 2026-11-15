@@ -245,15 +245,15 @@ config OBSERVORE_PEER_CENSUS_MAX
         reported can hold. It is a table of its own, so it can never cost this
         node an identity it learned itself.
 
-        Each entry is 36 bytes of internal RAM, about 2.3 KB at 64, 1.1 KB at
-        30 and 0.8 KB at 21. The C5 and C6 boards run with the smallest
-        internal heap (see docs/memory.md), which is why they default to 30
-        without a screen and 21 with one: with the exchange compiled in,
-        everything it adds there (this table, the receive queue and the rest
-        of its state, and on a board with a screen the system page's own
-        status line) stays under 3 KB of static RAM, counted as .bss plus
-        .data because the table starts with a non-zero header word and so
-        lands in .data.
+        Each entry is 36 bytes, about 2.3 KB at 64, 1.1 KB at 30 and 0.8 KB
+        at 21. On ESP32-S3 builds the table is allocated from PSRAM at boot,
+        so its size costs no internal RAM there. On C5 and C6 it is static
+        internal RAM, and those boards run with the smallest internal heap
+        (see docs/memory.md), which is why they default to 30 without a
+        screen and 21 with one: with the exchange compiled in, everything it
+        adds there (this table, the receive queue and the rest of its state,
+        and on a board with a screen the system page's own status line) stays
+        under 3 KB of static RAM, counted as .bss plus .data.
 
 endif
 

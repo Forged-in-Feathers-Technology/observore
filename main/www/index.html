@@ -922,6 +922,13 @@ function renderExchange(c) {
   if (x.forgot) {
     line += ' · emptied ' + (why[x.forgot] || x.forgot);
   }
+  // A window needs one free block this large, and some boards with a screen
+  // never have it: the window is skipped, scanning carries on, and this is the
+  // only place the owner would learn why nothing was ever exchanged.
+  if (x.low_mem) {
+    line += ' · the last window was skipped: not enough free memory (' + x.low_mem +
+      ' of ' + x.min_heap + ' bytes in one block)';
+  }
   $('cxstatus').textContent = line;
 
   const mode = $('cxmode');

@@ -40,7 +40,7 @@ static const char *TAG = "observore.espnow";
  * heap whose floor has been measured in hundreds of bytes during a TLS session,
  * so a window that opened into that would take memory the notifier needs. Below
  * this the window is skipped and says so, never silently. */
-#define OBSERVORE_CX_MIN_HEAP 8192
+#define OBSERVORE_CX_MIN_HEAP OBSERVORE_ESPNOW_MIN_HEAP
 
 /* Frames the receive callback may hold for the main task. Eight is more than
  * one friend's whole census (eight chunks arrive in a burst) and few enough that
@@ -138,10 +138,43 @@ static cx_settings_t s_set = {
 };
 static bool s_manual;                        /* set when the owner asks for a window now */
 
+/* The working set, with the heard set and the last result beside it. Static
+ * where the tables are static; on an S3 with PSRAM (OBSERVORE_CX_STATE_IN_PSRAM)
+ * one block taken at init, preferring PSRAM, and never freed, so the same names
+ * reach the same fields either way. Nothing here is touched from an interrupt:
+ * the receive callback runs in the Wi-Fi task and copies into its own local. */
+#if OBSERVORE_CX_STATE_IN_PSRAM
+typedef struct {
+    mbedtls_ccm_context   ccm;
+    uint8_t               frame[OBSERVORE_CX_FRAME_MAX];
+    uint8_t               pt[OBSERVORE_CX_ENTRY_LEN * OBSERVORE_CX_ENTRIES_MAX];
+    cx_item_t             item;
+    observore_cx_heard_t  heard;
+    observore_cx_result_t result;
+} cx_work_t;
+static cx_work_t *s_work;
+#define s_ccm    (s_work->ccm)
+#define s_frame  (s_work->frame)
+#define s_pt     (s_work->pt)
+#define s_item   (s_work->item)
+#define s_heard  (s_work->heard)
+#define s_result (s_work->result)
+
+/* Per window: the receive queue and the send list, from PSRAM, so a window's
+ * internal cost is what ESP-NOW itself takes. */
+#define CX_WINDOW_CAPS         (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define cx_queue_create(n, sz) xQueueCreateWithCaps((n), (sz), CX_WINDOW_CAPS)
+#define cx_queue_delete(q)     vQueueDeleteWithCaps(q)
+#else
 static mbedtls_ccm_context s_ccm;
 static uint8_t             s_frame[OBSERVORE_CX_FRAME_MAX];
 static uint8_t             s_pt[OBSERVORE_CX_ENTRY_LEN * OBSERVORE_CX_ENTRIES_MAX];
 static cx_item_t           s_item;
+
+#define CX_WINDOW_CAPS         OBSERVORE_HEAP_CAPS
+#define cx_queue_create(n, sz) xQueueCreate((n), (sz))
+#define cx_queue_delete(q)     vQueueDelete(q)
+#endif
 
 /* Taken at open and given back at close. The receive callback reads s_rxq once
  * into a local and returns if it is NULL, so a frame that arrives after close
@@ -151,8 +184,10 @@ static SemaphoreHandle_t      s_txdone;
 
 static observore_census_entry_t *s_send;     /* this node's census as of the window's day */
 static size_t                    s_send_n;
+#if !OBSERVORE_CX_STATE_IN_PSRAM
 static observore_cx_heard_t      s_heard;
 static observore_cx_result_t     s_result;
+#endif
 
 /* Written by the receive callback alone and read only after ESP-NOW has been
  * deinitialised, when no callback can still be running. */
@@ -160,6 +195,7 @@ static volatile uint16_t s_rx_odd;           /* shorter than a header, or longer
 static volatile uint16_t s_rx_full;          /* the queue was full */
 
 static observore_cx_decision_t s_last_skip = OBSERVORE_CX_WAIT;
+static uint16_t               s_low_mem;     /* largest block at the last memory skip */
 
 #define CX_LOCK()   xSemaphoreTake(s_cx_lock, portMAX_DELAY)
 #define CX_UNLOCK() xSemaphoreGive(s_cx_lock)
@@ -267,6 +303,20 @@ static void settings_save(void)
 
 void observore_espnow_init(void)
 {
+    /* With no lock every entry point below returns at once, which is how the
+     * exchange stays off when its state could not be had. */
+    if (!observore_census_peer_ready()) {
+        return;
+    }
+#if OBSERVORE_CX_STATE_IN_PSRAM
+    s_work = heap_caps_calloc_prefer(1, sizeof(*s_work), 2,
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                     OBSERVORE_HEAP_CAPS);
+    if (!s_work) {
+        ESP_LOGE(TAG, "no memory for the census exchange: it is off");
+        return;
+    }
+#endif
     s_cx_lock = xSemaphoreCreateMutex();
     mbedtls_ccm_init(&s_ccm);
     settings_load();
@@ -375,10 +425,12 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
 
     size_t largest = heap_caps_get_largest_free_block(OBSERVORE_HEAP_CAPS);
     if (largest < OBSERVORE_CX_MIN_HEAP) {
-        ESP_LOGW(TAG, "census window skipped: low memory (largest free block %u bytes)",
-                 (unsigned)largest);
+        ESP_LOGW(TAG, "census window skipped: low memory (largest free block %u of "
+                      "%u bytes needed)", (unsigned)largest, (unsigned)OBSERVORE_CX_MIN_HEAP);
+        s_low_mem = (uint16_t)(largest ? largest : 1);
         goto refused;
     }
+    s_low_mem = 0;
 
     {
         uint8_t key[16];
@@ -424,9 +476,9 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
         goto failed;
     }
 
-    s_rxq = xQueueCreate(OBSERVORE_CX_RXQ_LEN, sizeof(cx_item_t));
+    s_rxq = cx_queue_create(OBSERVORE_CX_RXQ_LEN, sizeof(cx_item_t));
     s_txdone = xSemaphoreCreateBinary();
-    s_send = heap_caps_malloc(sizeof(*s_send) * OBSERVORE_CENSUS_MAX, OBSERVORE_HEAP_CAPS);
+    s_send = heap_caps_malloc(sizeof(*s_send) * OBSERVORE_CENSUS_MAX, CX_WINDOW_CAPS);
     queued = true;
     if (!s_rxq || !s_txdone || !s_send) {
         why = "no memory for the receive queue";
@@ -496,7 +548,7 @@ failed:
         QueueHandle_t q = s_rxq;
         s_rxq = NULL;
         if (q) {
-            vQueueDelete(q);
+            cx_queue_delete(q);
         }
         if (s_txdone) {
             vSemaphoreDelete(s_txdone);
@@ -694,7 +746,7 @@ void observore_espnow_close(int64_t now_us, bool interrupted)
     QueueHandle_t q = s_rxq;
     s_rxq = NULL;
     if (q) {
-        vQueueDelete(q);
+        cx_queue_delete(q);
     }
     if (s_txdone) {
         vSemaphoreDelete(s_txdone);
@@ -805,6 +857,7 @@ void observore_espnow_status(int64_t now_us, observore_espnow_status_t *out)
     out->blocked   = "";
     out->next_s    = -1;
     if (!s_cx_lock) {
+        out->blocked = "no memory at boot";
         return;
     }
 
@@ -815,6 +868,7 @@ void observore_espnow_status(int64_t now_us, observore_espnow_status_t *out)
     out->mode   = s_set.mode;
     out->at_min = s_set.at_min;
     out->channel = s_set.channel;
+    out->low_mem = s_low_mem;
     r = s_result;
     CX_UNLOCK();
 
@@ -956,6 +1010,9 @@ const char *observore_espnow_request_now(int64_t now_us)
 
 const char *observore_espnow_forget(void)
 {
+    if (!s_cx_lock) {
+        return "the census exchange is not available";
+    }
     observore_census_peer_forget(OBSERVORE_CENSUS_FORGOT_OWNER);
     observore_census_peer_save();
     ESP_LOGI(TAG, "peer census forgotten by the owner; this node's own census is kept");
@@ -968,6 +1025,9 @@ const char *observore_espnow_forget(void)
  * why it is no longer believed. */
 void observore_espnow_secret_changed(void)
 {
+    if (!s_cx_lock) {
+        return;
+    }
     uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {0};
     if (observore_meshkey_derive(OBSERVORE_CX_CHECK_LABEL, check, sizeof(check))) {
         observore_census_peer_rekey(check);

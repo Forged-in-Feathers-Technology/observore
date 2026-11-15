@@ -481,6 +481,14 @@ and returns afterwards; the console cannot be reached during it, and says
 afterwards that it was away and for how long. With no clock there is no window,
 the rule the census already follows for days.
 
+A window needs one free block of 8 KB of internal memory when it opens. With
+less, the node skips it, carries on scanning, and the console's exchange panel
+says the last window was skipped and how much memory was free. Some boards with
+a screen never have that much: the Waveshare ESP32-S3 1.85" runs with under
+2 KB free in one block even without the exchange, so it can be built with the
+exchange and still never take part. Pair it with a headless node for listening
+and exchanging, or leave the exchange out of its build.
+
 For setup there is "exchange now". Pressing it on two nodes within about 20
 seconds of each other pairs them. A hand-opened window cannot follow another
 within five minutes, so a person or a script on the network cannot keep patrol
@@ -551,7 +559,10 @@ Two settings: `cxsettings` holds the mode, the time and the channel, and
 `peercensus` holds what friends reported. The peer table holds 64 identities on
 ESP32-S3 builds, 30 on C5 and C6 boards without a screen and 21 on those with
 one, 36 bytes each, and is written at most once
-a window and only when it changed. It is encrypted at rest on these chips. It is
+a window and only when it changed. On ESP32-S3 builds the table and the
+window's working buffers live in PSRAM, so the exchange takes almost none of
+the internal memory that Wi-Fi, BLE and the console share; on C5 and C6 they
+are fixed in internal RAM, inside a budget checked at build time. It is encrypted at rest on these chips. It is
 a table of its own, so it can never push out an identity this node learned
 itself.
 

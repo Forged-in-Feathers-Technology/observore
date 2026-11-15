@@ -409,6 +409,22 @@ _Static_assert(sizeof(observore_peer_census_entry_t) == 36,
 _Static_assert(OBSERVORE_PEER_CENSUS_MAX >= 16 && OBSERVORE_PEER_CENSUS_MAX <= 64,
                "the peer table is sized between 16 and 64 identities");
 
+/* Where the exchange keeps its state.
+ *
+ * On an ESP32-S3 with PSRAM the peer table and the exchange's working set are
+ * taken from the heap once, at init, preferring PSRAM. A static table sits in
+ * internal DRAM, and on a screen board that is the memory a window needs: the
+ * Waveshare 1.85" runs with under 2 KB of internal heap free before the
+ * exchange is built in at all, and the 2.3 KB table at 64 identities came out
+ * of that. Everywhere else the tables stay static, where their cost is fixed
+ * and measured at build time against the C5 and C6 budget. */
+#if !defined(OBSERVORE_HOST_TEST) && defined(CONFIG_IDF_TARGET_ESP32S3) && \
+    defined(CONFIG_SPIRAM) && CONFIG_OBSERVORE_MESH_CENSUS
+#define OBSERVORE_CX_STATE_IN_PSRAM 1
+#else
+#define OBSERVORE_CX_STATE_IN_PSRAM 0
+#endif
+
 typedef enum {
     OBSERVORE_CENSUS_MERGE_SAME = 0,   /* nothing changed */
     OBSERVORE_CENSUS_MERGE_CHANGED,    /* the stored entry's bytes changed */
@@ -437,6 +453,12 @@ observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
 
 /* How many identities are held from the owner's other nodes. */
 size_t observore_census_peer_count(void);
+
+/* Whether the peer table exists. It always does where it is static; where it
+ * is allocated at init (OBSERVORE_CX_STATE_IN_PSRAM) it is absent only if that
+ * allocation failed, and then the exchange stays off and the census reads as
+ * though no other node had reported anything. */
+bool observore_census_peer_ready(void);
 
 /* Why the peer table last emptied. */
 typedef enum {

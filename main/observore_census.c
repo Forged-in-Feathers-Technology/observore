@@ -43,6 +43,7 @@ static SemaphoreHandle_t s_lock;
 static void census_save(void) {}
 static void census_load(void) {}
 #else
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "observore_nvs.h"
 static const char *TAG = "observore.census";
@@ -97,10 +98,23 @@ typedef struct {
 _Static_assert(sizeof(census_peer_hdr_t) == 8,
                "the peer blob header is eight bytes, so its entries stay four-aligned");
 
-static struct {
+typedef struct {
     census_peer_hdr_t             hdr;
     observore_peer_census_entry_t e[OBSERVORE_PEER_CENSUS_MAX];
-} s_peer = {.hdr = {.version = OBSERVORE_PEER_CENSUS_FORMAT}};
+} census_peer_store_t;
+
+/* Zero-initialised, with no version in the header until something writes it:
+ * every path that writes the table or its blob sets the version first, and
+ * restore reads the version from the blob, never from here. A non-zero
+ * initialiser would put the whole table in .data. */
+#if OBSERVORE_CX_STATE_IN_PSRAM
+static census_peer_store_t *s_peer_p;
+#define s_peer     (*s_peer_p)
+#define PEER_READY (s_peer_p != NULL)
+#else
+static census_peer_store_t s_peer;
+#define PEER_READY true
+#endif
 
 #define p_tab   (s_peer.e)
 #define p_count (s_peer.hdr.count)
@@ -195,9 +209,24 @@ void observore_census_init(void)
     s_count = 0;
     memset(s_tab, 0, sizeof(s_tab));
 #if CONFIG_OBSERVORE_MESH_CENSUS
-    p_count = 0;
-    memset(p_tab, 0, sizeof(p_tab));
-    memset(s_peer.hdr.check, 0, sizeof(s_peer.hdr.check));
+#if OBSERVORE_CX_STATE_IN_PSRAM
+    if (!s_peer_p) {
+        /* Once, for the life of the device: it is never freed. Internal RAM is
+         * the fallback rather than nothing, and nothing is survivable -- the
+         * exchange stays off and every reader below sees an empty table. */
+        s_peer_p = heap_caps_calloc_prefer(1, sizeof(*s_peer_p), 2,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!s_peer_p) {
+            ESP_LOGE(TAG, "no memory for the peer census: the census exchange is off");
+        }
+    }
+#endif
+    if (PEER_READY) {
+        p_count = 0;
+        memset(p_tab, 0, sizeof(p_tab));
+        memset(s_peer.hdr.check, 0, sizeof(s_peer.hdr.check));
+    }
     s_peer_forgot  = OBSERVORE_CENSUS_FORGOT_NONE;
     s_peer_changed = false;
 #endif
@@ -481,6 +510,9 @@ bool observore_census_is_household(uint32_t id, int day)
 #if CONFIG_OBSERVORE_MESH_CENSUS
 static observore_peer_census_entry_t *find_peer(uint32_t id)
 {
+    if (!PEER_READY) {
+        return NULL;
+    }
     for (size_t i = 0; i < p_count; i++) {
         if (p_tab[i].id == id) {
             return &p_tab[i];
@@ -734,7 +766,7 @@ bool observore_census_row(size_t i, int day, observore_census_row_t *out)
 #if CONFIG_OBSERVORE_MESH_CENSUS
     else {
         size_t skip = i - s_count;
-        for (size_t k = 0; k < p_count && !ok; k++) {
+        for (size_t k = 0; PEER_READY && k < p_count && !ok; k++) {
             if (find(p_tab[k].id)) {
                 continue;
             }
@@ -862,10 +894,18 @@ size_t observore_census_quiet_text(int quieted, int quieted_mesh, char *buf,
 #if CONFIG_OBSERVORE_MESH_CENSUS
 size_t observore_census_peer_count(void)
 {
+    if (!PEER_READY) {
+        return 0;
+    }
     CENSUS_LOCK();
     size_t n = p_count;
     CENSUS_UNLOCK();
     return n;
+}
+
+bool observore_census_peer_ready(void)
+{
+    return PEER_READY;
 }
 
 /* How many distinct days the owner's other nodes between them have on an
