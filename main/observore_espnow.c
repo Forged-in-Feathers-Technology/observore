@@ -534,9 +534,14 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
     s_opened_us     = now_us;
     s_next_round_us = now_us + (int64_t)OBSERVORE_CX_FIRST_ROUND_MS * 1000;
     s_open          = true;
-    ESP_LOGI(TAG, "census window open: %s on channel %u for up to %ds (%u entries to share)",
+    /* The stack figure is the task's lowest point since boot, so on its own the
+     * one logged at close cannot say what the window cost. Read here as well,
+     * before any round, the two together can. */
+    ESP_LOGI(TAG, "census window open: %s on channel %u for up to %ds (%u entries to share, "
+                  "main task stack %u bytes unused)",
              s_sharing ? "share" : "listen", (unsigned)s_set.channel,
-             OBSERVORE_CX_WINDOW_MAX_S, (unsigned)s_send_n);
+             OBSERVORE_CX_WINDOW_MAX_S, (unsigned)s_send_n,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
     observore_led_set_census(true);
     CX_UNLOCK();
     return true;
