@@ -430,7 +430,16 @@ static void handle_rpc(const uint8_t *body, size_t len)
 
     switch (command) {
         case CMD_WIFI_SETTINGS:
+#if CONFIG_OBSERVORE_MESH_CENSUS
+            /* The join switches the radio by itself, outside the main loop's
+             * mode lock, so no census window may open between the wait for
+             * one to close and the end of the join. */
+            observore_espnow_hold(true);
+#endif
             handle_wifi_settings(data, dlen);
+#if CONFIG_OBSERVORE_MESH_CENSUS
+            observore_espnow_hold(false);
+#endif
             break;
         case CMD_GET_STATE:
             send_state(provisioned() ? STATE_PROVISIONED : STATE_READY);

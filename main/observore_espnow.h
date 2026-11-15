@@ -181,6 +181,14 @@ void observore_espnow_close(int64_t now_us, bool interrupted);
 /* Whether a window is open. Safe from any task. */
 bool observore_espnow_is_open(void);
 
+/* Keep windows from opening while another task owns the radio, as Improv does
+ * for the length of a provisioning join. Taken under the exchange lock and
+ * checked there by both the decision and the open, so once hold(true) has
+ * returned either a window was already open (and is_open() says so) or none
+ * will open until hold(false). A scheduled window held off is not marked as
+ * run; it opens if the hold ends inside its grace. */
+void observore_espnow_hold(bool hold);
+
 /* Whether the next scheduled window opens within `lead_s` seconds, so the
  * caller can keep a long network visit from straddling it. False when there
  * will be none: off, no secret or no clock. */

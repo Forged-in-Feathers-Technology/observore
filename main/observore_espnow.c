@@ -137,6 +137,7 @@ static cx_settings_t s_set = {
     .last_day = OBSERVORE_CX_NO_DAY,
 };
 static bool s_manual;                        /* set when the owner asks for a window now */
+static bool s_hold;                          /* another task owns the radio: no window */
 
 /* The working set, with the heard set and the last result beside it. Static
  * where the tables are static; on an S3 with PSRAM (OBSERVORE_CX_STATE_IN_PSRAM)
@@ -367,6 +368,10 @@ bool observore_espnow_should_open(int64_t now_us)
     observore_cx_when_t w;
     bool save = false;
     CX_LOCK();
+    if (s_hold) {
+        CX_UNLOCK();
+        return false;
+    }
     fill_when(&w, now_us);
     w.manual = s_manual;
     observore_cx_decision_t d = observore_cx_decide(&w);
@@ -416,6 +421,11 @@ bool observore_espnow_open(int64_t now_us, uint8_t left_mode)
     if (s_open) {
         CX_UNLOCK();
         return true;
+    }
+    if (s_hold) {
+        CX_UNLOCK();
+        ESP_LOGI(TAG, "census window held off: another task has the radio");
+        return false;
     }
 
     /* Each step that has been done, so a failure undoes exactly those. */
@@ -797,6 +807,16 @@ void observore_espnow_close(int64_t now_us, bool interrupted)
     observore_sdlog_census(text, now_us);
     ESP_LOGI(TAG, "main task stack: %u bytes unused after the census window",
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    CX_UNLOCK();
+}
+
+void observore_espnow_hold(bool hold)
+{
+    if (!s_cx_lock) {
+        return;
+    }
+    CX_LOCK();
+    s_hold = hold;
     CX_UNLOCK();
 }
 
