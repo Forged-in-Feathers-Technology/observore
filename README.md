@@ -193,7 +193,8 @@ for what they cost and how a build without them cannot send at all. The census
 window is the other: it is compiled only into ESP32-S3, C5 and C6 builds that ask
 for it, it is off at first boot even then, and each window lasts at most 30
 seconds: one a day at the owner's time, and one by hand no sooner than five
-minutes after the last, while the screen, the LED and the log say so. It is described in [Sharing
+minutes after the last, while the screen and the log say so, and the LED does
+too unless it is showing a caution or an alert. It is described in [Sharing
 the household census](docs/mesh.md#sharing-the-household-census). Listen-only
 mode hears the owner's other nodes and emits nothing.
 
