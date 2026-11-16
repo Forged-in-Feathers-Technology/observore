@@ -22,6 +22,7 @@
 #include "observore_battery.h"
 #include "observore_rtc.h"
 #include "observore_census.h"
+#include "observore_census_wire.h"
 #include "observore_httpscert.h"
 #include "observore_watchcfg.h"
 #include "observore_tz.h"
@@ -63,6 +64,19 @@ static int g_checks;
 static void banner(const char *name)
 {
     printf("== %s\n", name);
+}
+
+/* How many rows the console would list: the firmware reads the census one row
+ * at a time, so the suite counts the same way rather than through a helper
+ * nothing on the device calls. */
+static size_t census_rows_listed(void)
+{
+    observore_census_row_t r;
+    size_t n = 0;
+    while (observore_census_row(n, 9002, &r)) {
+        n++;
+    }
+    return n;
 }
 
 /* ---------------------------------------------------------------- */
@@ -869,9 +883,7 @@ static void test_the_census_earns_membership_over_days(void)
     /* Persistence. The table is readable for saving, and the blob carries a
      * header saying which code wrote it -- see the address test for why a
      * bare array of entries is no longer enough. */
-    const observore_census_entry_t *tab = NULL;
-    size_t n = observore_census_entries(&tab);
-    CHECK(n == 2 && tab != NULL, "the table is readable for saving");
+    CHECK(census_rows_listed() == 2, "the table is readable for saving");
     static uint8_t saved[2048];
     size_t len = observore_census_blob(saved, sizeof(saved));
 
@@ -1076,6 +1088,805 @@ static void test_the_census_acts_carefully(void)
           "a dampened device is still in the findings");
 
     observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+}
+
+/* One identity in this node's own census, for the sweeps: the days of `set`
+ * (bit 0 is day 9000, bit 1 day 9001, bit 2 day 9002) and `addrs` distinct
+ * addresses, all of them noted on the first of those days. */
+static void sweep_local(uint32_t id, int set, int addrs)
+{
+    bool first = true;
+    for (int b = 0; b < 3; b++) {
+        if (!(set & (1 << b))) {
+            continue;
+        }
+        int day = 9000 + b;
+        if (first && addrs > 0) {
+            for (int i = 0; i < addrs; i++) {
+                uint8_t m[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x40 + i)};
+                observore_census_note(id, day, m);
+            }
+        } else {
+            observore_census_note(id, day, NULL);
+        }
+        first = false;
+    }
+}
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* A census entry a friend reported, as the record the radio path will hand
+ * over once it has been authenticated and parsed. One address, the rest of the
+ * set empty. */
+static observore_census_entry_t friend_entry(uint32_t id, uint16_t days,
+                                             uint16_t last_day, uint16_t addr0)
+{
+    observore_census_entry_t e;
+    memset(&e, 0, sizeof(e));
+    e.id       = id;
+    e.days     = days;
+    e.last_day = last_day;
+    e.addr[0]  = addr0;
+    e.addr_n   = 1;
+    return e;
+}
+
+/* The slice the exchange is for, end to end: a doorbell this node has seen on
+ * one day only, and a friend that has seen it on two others. Neither node has
+ * earned it alone; together they have three distinct days, which is the rule
+ * the census has always had. It is checked all the way to the score, the
+ * findings and the count that says where the quieting came from. */
+static void test_days_from_a_friend_count_here(void)
+{
+    banner("days from a friend make a device household here");
+
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x11, 0x22, 0x33};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t o_ring = {
+        .mac = ring, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_mute_clear();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_ring, SECS(0)), "the doorbell is seen");
+    observore_event_t ev[8];
+    size_t n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1 && ev[0].cls == OBSERVORE_CLASS_CAMERA, "and it is a camera");
+    uint32_t id = observore_census_id(&ev[0]);
+    CHECK(id != 0, "with an identity to remember");
+
+    /* This node has seen it today and on no other day. */
+    observore_census_note(id, 9002, ring);
+    observore_track_set_day(9002);
+
+    observore_census_why_t why;
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "one day of its own is not furniture");
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT &&
+              why.merged == OBSERVORE_CENSUS_REPORT && !why.via_mesh &&
+              why.from_n == 0,
+          "and nobody else is named for it");
+
+    /* A friend saw it on the two days before, under a different address. */
+    observore_census_entry_t in = friend_entry(id, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &in) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a friend's days are taken");
+    CHECK(observore_census_peer_count() == 1, "into a table of their own");
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET,
+          "three distinct days across two nodes is furniture");
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT,
+          "this node alone would still report it");
+    CHECK(why.merged == OBSERVORE_CENSUS_QUIET && why.via_mesh,
+          "so the quieting is the friend's doing, and says so");
+    CHECK(why.from_n == 1 && why.from[0] == 0x3A7F,
+          "naming the friend that made it so");
+    CHECK(observore_census_verdict(id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "and the verdict that acts is the merged one");
+
+    /* Through the tracker, which is where it has to hold. */
+    observore_status_t st;
+    observore_track_status(&st, SECS(1));
+    CHECK(st.score == 0, "the score is quiet, got %u", st.score);
+    CHECK(st.census_quieted == 1 && st.census_quieted_mesh == 1,
+          "and says one was quieted, and that it came via mesh");
+    CHECK(st.census_dampened == 0 && st.census_dampened_mesh == 0,
+          "with nothing dampened");
+    CHECK(observore_track_snapshot(ev, 8) == 0,
+          "the doorbell is left out of the findings the warning path reads, "
+          "so it agrees with the score");
+
+    /* The same entry again is the normal case: windows repeat. */
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &in) ==
+              OBSERVORE_CENSUS_MERGE_SAME,
+          "the same entry again changes nothing");
+    CHECK(observore_census_peer_count() == 1, "and adds no entry");
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+                  OBSERVORE_CENSUS_QUIET && why.from_n == 1,
+          "nor the verdict");
+
+    /* What a node will not take, each leaving the table as it was. */
+    observore_census_entry_t bad = friend_entry(id, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "node 0 is refused");
+    bad = friend_entry(0, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "id 0 is refused");
+    bad = friend_entry(id, 0x0000, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "an empty day mask is refused");
+    bad = friend_entry(id, 0x0003, 9001, 0x1234);
+    bad.addr_n = OBSERVORE_CENSUS_ADDRS + 1;
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "more addresses than the ceiling is refused");
+    bad = friend_entry(id, 0x0003, 9004, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "a day two ahead is refused");
+    bad = friend_entry(id, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, OBSERVORE_CENSUS_NO_DAY, &bad) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "with no day of our own nothing is taken");
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, NULL) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED, "and no entry is no entry");
+    CHECK(observore_census_peer_count() == 1, "every refusal left the table alone");
+
+    /* Two friends on one identity are listed in node order, whichever arrived
+     * first. One saw it today, the other on the two days before. */
+    const uint32_t other = 0xC0FFEE;
+    observore_census_entry_t a = friend_entry(other, 0x0001, 9002, 0x0A01);
+    observore_census_entry_t b = friend_entry(other, 0x0003, 9001, 0x0B02);
+    CHECK(observore_census_peer_merge(0x91C2, 9002, &a) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "the first friend is taken");
+    CHECK(observore_census_explain(other, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "one friend with one day is not furniture");
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &b) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "the second friend is taken");
+    CHECK(observore_census_explain(other, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET,
+          "two friends between them make three days");
+    CHECK(why.from_n == 2 && why.from[0] == 0x3A7F && why.from[1] == 0x91C2,
+          "named in ascending order, got %u: %04X %04X", why.from_n,
+          why.from[0], why.from[1]);
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT && why.via_mesh,
+          "an identity only the friends have seen is theirs alone");
+
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+}
+
+/* The merge rule at every edge it has, because it is the one place where
+ * another node's word can lower this node's alarm. What is pinned here is that
+ * it can only lower it by days genuinely earned: one evening is one day, a
+ * friend's tomorrow waits for tomorrow, addresses only push toward dampening,
+ * and a protected class is never moved at all. */
+static void test_the_merge_loosens_nothing(void)
+{
+    banner("the merge loosens nothing");
+
+    observore_census_why_t why;
+    const uint32_t id = 0xD00001;
+
+    /* One evening never counts twice. This node and a friend both saw it
+     * today, and neither saw it on any other day. */
+    observore_census_init();
+    observore_census_note(id, 9002, NULL);
+    observore_census_entry_t e = friend_entry(id, 0x0001, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "the same evening seen by two nodes is one day");
+    CHECK(!why.via_mesh, "and not the friend's doing");
+
+    /* Two friends and nothing local: still three distinct days. */
+    observore_census_init();
+    observore_census_note(id, 9002, NULL);
+    e = friend_entry(id, 0x0001, 9001, 0x0A01);
+    observore_census_peer_merge(0x91C2, 9002, &e);
+    e = friend_entry(id, 0x0001, 9000, 0x0B02);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET && why.via_mesh && why.from_n == 2,
+          "this node's day and two friends' make a household");
+
+    /* A friend whose clock is a day ahead reports its own today, which is
+     * this node's tomorrow. It is taken, and counted when tomorrow comes. */
+    observore_census_init();
+    observore_census_note(id, 9001, NULL);
+    observore_census_note(id, 9002, NULL);
+    e = friend_entry(id, 0x0001, 9003, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a friend one day ahead is taken");
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT && why.from_n == 0,
+          "its day adds nothing to this node's today");
+    CHECK(observore_census_explain(id, 9003, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET && why.from_n == 1 && why.via_mesh,
+          "and counts as day 9003 once this node reaches it");
+    e = friend_entry(id, 0x0003, 9003, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a friend one day ahead with two days is taken");
+    observore_census_init();
+    observore_census_note(id, 9000, NULL);
+    observore_census_note(id, 9001, NULL);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "against a node that saw two");
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET && why.via_mesh && why.from_n == 1,
+          "its 9002 is a real day here too, and with 9000 and 9001 that is "
+          "three");
+
+    /* Protected classes: no merged day or address moves one. */
+    observore_census_init();
+    observore_census_note(id, 9000, NULL);
+    observore_census_note(id, 9001, NULL);
+    observore_census_note(id, 9002, NULL);
+    e = friend_entry(id, 0x0007, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET,
+          "the same identity as a camera is furniture");
+    for (int c = 1; c < OBSERVORE_CLASS_MAX; c++) {
+        if (!observore_mute_class_is_protected((observore_class_t)c)) {
+            continue;
+        }
+        CHECK(observore_census_explain(id, 9002, (observore_class_t)c, &why) ==
+                      OBSERVORE_CENSUS_REPORT &&
+                  why.local == OBSERVORE_CENSUS_REPORT &&
+                  why.merged == OBSERVORE_CENSUS_REPORT && !why.via_mesh &&
+                  why.from_n == 0,
+              "a protected class stays reported, from every node: %s",
+              observore_class_name((observore_class_t)c));
+        CHECK(observore_census_verdict(id, 9002, (observore_class_t)c) ==
+                  OBSERVORE_CENSUS_REPORT,
+              "and so does its verdict: %s",
+              observore_class_name((observore_class_t)c));
+    }
+
+    /* Addresses only push toward dampening. */
+    observore_census_init();
+    for (int d = 9000; d <= 9002; d++) {
+        for (int i = 0; i < 3; i++) {
+            uint8_t m[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x30 + i)};
+            observore_census_note(id, d, m);
+        }
+    }
+    CHECK(observore_census_verdict(id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "three addresses and three days is furniture");
+    e = friend_entry(id, 0x0001, 9002, 0x7100);
+    e.addr_n = 6;
+    for (int i = 0; i < 6; i++) {
+        e.addr[i] = (uint16_t)(0x7100 + i);
+    }
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_DAMPEN && why.local == OBSERVORE_CENSUS_QUIET &&
+              !why.via_mesh,
+          "nine addresses between two nodes is dampened, and that is not "
+          "quieting the friend caused");
+    observore_census_init();
+    for (int d = 9000; d <= 9002; d++) {
+        for (int i = 0; i < 2; i++) {
+            uint8_t m[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x30 + i)};
+            observore_census_note(id, d, m);
+        }
+    }
+    e = friend_entry(id, 0x0001, 9002, 0x7100);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_verdict(id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "a third address between them is still below the ceiling");
+    e = friend_entry(id, 0x0001, 9002, 0x7101);
+    e.addr_over = 1;
+    observore_census_peer_merge(0x91C2, 9002, &e);
+    CHECK(observore_census_verdict(id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_DAMPEN,
+          "a friend that has seen more than it could count dampens");
+
+    /* The sweep: every pair of day sets over the three most recent days,
+     * every address count at and around the ceiling on both sides, and one
+     * protected and one unprotected class. A merge may raise the alarm and
+     * may leave it; it may never lower what this node already said. */
+    static const int addr_counts[4] = {0, 1, 7, 8};
+    int visited = 0;
+    for (int ld = 0; ld < 8; ld++) {
+        for (int fd = 0; fd < 8; fd++) {
+            for (int la = 0; la < 4; la++) {
+                for (int fa = 0; fa < 4; fa++) {
+                    if (ld == 0 && addr_counts[la] > 0) {
+                        continue;        /* addresses come with days */
+                    }
+                    observore_census_init();
+                    sweep_local(id, ld, addr_counts[la]);
+                    if (fd != 0) {
+                        uint16_t fm = 0;
+                        for (int b = 0; b < 3; b++) {
+                            if (fd & (1 << b)) {
+                                fm |= (uint16_t)(1u << (2 - b));
+                            }
+                        }
+                        e = friend_entry(id, fm, 9002, 0);
+                        e.addr_n = (uint8_t)addr_counts[fa];
+                        for (int i = 0; i < e.addr_n; i++) {
+                            e.addr[i] = (uint16_t)(0x7100 + i);
+                        }
+                        CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) !=
+                                  OBSERVORE_CENSUS_MERGE_REFUSED,
+                              "a well-formed entry is taken");
+                    }
+                    visited++;
+                    observore_census_verdict_t v = observore_census_explain(
+                        id, 9002, OBSERVORE_CLASS_CAMERA, &why);
+                    CHECK(v == why.merged, "the verdict is the merged one");
+                    CHECK(why.local != OBSERVORE_CENSUS_DAMPEN ||
+                              why.merged == OBSERVORE_CENSUS_DAMPEN,
+                          "dampened here stays dampened, local %d friend %d "
+                          "addrs %d/%d", ld, fd, addr_counts[la],
+                          addr_counts[fa]);
+                    CHECK(why.local != OBSERVORE_CENSUS_QUIET ||
+                              why.merged != OBSERVORE_CENSUS_REPORT,
+                          "quieted here is never reported again, local %d "
+                          "friend %d", ld, fd);
+                    CHECK(why.via_mesh ==
+                              (why.local == OBSERVORE_CENSUS_REPORT &&
+                               why.merged != OBSERVORE_CENSUS_REPORT),
+                          "via mesh is exactly 'reported here, not there'");
+                    observore_census_explain(id, 9002, OBSERVORE_CLASS_BODYCAM, &why);
+                    CHECK(why.local == OBSERVORE_CENSUS_REPORT &&
+                              why.merged == OBSERVORE_CENSUS_REPORT &&
+                              !why.via_mesh && why.from_n == 0,
+                          "a body camera is reported whatever any node saw");
+                }
+            }
+        }
+    }
+    CHECK(visited == 8 * (7 * 16 + 4),
+          "the sweep visited every combination, got %d", visited);
+
+    /* Order and repeats. The same entries in any order, or twice, leave the
+     * table as it was. */
+    static uint8_t first[2048], again[2048];
+    observore_census_entry_t e1 = friend_entry(id, 0x0003, 9001, 0x0A01);
+    observore_census_entry_t e2 = friend_entry(id, 0x0005, 9002, 0x0B02);
+    observore_census_init();
+    observore_census_peer_merge(0x91C2, 9002, &e1);
+    observore_census_peer_merge(0x3A7F, 9002, &e2);
+    size_t len = observore_census_peer_blob(first, sizeof(first));
+    observore_census_init();
+    observore_census_peer_merge(0x3A7F, 9002, &e2);
+    observore_census_peer_merge(0x91C2, 9002, &e1);
+    CHECK(observore_census_peer_blob(again, sizeof(again)) == len &&
+              memcmp(first, again, len) == 0,
+          "two friends' entries in the other order store the same bytes");
+    observore_census_peer_merge(0x91C2, 9002, &e1);
+    CHECK(observore_census_peer_blob(again, sizeof(again)) == len &&
+              memcmp(first, again, len) == 0,
+          "and a repeat changes nothing");
+    observore_census_init();
+    observore_census_peer_merge(0x91C2, 9002, &e1);
+    observore_census_peer_merge(0x3A7F, 9002, &e2);
+    observore_census_peer_merge(0x91C2, 9002, &e1);
+    CHECK(observore_census_peer_blob(again, sizeof(again)) == len &&
+              memcmp(first, again, len) == 0,
+          "nor does an entry delivered again after the other");
+
+    /* Ageing. A friend's days that have all left the window name nobody and
+     * add nothing, and the entry can then be dropped. */
+    observore_census_init();
+    e = friend_entry(id, 0x0007, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET, "three days from one friend is furniture");
+    CHECK(observore_census_explain(id, 9002 + OBSERVORE_CENSUS_WINDOW + 3,
+                                   OBSERVORE_CLASS_CAMERA, &why) ==
+                  OBSERVORE_CENSUS_REPORT && why.from_n == 0 && !why.via_mesh,
+          "a fortnight and more later it names nobody");
+    CHECK(observore_census_peer_count() == 1,
+          "though the entry is still held until it is pruned");
+    observore_census_peer_prune(9002 + OBSERVORE_CENSUS_WINDOW + 3);
+    CHECK(observore_census_peer_count() == 0, "and pruning removes it");
+    observore_census_init();
+    e = friend_entry(id, 0x0001, 9000, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9000 + OBSERVORE_CENSUS_WINDOW + 4, &e) ==
+              OBSERVORE_CENSUS_MERGE_SAME &&
+              observore_census_peer_count() == 0,
+          "days that had already left the window are not stored");
+
+    /* Contributors: three places per identity. */
+    observore_census_init();
+    observore_census_entry_t a = friend_entry(id, 0x0007, 9002, 0x0A01);
+    observore_census_entry_t b = friend_entry(id, 0x0003, 9002, 0x0A01);
+    observore_census_entry_t c = friend_entry(id, 0x0001, 9002, 0x0A01);
+    observore_census_peer_merge(0x0101, 9002, &a);
+    observore_census_peer_merge(0x0202, 9002, &b);
+    observore_census_peer_merge(0x0303, 9002, &c);
+    observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why);
+    CHECK(why.from_n == 3 && why.from[0] == 0x0101 && why.from[1] == 0x0202 &&
+              why.from[2] == 0x0303,
+          "three friends are all named");
+    observore_census_entry_t d = friend_entry(id, 0x0003, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x0404, 9002, &d) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a fourth with more days than the weakest takes its place");
+    observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why);
+    CHECK(why.from_n == 3 && why.from[0] == 0x0101 && why.from[1] == 0x0202 &&
+              why.from[2] == 0x0404,
+          "and is named instead of it, got %04X %04X %04X", why.from[0],
+          why.from[1], why.from[2]);
+    observore_census_entry_t f = friend_entry(id, 0x0001, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x0505, 9002, &f) ==
+              OBSERVORE_CENSUS_MERGE_SAME,
+          "a fifth with fewer days than the weakest is dropped");
+    f = friend_entry(id, 0x0003, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x0606, 9002, &f) ==
+              OBSERVORE_CENSUS_MERGE_SAME,
+          "and one with equal days keeps the friend already counted");
+    observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why);
+    CHECK(why.from[2] == 0x0404, "the one already counted is still named");
+
+    observore_census_init();
+}
+
+/* The peer table is a guest in this node's memory: bounded, forgettable, and
+ * unable to cost the node anything it learned itself. */
+static void test_the_peer_table_keeps_to_itself(void)
+{
+    banner("the peer table never costs this node its own census");
+
+    static uint8_t before[4096], after[4096];
+    observore_census_why_t why;
+
+    /* A local census with household furniture in it. */
+    observore_census_init();
+    const uint32_t old_id = 0xE00001, new2_id = 0xE00002;
+    for (uint32_t i = 0; i < 6; i++) {
+        uint8_t m[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x50 + i)};
+        observore_census_note(0xE10000 + i, 9000, m);
+        observore_census_note(0xE10000 + i, 9001, m);
+        observore_census_note(0xE10000 + i, 9002, m);
+    }
+    observore_census_note(old_id, 9002, NULL);
+    observore_census_note(new2_id, 9000, NULL);
+    observore_census_note(new2_id, 9002, NULL);
+    size_t llen = observore_census_blob(before, sizeof(before));
+
+    /* Fill the peer table. Every entry is three days deep except two, which
+     * have two: the older of those is the weakest. */
+    for (uint32_t i = 0; i < OBSERVORE_PEER_CENSUS_MAX - 2; i++) {
+        observore_census_entry_t e = friend_entry(0xE20000 + i, 0x0007, 9002, 0x0A01);
+        CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+                  OBSERVORE_CENSUS_MERGE_CHANGED, "an entry is taken");
+    }
+    observore_census_entry_t e = friend_entry(old_id, 0x0003, 9001, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    e = friend_entry(new2_id, 0x0003, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_peer_count() == OBSERVORE_PEER_CENSUS_MAX,
+          "the table is full, %zu", observore_census_peer_count());
+    CHECK(observore_census_verdict(old_id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET &&
+              observore_census_verdict(new2_id, 9002, OBSERVORE_CLASS_CAMERA) ==
+                  OBSERVORE_CENSUS_QUIET,
+          "both of the weaker ones are household with this node's day");
+
+    /* One more identity than there is room for. */
+    e = friend_entry(0xE30001, 0x0007, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a newcomer with more days than the weakest is taken");
+    CHECK(observore_census_peer_count() == OBSERVORE_PEER_CENSUS_MAX,
+          "without the table growing");
+    CHECK(observore_census_verdict(old_id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_REPORT,
+          "the one given up is the one with the fewest days and the oldest");
+    CHECK(observore_census_verdict(new2_id, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "and the other weak one is still held");
+    CHECK(observore_census_verdict(0xE30001, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "while the newcomer counts");
+    e = friend_entry(0xE30002, 0x0001, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_REFUSED,
+          "a newcomer weaker than every resident is refused");
+    CHECK(observore_census_peer_count() == OBSERVORE_PEER_CENSUS_MAX,
+          "and the table is as it was");
+    size_t alen = observore_census_blob(after, sizeof(after));
+    CHECK(alen == llen && memcmp(before, after, llen) == 0,
+          "through all of it this node's own census is byte for byte the same");
+
+    /* The changed flag drives the save at the close of a window. */
+    observore_census_init();
+    CHECK(!observore_census_peer_take_changed(), "nothing has changed yet");
+    e = friend_entry(0xE40001, 0x0007, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(observore_census_peer_take_changed(), "a changing merge sets it");
+    CHECK(!observore_census_peer_take_changed(), "and reading it clears it");
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    CHECK(!observore_census_peer_take_changed(), "a merge that changed nothing does not");
+    observore_census_peer_prune(9002);
+    CHECK(!observore_census_peer_take_changed(), "nor does a prune that removed nothing");
+    observore_census_peer_prune(9002 + OBSERVORE_CENSUS_WINDOW + 1);
+    CHECK(observore_census_peer_take_changed() && observore_census_peer_count() == 0,
+          "a prune that removed something does");
+    observore_census_peer_forget(OBSERVORE_CENSUS_FORGOT_OWNER);
+    CHECK(!observore_census_peer_take_changed(), "forgetting an empty table does not");
+
+    /* Forgetting. Only the peer table goes. */
+    observore_census_init();
+    for (uint32_t i = 0; i < 6; i++) {
+        uint8_t m[6] = {0x02, 0, 0, 0, 0, (uint8_t)(0x50 + i)};
+        observore_census_note(0xE10000 + i, 9002, m);
+    }
+    llen = observore_census_blob(before, sizeof(before));
+    e = friend_entry(0xE10000, 0x0003, 9001, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    observore_census_peer_take_changed();
+    CHECK(observore_census_peer_forgot() == OBSERVORE_CENSUS_FORGOT_NONE,
+          "nothing has been forgotten yet");
+    observore_census_peer_forget(OBSERVORE_CENSUS_FORGOT_OWNER);
+    CHECK(observore_census_peer_count() == 0, "forgetting empties the peer table");
+    CHECK(observore_census_peer_forgot() == OBSERVORE_CENSUS_FORGOT_OWNER,
+          "and records that the owner asked");
+    CHECK(observore_census_peer_take_changed(), "which is a change to save");
+    alen = observore_census_blob(after, sizeof(after));
+    CHECK(alen == llen && memcmp(before, after, llen) == 0,
+          "this node's own census is untouched");
+    observore_census_explain(0xE10000, 9002, OBSERVORE_CLASS_CAMERA, &why);
+    CHECK(why.from_n == 0 && !why.via_mesh, "and nobody is named any more");
+
+    /* The stored form. */
+    static uint8_t blob[2048], blob2[2048];
+    const uint8_t key_a[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {1, 2, 3, 4};
+    const uint8_t key_b[OBSERVORE_PEER_CENSUS_CHECK_LEN] = {1, 2, 3, 5};
+    observore_census_init();
+    CHECK(!observore_census_peer_rekey(key_a),
+          "holding an empty table under a first key empties nothing");
+    e = friend_entry(0xE50001, 0x0007, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    e = friend_entry(0xE50002, 0x0003, 9001, 0x0B02);
+    observore_census_peer_merge(0x91C2, 9002, &e);
+    size_t need = observore_census_peer_blob(NULL, 0);
+    CHECK(need == 8 + 2 * sizeof(observore_peer_census_entry_t),
+          "the blob is a header and two entries, got %zu", need);
+    CHECK(observore_census_peer_blob(blob, sizeof(blob)) == need,
+          "and reports the same size when it writes");
+    CHECK(observore_census_peer_blob(blob2, need - 1) == need,
+          "too little room writes nothing and says what is needed");
+    observore_census_init();
+    CHECK(observore_census_peer_restore(blob, need, key_a),
+          "its own blob restores under its own key");
+    CHECK(observore_census_peer_count() == 2, "with both entries");
+    CHECK(observore_census_peer_blob(blob2, sizeof(blob2)) == need &&
+              memcmp(blob, blob2, need) == 0,
+          "and the same bytes");
+    CHECK(observore_census_verdict(0xE50001, 9002, OBSERVORE_CLASS_CAMERA) ==
+              OBSERVORE_CENSUS_QUIET,
+          "and what it held still counts");
+
+    CHECK(!observore_census_peer_restore(blob, need, key_b),
+          "a table saved under another key is refused");
+    CHECK(observore_census_peer_count() == 0, "and emptied");
+    CHECK(observore_census_peer_forgot() == OBSERVORE_CENSUS_FORGOT_SECRET,
+          "with the secret given as the reason");
+
+    uint16_t v2 = 2;
+    memcpy(blob2, blob, need);
+    memcpy(blob2, &v2, sizeof(v2));
+    observore_census_init();
+    CHECK(!observore_census_peer_restore(blob2, need, key_a),
+          "another format version is refused");
+    memcpy(blob2, blob, need);
+    CHECK(!observore_census_peer_restore(blob2, need - 1, key_a),
+          "a length one short of its count is refused");
+    CHECK(!observore_census_peer_restore(blob2, need + 1, key_a),
+          "and one over");
+    uint16_t many = (uint16_t)(OBSERVORE_PEER_CENSUS_MAX + 1);
+    memcpy(blob2 + 2, &many, sizeof(many));
+    CHECK(!observore_census_peer_restore(blob2, need, key_a),
+          "a count above the table is refused");
+    CHECK(observore_census_peer_count() == 0, "each leaving the table empty");
+    CHECK(observore_census_peer_forgot() == OBSERVORE_CENSUS_FORGOT_NONE,
+          "without blaming the secret for what was only a bad shape");
+    CHECK(!observore_census_peer_restore(NULL, 0, key_a), "no blob is refused");
+
+    /* Re-keying. */
+    observore_census_init();
+    observore_census_peer_rekey(key_a);
+    e = friend_entry(0xE50001, 0x0007, 9002, 0x0A01);
+    observore_census_peer_merge(0x3A7F, 9002, &e);
+    observore_census_peer_take_changed();
+    CHECK(!observore_census_peer_rekey(key_a) && observore_census_peer_count() == 1,
+          "the same key keeps the table");
+    CHECK(observore_census_peer_rekey(key_b),
+          "another key empties it");
+    CHECK(observore_census_peer_count() == 0 &&
+              observore_census_peer_forgot() == OBSERVORE_CENSUS_FORGOT_SECRET,
+          "and says that the secret is why");
+    CHECK(observore_census_peer_take_changed(), "which is a change to save");
+    need = observore_census_peer_blob(blob, sizeof(blob));
+    observore_census_init();
+    CHECK(observore_census_peer_restore(blob, need, key_b),
+          "the saved empty table now belongs to the new key");
+
+    observore_census_init();
+}
+#else
+/* Without the exchange there is one census, this node's, and the verdict, the
+ * explanation and every count are the rule they were before there was a
+ * second. */
+static void test_without_the_exchange_the_census_is_local(void)
+{
+    banner("without the exchange the census is this node alone");
+
+    const uint8_t ring[6] = {0x54, 0xE0, 0x19, 0x11, 0x22, 0x33};
+    uint8_t boring[] = {0x02, 0x01, 0x06};
+    observore_observation_t o_ring = {
+        .mac = ring, .src = OBSERVORE_SRC_BLE, .rssi = -50,
+        .adv = boring, .adv_len = sizeof(boring),
+    };
+
+    observore_track_init();
+    observore_monitors_init();
+    observore_mute_clear();
+    observore_census_init();
+    CHECK(observore_track_observe(&o_ring, SECS(0)), "the doorbell is seen");
+    observore_event_t ev[8];
+    size_t n = observore_track_snapshot(ev, 8);
+    CHECK(n == 1 && ev[0].cls == OBSERVORE_CLASS_CAMERA, "and it is a camera");
+    uint32_t id = observore_census_id(&ev[0]);
+
+    observore_census_note(id, 9002, ring);
+    observore_track_set_day(9002);
+
+    observore_census_why_t why;
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_REPORT,
+          "one day is not furniture");
+    CHECK(why.local == OBSERVORE_CENSUS_REPORT &&
+              why.merged == OBSERVORE_CENSUS_REPORT && !why.via_mesh &&
+              why.from_n == 0,
+          "and the merged view is the local one, with nobody named");
+
+    observore_status_t st;
+    observore_track_status(&st, SECS(1));
+    CHECK(st.census_quieted == 0 && st.census_quieted_mesh == 0 &&
+              st.census_dampened_mesh == 0,
+          "and nothing is counted as via mesh");
+
+    /* Furniture on this node's own days is quieted exactly as it always was,
+     * and never attributed to a friend that cannot exist. */
+    observore_census_init();
+    observore_census_note(id, 9000, ring);
+    observore_census_note(id, 9001, ring);
+    observore_census_note(id, 9002, ring);
+    CHECK(observore_census_explain(id, 9002, OBSERVORE_CLASS_CAMERA, &why) ==
+              OBSERVORE_CENSUS_QUIET && why.local == OBSERVORE_CENSUS_QUIET,
+          "three days of its own is furniture");
+    CHECK(!why.via_mesh && why.from_n == 0, "and is nobody else's doing");
+    observore_track_status(&st, SECS(2));
+    CHECK(st.census_quieted == 1 && st.census_quieted_mesh == 0,
+          "one quieted, none via mesh");
+
+    /* The invariant over every local day set and address count at and around
+     * the ceiling: with no exchange, what acts is what this node alone says. */
+    static const int addr_counts[4] = {0, 1, 7, 8};
+    for (int ld = 0; ld < 8; ld++) {
+        for (int la = 0; la < 4; la++) {
+            if (ld == 0 && addr_counts[la] > 0) {
+                continue;
+            }
+            observore_census_init();
+            sweep_local(id, ld, addr_counts[la]);
+            for (int c = 0; c < 2; c++) {
+                observore_class_t cls = c ? OBSERVORE_CLASS_BODYCAM
+                                          : OBSERVORE_CLASS_CAMERA;
+                observore_census_verdict_t v =
+                    observore_census_explain(id, 9002, cls, &why);
+                CHECK(v == why.local && why.merged == why.local &&
+                          !why.via_mesh && why.from_n == 0,
+                      "merged is local, local %d addrs %d", ld, addr_counts[la]);
+                CHECK(observore_census_verdict(id, 9002, cls) == v,
+                      "and the verdict is the same answer");
+            }
+        }
+    }
+
+    observore_track_set_day(OBSERVORE_CENSUS_NO_DAY);
+    observore_census_init();
+}
+#endif
+
+/* The console reads the census while the main task writes it. What it gets is
+ * a copy of one row, taken under the lock, and never a pointer into the table:
+ * a row stays what it was when it was taken, whatever the table does next. */
+static void test_census_rows_are_copies(void)
+{
+    banner("census rows are copies taken under the lock");
+
+    observore_census_init();
+    CHECK(census_rows_listed() == 0, "an empty census has no rows");
+    observore_census_row_t r;
+    CHECK(!observore_census_row(0, 9002, &r), "and no row 0");
+
+    const uint32_t furniture = 0xC0001, visitor = 0xC0002;
+    uint8_t m1[6] = {0x02, 0, 0, 0, 0, 0x71};
+    uint8_t m2[6] = {0x02, 0, 0, 0, 0, 0x72};
+    for (int d = 9000; d <= 9002; d++) {
+        observore_census_note(furniture, d, m1);
+        observore_census_note(furniture, d, m2);
+    }
+    observore_census_note(visitor, 9002, m1);
+    CHECK(census_rows_listed() == 2, "two entries make two rows");
+
+    CHECK(observore_census_row(0, 9002, &r), "the first row is there");
+    bool over = true;
+    CHECK(r.id == furniture, "in table order");
+    CHECK(r.days == observore_census_days_seen(furniture, 9002) && r.days == 3,
+          "it carries the days seen, got %d", r.days);
+    CHECK(r.household == observore_census_is_household(furniture, 9002) &&
+              r.household && r.household_local && !r.via_mesh && r.here,
+          "and whether it is household, on this node's own days");
+    CHECK(r.addrs == observore_census_addresses(furniture, &over) &&
+              r.addrs == 2 && r.more == over && !r.more,
+          "and the addresses");
+    CHECK(r.last_day == 9002 && r.from_n == 0, "and the last day, naming nobody");
+    CHECK(observore_census_row(1, 9002, &r) && r.id == visitor &&
+              r.days == 1 && !r.household && r.addrs == 1,
+          "the second row is the visitor, seen once");
+    CHECK(!observore_census_row(2, 9002, &r), "and there is no third");
+    CHECK(!observore_census_row(0, 9002, NULL), "a row with nowhere to go is not written");
+
+    /* A copy stays what it was. */
+    observore_census_row_t copy;
+    CHECK(observore_census_row(1, 9002, &copy), "a row is taken");
+    observore_census_note(visitor, 9003, m1);
+    observore_census_note(visitor, 9004, m2);
+    CHECK(copy.days == 1 && copy.addrs == 1 && copy.last_day == 9002,
+          "the copy taken does not move when the table does");
+    CHECK(observore_census_row(1, 9004, &r) && r.days == 3 && r.addrs == 2,
+          "while a row taken now has the news");
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    /* A friend makes this node's own sighting household. */
+    observore_census_init();
+    observore_census_note(visitor, 9002, m1);
+    observore_census_entry_t e = friend_entry(visitor, 0x0003, 9001, 0x1234);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "a friend is taken");
+    CHECK(census_rows_listed() == 1, "an identity both know is one row");
+    CHECK(observore_census_row(0, 9002, &r) && r.id == visitor,
+          "it is the visitor's row");
+    CHECK(r.household && !r.household_local && r.via_mesh && r.here,
+          "household because of the friend, and here as well");
+    CHECK(r.days == 3 && r.local_days == 1 && r.addrs == 2,
+          "three days between them, one of them this node's: got %d %d %d",
+          r.days, r.local_days, r.addrs);
+    CHECK(r.from_n == 1 && r.from[0] == 0x3A7F, "naming the friend");
+
+    /* An identity only the friend has seen, listed after this node's own. */
+    const uint32_t stranger = 0xC0003;
+    e = friend_entry(stranger, 0x0007, 9002, 0x4321);
+    CHECK(observore_census_peer_merge(0x91C2, 9002, &e) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED, "a friend's own identity is taken");
+    CHECK(census_rows_listed() == 2, "and makes a second row");
+    CHECK(observore_census_row(1, 9002, &r) && r.id == stranger,
+          "after this node's own");
+    CHECK(!r.here && r.household && !r.household_local && r.via_mesh &&
+              r.local_days == 0 && r.days == 3 && r.addrs == 1 &&
+              r.last_day == 9002 && r.from_n == 1 && r.from[0] == 0x91C2,
+          "household through the friend alone, and not seen here");
+    CHECK(!observore_census_row(2, 9002, &r), "and there is no third");
+#endif
+
     observore_census_init();
 }
 
@@ -2517,6 +3328,31 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
     CHECK(observore_digest_note(NULL, big, sizeof(big)) == 0,
           "and NULL still writes nothing");
 
+    /* Quieting the owner's other nodes caused says so. The quieted total keeps
+     * its meaning and the via-mesh figure is the part of it that came from
+     * friends, so a push never reports a silence this node did not earn alone
+     * as though it had. */
+    observore_digest_note(&(observore_digest_notes_t){.census_quieted = 2,
+                                                      .census_quieted_mesh = 1},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(2 quieted as household, 1 via mesh)") == 0,
+          "quieting from friends says how much: %s", big);
+    observore_digest_note(&(observore_digest_notes_t){.census_quieted = 4,
+                                                      .census_quieted_mesh = 0},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(4 quieted as household)") == 0,
+          "with none from friends the note is as it was: %s", big);
+    observore_digest_note(&(observore_digest_notes_t){.monitors_off = 2,
+                                                      .census_quieted = 1,
+                                                      .census_quieted_mesh = 1},
+                          big, sizeof(big));
+    CHECK(strcmp(big, "(2 monitors off, 1 quieted as household, 1 via mesh)") == 0,
+          "the via-mesh part rides inside the census part: %s", big);
+    CHECK(observore_digest_note(&(observore_digest_notes_t){.census_quieted = 0,
+                                                            .census_quieted_mesh = 3},
+                                big, sizeof(big)) == 0 && big[0] == '\0',
+          "a part of nothing is nothing, so it writes no census part at all");
+
     /* The worst case fits whole and ends with its closing bracket. */
     size_t wn = observore_digest_note(
         &(observore_digest_notes_t){.peer_trusted_points = 6,
@@ -2524,14 +3360,16 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                     .peer_stranger_nodes = 2,
                                     .peer_stranger_node = {0xFFFF, 0xFFFE},
                                     .monitors_off = 14,
-                                    .census_quieted = 192},
+                                    .census_quieted = 192,
+                                    .census_quieted_mesh = 192},
         big, sizeof(big));
     printf("  worst-case note: %zu characters\n", wn);
     CHECK(strcmp(big, "(+6 from trusted peers, +2 from stranger nodes FFFE "
-                      "and FFFF, 14 monitors off, 192 quieted as household)") == 0,
+                      "and FFFF, 14 monitors off, 192 quieted as household, "
+                      "192 via mesh)") == 0,
           "the worst case reads whole: %s", big);
-    CHECK(wn == 104 && big[wn - 1] == ')' && wn < sizeof(big),
-          "and is 104 characters, inside its buffer, ending with ')': %zu", wn);
+    CHECK(wn == 118 && big[wn - 1] == ')' && wn < sizeof(big),
+          "and is 118 characters, inside its buffer, ending with ')': %zu", wn);
 
     /* The digest leads with the whole note: it is no longer passed through a
      * 64-byte local, so the long one is not cut at 63 characters. */
@@ -2548,7 +3386,8 @@ static void test_a_digest_admits_what_it_is_not_looking_for(void)
                                     .peer_stranger_nodes = 2,
                                     .peer_stranger_node = {0xFFFF, 0xFFFE},
                                     .monitors_off = 14,
-                                    .census_quieted = 192},
+                                    .census_quieted = 192,
+                                    .census_quieted_mesh = 192},
         title, sizeof(title), body, sizeof(body));
     CHECK(strncmp(body, big, wn) == 0 && body[wn] == '\n',
           "the digest body leads with the whole worst-case note and a "
@@ -8764,6 +9603,622 @@ static void test_csv_field(void)
     }
 }
 
+#if CONFIG_OBSERVORE_MESH_CENSUS
+static void cx_poke16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/* The census frame is a contract between firmware versions, so the bytes are
+ * written out here as literals and compared, rather than packed and read back
+ * through the same code: a round trip alone would pass a layout that was wrong
+ * in both directions. */
+static void test_a_census_frame_reads_back(void)
+{
+    banner("a census frame reads back the same, and a bad one is refused");
+
+    static const uint8_t golden_hdr[OBSERVORE_CX_HDR_LEN] = {
+        0x4F, 0x43, 0x01, 0x00, 0x7F, 0x3A, 0x2A, 0x23, 0xEF, 0xBE,
+        0x00, 0x01, 0x01,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+    };
+    static const uint8_t golden_entry[OBSERVORE_CX_ENTRY_LEN] = {
+        0x44, 0x33, 0x22, 0x11, 0x07, 0x00, 0x2A, 0x23, 0x34, 0x12,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00,
+    };
+
+    observore_cx_hdr_t h;
+    memset(&h, 0, sizeof(h));
+    h.node = 0x3A7F;
+    h.day = 9002;
+    h.window = 0xBEEF;
+    h.index = 0;
+    h.total = 1;
+    h.count = 1;
+    for (int i = 0; i < OBSERVORE_CX_NONCE_LEN; i++) {
+        h.nonce[i] = (uint8_t)i;
+    }
+    uint8_t buf[OBSERVORE_CX_FRAME_MAX + 2];
+    memset(buf, 0xAA, sizeof(buf));
+    size_t n = observore_cx_put_hdr(&h, buf);
+    CHECK(n == 25, "the header is twenty-five bytes, got %zu", n);
+    CHECK(memcmp(buf, golden_hdr, sizeof(golden_hdr)) == 0,
+          "the header packs to the golden bytes");
+    CHECK(buf[25] == 0xAA, "and writes nothing past itself");
+
+    observore_census_entry_t e;
+    memset(&e, 0, sizeof(e));
+    e.id = 0x11223344;
+    e.days = 0x0007;
+    e.last_day = 9002;
+    e.addr[0] = 0x1234;
+    e.addr_n = 1;
+    e.addr_over = 0;
+    e.addr[1] = 0xFFFF;           /* past addr_n: garbage that must not travel */
+    memset(buf, 0xAA, sizeof(buf));
+    n = observore_cx_put_entry(&e, buf);
+    CHECK(n == 26, "an entry is twenty-six bytes, got %zu", n);
+    CHECK(memcmp(buf, golden_entry, sizeof(golden_entry)) == 0,
+          "the entry packs to the golden bytes, hashes past addr_n as zero");
+    CHECK(buf[26] == 0xAA, "and writes nothing past itself");
+
+    /* A whole frame: header, eight entries, a tag, and every field back. */
+    observore_census_entry_t src[OBSERVORE_CX_ENTRIES_MAX];
+    uint8_t frame[OBSERVORE_CX_FRAME_MAX + 2];
+    memset(frame, 0xAA, sizeof(frame));
+    h.index = 7;
+    h.total = 8;
+    h.count = 8;
+    size_t at = observore_cx_put_hdr(&h, frame);
+    for (int i = 0; i < OBSERVORE_CX_ENTRIES_MAX; i++) {
+        memset(&src[i], 0, sizeof(src[i]));
+        src[i].id = 0xA0000001u + (uint32_t)i * 0x01010101u;
+        src[i].days = (uint16_t)(0x0001u | (1u << (i + 1)));
+        src[i].last_day = 9002;
+        src[i].addr_n = (uint8_t)(i + 1 > 8 ? 8 : i + 1);
+        for (int k = 0; k < src[i].addr_n; k++) {
+            src[i].addr[k] = (uint16_t)(0x1000u * (unsigned)(i + 1) + 0x11u * (unsigned)(k + 1));
+        }
+        src[i].addr_over = (uint8_t)(i & 1);
+        at += observore_cx_put_entry(&src[i], frame + at);
+    }
+    memset(frame + at, 0x5A, OBSERVORE_CX_TAG_LEN);
+    at += OBSERVORE_CX_TAG_LEN;
+    CHECK(at == OBSERVORE_CX_FRAME_MAX && at == 249,
+          "a full frame is 249 bytes, got %zu", at);
+
+    observore_cx_hdr_t back;
+    memset(&back, 0, sizeof(back));
+    CHECK(observore_cx_check_frame(frame, at, &back) == OBSERVORE_CX_FRAME_OK,
+          "a full frame passes");
+    CHECK(back.node == 0x3A7F && back.day == 9002 && back.window == 0xBEEF &&
+              back.index == 7 && back.total == 8 && back.count == 8,
+          "every header field is back: %04X %u %04X %u/%u x%u", back.node,
+          back.day, back.window, back.index, back.total, back.count);
+    CHECK(memcmp(back.nonce, h.nonce, OBSERVORE_CX_NONCE_LEN) == 0,
+          "and the nonce");
+    CHECK(observore_cx_check_frame(frame, at, NULL) == OBSERVORE_CX_FRAME_OK,
+          "a caller that wants only the verdict may pass no header");
+    for (int i = 0; i < OBSERVORE_CX_ENTRIES_MAX; i++) {
+        observore_census_entry_t got;
+        memset(&got, 0xEE, sizeof(got));
+        const uint8_t *p = frame + OBSERVORE_CX_HDR_LEN +
+                           (size_t)i * OBSERVORE_CX_ENTRY_LEN;
+        CHECK(observore_cx_get_entry(p, 9002, &got), "entry %d reads", i);
+        CHECK(got.id == src[i].id && got.days == src[i].days &&
+                  got.last_day == src[i].last_day &&
+                  got.addr_n == src[i].addr_n &&
+                  got.addr_over == src[i].addr_over &&
+                  memcmp(got.addr, src[i].addr, sizeof(got.addr)) == 0,
+              "entry %d is back field for field, all %d hashes", i,
+              src[i].addr_n);
+    }
+
+    /* Foreign: not Observore's, or too short to say. */
+    uint8_t bad[OBSERVORE_CX_FRAME_MAX + 2];
+    memcpy(bad, frame, at);
+    bad[0] = 0x4E;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "a wrong first magic byte is foreign");
+    memcpy(bad, frame, at);
+    bad[1] = 0x44;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "a wrong second magic byte is foreign");
+    CHECK(observore_cx_check_frame(frame, 24, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "a length of twenty-four is foreign");
+    CHECK(observore_cx_check_frame(frame, 0, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "and so is nothing at all");
+    CHECK(observore_cx_check_frame(NULL, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "and so is no frame");
+    memcpy(bad, frame, at);
+    bad[0] = 0x00;
+    bad[2] = 2;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_FOREIGN,
+          "the magic is judged before the version");
+    memcpy(bad, frame, at);
+    bad[2] = 2;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_VERSION,
+          "version two is a version this code does not read");
+    memcpy(bad, frame, at);
+    bad[2] = 0;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_VERSION,
+          "and so is version zero");
+
+    /* Malformed: Observore's version one with a shape that cannot be one. */
+    struct { int off; uint8_t val; const char *what; } shape[] = {
+        {3, 1, "kind 1"},
+        {12, 0, "count 0"},
+        {12, 9, "count 9"},
+        {11, 0, "total 0"},
+        {11, 9, "total 9"},
+        {10, 8, "index equal to total"},
+        {10, 9, "index above total"},
+    };
+    for (size_t i = 0; i < sizeof(shape) / sizeof(shape[0]); i++) {
+        memcpy(bad, frame, at);
+        bad[shape[i].off] = shape[i].val;
+        CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+              "%s is malformed", shape[i].what);
+    }
+    CHECK(observore_cx_check_frame(frame, at - 1, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+          "a length one byte short is malformed");
+    CHECK(observore_cx_check_frame(frame, at + 1, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+          "and one byte long");
+    memcpy(bad, frame, at);
+    bad[12] = 7;
+    CHECK(observore_cx_check_frame(bad, at, NULL) == OBSERVORE_CX_FRAME_MALFORMED,
+          "a count that does not match the length is malformed");
+    memset(&back, 0x77, sizeof(back));
+    (void)observore_cx_check_frame(bad, at, &back);
+    CHECK(back.node == 0x7777, "and a refused frame fills no header");
+
+    /* Entries. One valid entry, then each refusal from it. */
+    uint8_t ent[OBSERVORE_CX_ENTRY_LEN];
+    observore_census_entry_t got;
+    memcpy(ent, golden_entry, sizeof(ent));
+    CHECK(observore_cx_get_entry(ent, 9002, &got) && got.id == 0x11223344 &&
+              got.addr[0] == 0x1234 && got.addr_n == 1,
+          "the golden entry is accepted");
+    CHECK(!observore_cx_get_entry(NULL, 9002, &got), "no bytes is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    memset(ent, 0, 4);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "id 0 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    ent[24] = 9;
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "addr_n 9 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    ent[25] = 2;
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "addr_over 2 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    CHECK(!observore_cx_get_entry(ent, 9001, &got),
+          "a last_day one day after the sender's day is refused");
+    CHECK(observore_cx_get_entry(ent, 9003, &got) && got.last_day == 9002 &&
+              got.days == 0x0007,
+          "a last_day one day before is kept as sent, not aligned");
+    cx_poke16(ent + 6, 8986);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got),
+          "a last_day sixteen days before the sender's day is refused");
+    cx_poke16(ent + 6, 8987);
+    CHECK(observore_cx_get_entry(ent, 9002, &got),
+          "fifteen days before still has its bit in the window");
+    memcpy(ent, golden_entry, sizeof(ent));
+    cx_poke16(ent + 4, 0);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got), "days 0 is refused");
+    memcpy(ent, golden_entry, sizeof(ent));
+    cx_poke16(ent + 4, 0x8000);
+    cx_poke16(ent + 6, 9001);
+    CHECK(!observore_cx_get_entry(ent, 9002, &got),
+          "a lone day that has aged out of the window is refused");
+    cx_poke16(ent + 4, 0xC000);
+    CHECK(observore_cx_get_entry(ent, 9002, &got),
+          "but one with a second day behind it still counts");
+    memcpy(ent, golden_entry, sizeof(ent));
+    CHECK(!observore_cx_get_entry(ent, OBSERVORE_CENSUS_NO_DAY, &got),
+          "no sender day refuses everything");
+    CHECK(!observore_cx_get_entry(ent, OBSERVORE_CENSUS_DAY_MAX + 1, &got),
+          "and so does a day the record cannot hold");
+    memcpy(ent, golden_entry, sizeof(ent));
+    ent[24] = 3;
+    cx_poke16(ent + 8 + 2 * 4, 0xBEEF);          /* a hash past addr_n */
+    CHECK(observore_cx_get_entry(ent, 9002, &got) && got.addr[4] == 0 &&
+              got.addr[2] == 0,
+          "hashes past addr_n are read as zero, whatever was on the wire");
+
+    /* The day check. */
+    CHECK(observore_cx_day_ok(9002, 9002), "the same day passes");
+    CHECK(observore_cx_day_ok(9002, 9003), "a sender one day behind passes");
+    CHECK(observore_cx_day_ok(9003, 9002), "a sender one day ahead passes");
+    CHECK(!observore_cx_day_ok(9002, 9004), "two days apart fails");
+    CHECK(!observore_cx_day_ok(9004, 9002), "in either direction");
+    CHECK(!observore_cx_day_ok(OBSERVORE_CENSUS_NO_DAY, 9002),
+          "a sender with no day fails");
+    CHECK(!observore_cx_day_ok(9002, OBSERVORE_CENSUS_NO_DAY),
+          "a receiver with no day fails");
+    CHECK(!observore_cx_day_ok(OBSERVORE_CENSUS_NO_DAY, OBSERVORE_CENSUS_NO_DAY),
+          "and two nodes with no day agree on nothing");
+    CHECK(!observore_cx_day_ok(0, OBSERVORE_CENSUS_NO_DAY),
+          "no day is not one day before day 0");
+    CHECK(!observore_cx_day_ok(65536, 65535), "a day above the record's range fails");
+    CHECK(observore_cx_day_ok(65535, 65535), "the last day the record holds passes");
+}
+#endif
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+/* The window is the one place this node transmits and stops looking, so what
+ * it sends, how long it lasts and how often a person can ask for one are
+ * pinned here as numbers rather than left to the radio code. */
+static void test_the_census_window_keeps_its_bounds(void)
+{
+    banner("the census window keeps its bounds");
+
+    /* What is sent: this node's own days, aligned, and nothing else. */
+    observore_census_entry_t out[OBSERVORE_CENSUS_MAX];
+    observore_census_init();
+    CHECK(observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX) == 0,
+          "an empty census has nothing to send");
+
+    observore_census_note(0xB00001, 9000, NULL);
+    observore_census_note(0xB00002, 9002, NULL);
+    size_t n = observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX);
+    CHECK(n == 2, "two entries inside the window, got %zu", n);
+    for (size_t i = 0; i < n; i++) {
+        CHECK(out[i].last_day == 9002, "each is aligned to the day asked for");
+        if (out[i].id == 0xB00001) {
+            CHECK(out[i].days == 0x0004, "day 9000 is bit 2 at 9002, got %04X",
+                  out[i].days);
+        } else if (out[i].id == 0xB00002) {
+            CHECK(out[i].days == 0x0001, "day 9002 is bit 0, got %04X", out[i].days);
+        } else {
+            CHECK(false, "an identity nobody saw: %06X", (unsigned)out[i].id);
+        }
+    }
+    CHECK(observore_census_local_sendable(9002, out, 1) == 1,
+          "max 1 returns one entry");
+    CHECK(observore_census_local_sendable(9002, out, 0) == 0, "max 0 returns none");
+    CHECK(observore_census_local_sendable(9002, NULL, 4) == 0, "no room returns none");
+    CHECK(observore_census_local_sendable(OBSERVORE_CENSUS_NO_DAY, out,
+                                          OBSERVORE_CENSUS_MAX) == 0,
+          "no day, nothing sent");
+    CHECK(observore_census_local_sendable(OBSERVORE_CENSUS_DAY_MAX + 1, out,
+                                          OBSERVORE_CENSUS_MAX) == 0,
+          "and a day the record cannot hold sends nothing");
+
+    observore_census_init();
+    observore_census_note(0xB00003, 8980, NULL);
+    CHECK(observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX) == 0,
+          "an entry last seen 22 days ago has aged out and is not sent");
+    CHECK(observore_census_local_sendable(8990, out, OBSERVORE_CENSUS_MAX) == 1 &&
+              out[0].days == 0x0400,
+          "but it is still inside the window ten days after it");
+
+    /* Never a relay: a friend's days are not ours to put on the air. */
+    observore_census_init();
+    observore_census_note(0xB00004, 9002, NULL);
+    observore_census_entry_t fr = friend_entry(0xB00004, 0x0007, 9002, 0x0A01);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &fr) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "a friend reports the same identity with more days");
+    fr = friend_entry(0xB00005, 0x0007, 9002, 0x0A02);
+    CHECK(observore_census_peer_merge(0x3A7F, 9002, &fr) ==
+              OBSERVORE_CENSUS_MERGE_CHANGED,
+          "and one only the friend has seen");
+    n = observore_census_local_sendable(9002, out, OBSERVORE_CENSUS_MAX);
+    CHECK(n == 1 && out[0].id == 0xB00004, "only what this node saw is sent");
+    CHECK(out[0].days == 0x0001 && out[0].addr_n == 0,
+          "with this node's days and addresses alone, got %04X", out[0].days);
+    observore_census_init();
+
+    /* Plans: eight to a frame, eight frames. */
+    CHECK(observore_cx_plan(0) == 0, "nothing to send is no frames");
+    CHECK(observore_cx_plan(1) == 1 && observore_cx_plan(8) == 1,
+          "one to eight entries are one frame");
+    CHECK(observore_cx_plan(9) == 2, "nine are two");
+    CHECK(observore_cx_plan(64) == 8, "the whole census is eight");
+    CHECK(observore_cx_plan(65) == 8, "and no more than eight");
+    size_t first = 99;
+    uint8_t count = 99;
+    observore_cx_chunk(9, 1, &first, &count);
+    CHECK(first == 8 && count == 1, "the second of nine holds one, from 8");
+    observore_cx_chunk(9, 0, &first, &count);
+    CHECK(first == 0 && count == 8, "the first of nine holds eight");
+    observore_cx_chunk(64, 7, &first, &count);
+    CHECK(first == 56 && count == 8, "the last of 64 holds eight, from 56");
+    observore_cx_chunk(9, 2, &first, &count);
+    CHECK(count == 0, "a chunk past the end is empty");
+    observore_cx_chunk(0, 0, &first, &count);
+    CHECK(count == 0, "and so is any chunk of nothing");
+
+    /* Who was heard. */
+    observore_cx_heard_t hd;
+    memset(&hd, 0, sizeof(hd));
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0001, 0) == OBSERVORE_CX_NEW,
+          "a first chunk is new");
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0001, 1) == OBSERVORE_CX_NEW,
+          "so is the next");
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0001, 0) == OBSERVORE_CX_DUPLICATE,
+          "the first again is a duplicate");
+    CHECK(observore_cx_heard_note(&hd, 0x91C2, 0x0007, 0) == OBSERVORE_CX_NEW,
+          "a second friend is new");
+    CHECK(hd.n == 2 && hd.f[0].node == 0x3A7F && hd.f[1].node == 0x91C2,
+          "listed in the order first heard");
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0002, 0) == OBSERVORE_CX_NEW,
+          "a new window id from a known friend starts again");
+    CHECK(hd.n == 2, "and is still one friend, got %u", hd.n);
+    CHECK(observore_cx_heard_note(&hd, 0x3A7F, 0x0002, 8) == OBSERVORE_CX_DUPLICATE,
+          "a chunk index no frame has is no news");
+    memset(&hd, 0, sizeof(hd));
+    for (uint16_t k = 1; k <= 8; k++) {
+        CHECK(observore_cx_heard_note(&hd, (uint16_t)(0x1000 + k), 1, 0) ==
+                  OBSERVORE_CX_NEW,
+              "friend %u is kept", k);
+    }
+    CHECK(observore_cx_heard_note(&hd, 0x1009, 1, 0) == OBSERVORE_CX_CROWDED,
+          "a ninth friend is crowded out");
+    CHECK(hd.n == 8 && hd.crowded == 1, "the table stays at 8 and counts it: %u %u",
+          hd.n, hd.crowded);
+    CHECK(observore_cx_heard_note(&hd, 0x1001, 1, 1) == OBSERVORE_CX_NEW,
+          "a friend already kept still takes its chunks");
+
+    /* Modes, times and channels. */
+    uint8_t mode = 9;
+    CHECK(strcmp(observore_cx_mode_name(OBSERVORE_CX_OFF), "off") == 0 &&
+              strcmp(observore_cx_mode_name(OBSERVORE_CX_LISTEN), "listen") == 0 &&
+              strcmp(observore_cx_mode_name(OBSERVORE_CX_EXCHANGE), "exchange") == 0 &&
+              strcmp(observore_cx_mode_name(3), "?") == 0,
+          "the three modes have names, and a fourth is '?'");
+    CHECK(observore_cx_mode_parse("off", &mode) && mode == OBSERVORE_CX_OFF &&
+              observore_cx_mode_parse("listen", &mode) && mode == OBSERVORE_CX_LISTEN &&
+              observore_cx_mode_parse("exchange", &mode) && mode == OBSERVORE_CX_EXCHANGE,
+          "exactly those three words parse");
+    mode = 9;
+    CHECK(!observore_cx_mode_parse("Off", &mode) && !observore_cx_mode_parse("share", &mode) &&
+              !observore_cx_mode_parse("", &mode) && !observore_cx_mode_parse(NULL, &mode) &&
+              !observore_cx_mode_parse("exchange ", &mode) && mode == 9,
+          "nothing else does, and a refusal leaves the mode alone");
+    uint16_t minute = 7;
+    CHECK(observore_cx_at_parse("03:30", &minute) && minute == 210, "03:30 is 210");
+    CHECK(observore_cx_at_parse("00:00", &minute) && minute == 0, "00:00 is 0");
+    CHECK(observore_cx_at_parse("23:59", &minute) && minute == 1439, "23:59 is 1439");
+    minute = 7;
+    CHECK(!observore_cx_at_parse("24:00", &minute) && !observore_cx_at_parse("3:30", &minute) &&
+              !observore_cx_at_parse("03:60", &minute) && !observore_cx_at_parse("03:3x", &minute) &&
+              !observore_cx_at_parse("", &minute) && !observore_cx_at_parse("03-30", &minute) &&
+              !observore_cx_at_parse("03:300", &minute) && !observore_cx_at_parse(NULL, &minute) &&
+              minute == 7,
+          "anything but HH:MM is refused, and leaves the minute alone");
+    CHECK(observore_cx_channel_ok(1) && observore_cx_channel_ok(13), "channels 1 and 13");
+    CHECK(!observore_cx_channel_ok(0) && !observore_cx_channel_ok(14) &&
+              !observore_cx_channel_ok(36) && !observore_cx_channel_ok(-1),
+          "0, 14 and the 5 GHz channels are not the household channel");
+
+    /* When a window opens. 03:30 is second 12600 of the day. */
+    observore_cx_when_t w;
+    memset(&w, 0, sizeof(w));
+    w.clock_valid = true;
+    w.today = 9002;
+    w.sod = 12600;
+    w.at_min = OBSERVORE_CX_AT_DEFAULT;
+    w.last_day = 9001;
+    w.now_us = SECS(100000);
+    w.last_close_us = 0;
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.have_secret = true;
+    w.manual = false;
+    CHECK(OBSERVORE_CX_AT_DEFAULT == 210, "the default time is 03:30");
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "03:30:00 opens the scheduled window");
+    w.sod = 12619;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "and so does the last second of the grace");
+    w.sod = 12620;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_WAIT, "but not the next");
+    w.sod = 12599;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_WAIT, "nor the second before");
+    w.sod = 12600;
+    w.last_day = 9002;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_WAIT, "a window that ran today waits");
+    w.last_day = 9001;
+    w.mode = OBSERVORE_CX_LISTEN;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "listen mode has its window too");
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.last_close_us = w.now_us - SECS(10);
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "the minimum gap is for a hand-opened window, not the daily one");
+    w.last_close_us = 0;
+
+    w.mode = OBSERVORE_CX_OFF;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_OFF, "off opens nothing");
+    w.manual = true;
+    w.have_secret = false;
+    w.clock_valid = false;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_OFF,
+          "off refuses first, a hand-opened window included");
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_SECRET,
+          "then no household secret");
+    w.have_secret = true;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_CLOCK,
+          "then no clock, even for a hand-opened window");
+    w.clock_valid = true;
+    w.today = OBSERVORE_CENSUS_NO_DAY;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_CLOCK,
+          "and a clock with no day is no clock");
+    w.manual = false;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_NO_CLOCK,
+          "scheduled included");
+    w.today = 9002;
+
+    w.manual = true;
+    w.last_close_us = w.now_us - SECS(299);
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_SKIP_TOO_SOON,
+          "a hand-opened window 299 s after the last is too soon");
+    w.last_close_us = w.now_us - SECS(300);
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_NOW, "at 300 s it opens");
+    w.last_close_us = 0;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_NOW,
+          "with no window yet this boot it opens");
+    w.sod = 12600;
+    w.last_day = 9001;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_NOW,
+          "at the scheduled time a hand-opened window is still OPEN_NOW");
+    w.manual = false;
+    CHECK(observore_cx_decide(&w) == OBSERVORE_CX_OPEN_SCHEDULED,
+          "so deciding it did not consume the day's scheduled window");
+
+    /* When it must close. */
+    CHECK(!observore_cx_should_close(0, 29999999), "29.999 s is still open");
+    CHECK(observore_cx_should_close(0, 30000000), "30.000 s is closed");
+    CHECK(observore_cx_should_close(SECS(5), SECS(5) + 30000000), "from any start");
+    CHECK(observore_cx_remaining_s(0, 0) == 30, "30 left at the opening");
+    CHECK(observore_cx_remaining_s(0, 29200000) == 1, "1 left at 29.2 s");
+    CHECK(observore_cx_remaining_s(0, 29999999) == 1, "never 0 while it is open");
+    CHECK(observore_cx_remaining_s(0, 30000000) == 0, "0 once it is closed");
+    CHECK(observore_cx_remaining_s(0, 31000000) == 0, "and after");
+    CHECK(observore_cx_remaining_s(SECS(5), 0) == 30, "a clock read early is not 31");
+
+    /* How long until the next. */
+    memset(&w, 0, sizeof(w));
+    w.clock_valid = true;
+    w.today = 9002;
+    w.sod = 12000;
+    w.at_min = 210;
+    w.last_day = 9001;
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.have_secret = true;
+    CHECK(observore_cx_seconds_until(&w) == 600, "ten minutes before 03:30");
+    w.sod = 12600;
+    CHECK(observore_cx_seconds_until(&w) == 0, "inside the grace it is now");
+    w.sod = 20000;
+    CHECK(observore_cx_seconds_until(&w) == 86400 - 20000 + 12600,
+          "a window that was missed waits for tomorrow");
+    w.sod = 12600;
+    w.last_day = 9002;
+    CHECK(observore_cx_seconds_until(&w) == 86400, "one that ran waits a day");
+    w.mode = OBSERVORE_CX_OFF;
+    CHECK(observore_cx_seconds_until(&w) == -1, "off has none");
+    w.mode = OBSERVORE_CX_EXCHANGE;
+    w.have_secret = false;
+    CHECK(observore_cx_seconds_until(&w) == -1, "no secret has none");
+    w.have_secret = true;
+    w.clock_valid = false;
+    CHECK(observore_cx_seconds_until(&w) == -1, "no clock has none");
+
+    /* What one window says. */
+    char text[OBSERVORE_CX_RESULT_TEXT_LEN];
+    observore_cx_result_t r;
+    memset(&r, 0, sizeof(r));
+    r.mode = OBSERVORE_CX_EXCHANGE;
+    r.secs = 30;
+    r.sent = 40;
+    r.rounds = 6;
+    r.friends = 2;
+    r.friend_node[0] = 0x3A7F;
+    r.friend_node[1] = 0x91C2;
+    r.merged = 12;
+    r.bad_tag = 1;
+    r.foreign = 3;
+    size_t tn = observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strcmp(text,
+                 "share, 30 s: sent 40 entries in 6 rounds, heard 2 (3A7F 91C2), "
+                 "merged 12, rejected 1 bad tag, 0 day skew, 0 malformed, "
+                 "3 other ESP-NOW") == 0,
+          "an exchange window reads as the owner will see it: %s", text);
+    CHECK(tn == strlen(text), "and the length returned is the length written");
+
+    memset(&r, 0, sizeof(r));
+    r.mode = OBSERVORE_CX_LISTEN;
+    r.secs = 30;
+    r.friends = 1;
+    r.friend_node[0] = 0x3A7F;
+    r.merged = 5;
+    observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strcmp(text,
+                 "listen, 30 s: heard 1 (3A7F), merged 5, rejected 0 bad tag, "
+                 "0 day skew, 0 malformed, 0 other ESP-NOW") == 0,
+          "a listen window has no sent part: %s", text);
+    r.interrupted = true;
+    r.secs = 12;
+    observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strncmp(text, "listen, 12 s, interrupted: heard 1", 34) == 0,
+          "an interrupted window says so after its duration: %s", text);
+    r.friends = 0;
+    observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(strstr(text, "heard 0, merged") != NULL && strchr(text, '(') == NULL,
+          "nobody heard is no list: %s", text);
+
+    memset(&r, 0, sizeof(r));
+    r.mode = OBSERVORE_CX_EXCHANGE;
+    r.interrupted = true;
+    r.secs = 255;
+    r.sent = r.merged = r.bad_tag = r.day_skew = r.malformed = r.foreign = 65535;
+    r.rounds = 255;
+    r.friends = OBSERVORE_CX_FRIENDS_MAX;
+    for (int i = 0; i < OBSERVORE_CX_FRIENDS_MAX; i++) {
+        r.friend_node[i] = 0xFFFF;
+    }
+    tn = observore_cx_result_text(&r, text, sizeof(text));
+    CHECK(tn == strlen(text) && tn < sizeof(text) && strstr(text, "65535 other ESP-NOW") != NULL,
+          "the longest possible text fits with its terminator: %zu of %zu", tn,
+          sizeof(text));
+    char small[16];
+    tn = observore_cx_result_text(&r, small, sizeof(small));
+    CHECK(tn == sizeof(small) - 1 && small[sizeof(small) - 1] == '\0' &&
+              strlen(small) == tn,
+          "a short buffer is clamped and terminated");
+    CHECK(observore_cx_result_text(&r, small, 0) == 0, "no buffer, no text");
+}
+#endif
+
+/* The band says when the census is on the air, and the narrowest panel holds
+ * the whole of it. Compiled in both binaries: the helpers are pure and always
+ * present, so a build without the exchange pins the same wording. */
+static void test_the_band_says_the_census_is_on_the_air(void)
+{
+    banner("the band says when the census is on the air");
+
+    char buf[40];
+    size_t n = observore_census_band_text(true, 18, "CAUTION", 12, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS SHARE 18s  CAUTION 12") == 0 && n == strlen(buf),
+          "sharing reads SHARE with the countdown, the level and the score: '%s'", buf);
+    n = observore_census_band_text(false, 18, "CLEAR", 0, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS LISTEN 18s  CLEAR 0") == 0 && n == strlen(buf),
+          "listening reads LISTEN: '%s'", buf);
+    n = observore_census_band_text(false, 30, "CAUTION", 99, buf, sizeof(buf));
+    CHECK(n == 30 && strlen(buf) == 30,
+          "the longest band is 30 characters, got %zu", n);
+    CHECK(n <= 31, "the longest band fits the 31-column round panel");
+    CHECK(strstr(buf, "CAUTION 99") != NULL,
+          "the level word and the score are the end of the line, so never the cut part");
+    n = observore_census_band_text(true, 1, "ALERT", 99, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS SHARE 1s  ALERT 99") == 0 && n == strlen(buf),
+          "the last second reads 1s: '%s'", buf);
+    n = observore_census_band_text(true, 18, NULL, 12, buf, sizeof(buf));
+    CHECK(strcmp(buf, " CENSUS SHARE 18s  ? 12") == 0 && n == strlen(buf),
+          "no level word reads a question mark: '%s'", buf);
+    char small[8];
+    n = observore_census_band_text(true, 18, "CAUTION", 12, small, sizeof(small));
+    CHECK(n == 7 && strlen(small) == 7 && strcmp(small, " CENSUS") == 0,
+          "a short buffer is clamped and terminated: '%s' (%zu)", small, n);
+    CHECK(observore_census_band_text(true, 18, "CAUTION", 12, buf, 0) == 0,
+          "no buffer, no text");
+
+    n = observore_census_quiet_text(3, 1, buf, sizeof(buf));
+    CHECK(strcmp(buf, "3 quiet, 1 via mesh") == 0 && n == strlen(buf),
+          "the via-mesh figure is part of the total: '%s'", buf);
+    n = observore_census_quiet_text(3, 0, buf, sizeof(buf));
+    CHECK(strcmp(buf, "3 quiet") == 0 && n == strlen(buf),
+          "friends caused none, so the bar says no more than it did: '%s'", buf);
+    buf[0] = 'x';
+    n = observore_census_quiet_text(0, 0, buf, sizeof(buf));
+    CHECK(n == 0 && buf[0] == '\0', "nothing quiet writes nothing");
+    n = observore_census_quiet_text(3, 1, small, sizeof(small));
+    CHECK(n == 7 && strlen(small) == 7, "a short buffer is clamped: '%s'", small);
+}
+
 int main(void)
 {
     test_oui_lookup();
@@ -8788,12 +10243,25 @@ int main(void)
     test_calibration_recovers_the_sheet();
     test_the_census_earns_membership_over_days();
     test_the_census_acts_carefully();
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    test_days_from_a_friend_count_here();
+    test_the_merge_loosens_nothing();
+    test_the_peer_table_keeps_to_itself();
+#else
+    test_without_the_exchange_the_census_is_local();
+#endif
     test_a_guessed_clock_is_not_a_clock();
     test_a_full_census_still_learns();
     test_a_warning_survives_the_round_trip();
     test_the_font_icons_are_not_boxes();
     test_a_field_found_across_the_pieces();
     test_the_census_counts_addresses_not_just_days();
+    test_census_rows_are_copies();
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    test_a_census_frame_reads_back();
+    test_the_census_window_keeps_its_bounds();
+#endif
+    test_the_band_says_the_census_is_on_the_air();
     test_one_finger_is_one_tap();
     test_a_crowd_cannot_hide_a_finding();
     test_scoring();

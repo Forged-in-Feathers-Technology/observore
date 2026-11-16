@@ -8,6 +8,8 @@
 #include "observore_sdlog.h"
 #include "observore_nodepos.h"
 #include "observore_census.h"
+#include "observore_census_wire.h"
+#include "observore_espnow.h"
 #include "observore_monitors.h"
 #include "observore_peer.h"
 #include "observore_motion.h"
@@ -349,7 +351,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         ",\"trusted\":%d,\"key\":%s"
         ",\"points\":%u,\"trusted_points\":%u,\"stranger_points\":%u}"
         ",\"census\":{\"known\":%d,\"household\":%d,\"days\":%d"
-        ",\"quieted\":%d,\"dampened\":%d}"
+        ",\"quieted\":%d,\"dampened\":%d"
+        ",\"quieted_mesh\":%d,\"dampened_mesh\":%d}"
         ",\"counts\":{",
         st.score, observore_level_name(st.level), st.device_count,
         st.total_sightings, now / 1000000,
@@ -416,7 +419,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         (unsigned)st.peer_points, (unsigned)st.peer_trusted_points,
         (unsigned)st.peer_stranger_points,
         census_known, census_household, OBSERVORE_CENSUS_MIN_DAYS,
-        st.census_quieted, st.census_dampened);
+        /* The totals, and the part of each the owner's other nodes caused: the
+         * split is of the total, so "quieted" keeps its meaning and the mesh
+         * figure is the share of it that came from friends. */
+        st.census_quieted, st.census_dampened,
+        st.census_quieted_mesh, st.census_dampened_mesh);
 
     /* Everything above is one write, so if it did not fit there is nothing
      * to send: the reserve would close a document that never opened and the
@@ -465,6 +472,11 @@ static esp_err_t devices_handler(httpd_req_t *req)
     int64_t now = esp_timer_get_time();
     size_t count = observore_track_snapshot(snap, s_snap_cap);
 
+    /* The day the score judges against, read once: a row's census mark must
+     * agree with the points that row carries, and the score used the day the
+     * tracker was given, not whatever the clock says a moment later. */
+    const int census_day = observore_track_day();
+
     observore_jbuf_t jb;
     observore_jb_init(&jb, s_body, s_body_cap, 2);
     observore_jb_printf(&jb, "{\"devices\":[");
@@ -492,12 +504,38 @@ static esp_err_t devices_handler(httpd_req_t *req)
             "\",\"evidence\":\"%s\",\"source\":\"%s\",\"rssi\":%d,"
             "\"channel\":%u,\"hits\":%" PRIu32 ",\"rotations\":%u,\"first_seen_s\":%" PRId64
             ",\"last_seen_s\":%" PRId64
-            ",\"first_seen\":\"%s\",\"last_seen\":\"%s\"}",
+            ",\"first_seen\":\"%s\",\"last_seen\":\"%s\"",
             observore_evidence_name(e->evidence), observore_source_name(e->src),
             e->rssi, e->channel, e->hits, (unsigned)e->rotations,
             (now - e->first_seen_us) / 1000000,
             (now - e->last_seen_us) / 1000000,
             first_iso, last_iso);
+
+        /* What the census does to this row, from the same explanation the score
+         * used. "half" is a device whose points are halved; census_mesh says
+         * the owner's other nodes are why, and census_from names them. A
+         * quieted device is not listed (it contributes nothing), so only the
+         * half-weight case reaches a person here. */
+        const char *census = "";
+        bool census_mesh = false;
+        char census_from[OBSERVORE_CENSUS_FROM * 5 + 1] = "";
+        const uint32_t cid = observore_census_id(e);
+        if (cid != 0) {
+            observore_census_why_t why;
+            observore_census_explain(cid, census_day, e->cls, &why);
+            if (why.merged == OBSERVORE_CENSUS_DAMPEN) {
+                census = "half";
+            }
+            census_mesh = why.via_mesh;
+            size_t at = 0;
+            for (uint8_t k = 0; k < why.from_n && k < OBSERVORE_CENSUS_FROM; k++) {
+                at += (size_t)snprintf(census_from + at, sizeof(census_from) - at,
+                                       "%s%04X", k ? " " : "", (unsigned)why.from[k]);
+            }
+        }
+        observore_jb_printf(&jb, ",\"census\":\"%s\",\"census_mesh\":%s"
+                                 ",\"census_from\":\"%s\"}",
+                            census, census_mesh ? "true" : "false", census_from);
 
         if (observore_jb_full(&jb)) {
             ESP_LOGW(TAG, "device list truncated at %zu of %zu", written, count);
@@ -776,6 +814,13 @@ static esp_err_t history_clear_handler(httpd_req_t *req)
     return ok(req);
 }
 
+/* Room the last census window needs in the history body, with margin for
+ * escapes in its text: the fixed keys, eight node ids and the 224-character
+ * result come to about 500. Below this the key is left out whole. */
+#define HISTORY_CENSUS_WINDOW_ROOM 640
+
+static void jb_node_ids(observore_jbuf_t *jb, const uint16_t *ids, size_t n);
+
 /* What the device saw before the last restart, and since.
  *
  * Deliberately separate from /api/devices: that reports the live table, which
@@ -878,9 +923,48 @@ static esp_err_t history_handler(httpd_req_t *req)
                 p->open ? "true" : "false");
         }
     }
+    /* The last census window, after the peer events and under the same rule:
+     * only when there is room. A body that filled before it leaves the key out,
+     * because a source strangers can feed must never push a real detection out
+     * of this listing. It is null before the first window of this boot, and
+     * always null in a build without the exchange. The result is kept in RAM
+     * and the card; a board without a card forgets it at a reboot, which is
+     * the form the owner chose. Room is checked for the whole object first, so
+     * it is never left half written; the text is counts and node ids, never an
+     * address, and still goes through the escaper. */
+    bool window_written = false;
+    if (!observore_jb_full(&jb) && jb.cap - jb.len > HISTORY_CENSUS_WINDOW_ROOM) {
+#if CONFIG_OBSERVORE_MESH_CENSUS
+        static observore_espnow_status_t cx;
+        const int64_t now_us = esp_timer_get_time();
+        observore_espnow_status(now_us, &cx);
+        if (cx.have_last) {
+            int64_t ago = (now_us - cx.last_closed_us) / 1000000;
+            observore_jb_printf(&jb,
+                "],\"census_window\":{\"share\":%s,\"interrupted\":%s,\"secs\":%u"
+                ",\"ago_s\":%lld,\"sent\":%u,\"friends\":[",
+                cx.last_share ? "true" : "false",
+                cx.last_interrupted ? "true" : "false", (unsigned)cx.last_secs,
+                (long long)(ago < 0 ? 0 : ago), (unsigned)cx.last_sent);
+            jb_node_ids(&jb, cx.last_friend, cx.last_friends);
+            observore_jb_printf(&jb,
+                "],\"merged\":%u,\"rejected\":%u,\"text\":\"",
+                (unsigned)cx.last_merged,
+                (unsigned)cx.last_bad_tag + (unsigned)cx.last_day_skew +
+                    (unsigned)cx.last_malformed);
+            observore_jb_escape(&jb, cx.last_text);
+            observore_jb_printf(&jb, "\"}");
+            window_written = true;
+        }
+#endif
+        if (!window_written) {
+            observore_jb_printf(&jb, "],\"census_window\":null");
+            window_written = true;
+        }
+    }
     observore_jb_close(&jb, observore_jb_full(&jb)
                                ? OBSERVORE_PEER_EVENTS_OMITTED_TAIL
-                               : "]}");
+                               : window_written ? "}" : "]}");
     return send_json(req, s_body);
 }
 
@@ -1099,6 +1183,16 @@ static esp_err_t heap_handler(httpd_req_t *req)
     return send_json(req, body);
 }
 
+/* Node ids as a JSON array body: each as four hex digits in quotes, in the
+ * order given. The ids are the sender's own, formatted here, so nothing a
+ * stranger wrote reaches the page as anything but hex. */
+static void jb_node_ids(observore_jbuf_t *jb, const uint16_t *ids, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        observore_jb_printf(jb, "%s\"%04X\"", i ? "," : "", (unsigned)ids[i]);
+    }
+}
+
 static esp_err_t census_handler(httpd_req_t *req)
 {
     if (!scratch_body(req)) {
@@ -1112,32 +1206,137 @@ static esp_err_t census_handler(httpd_req_t *req)
      * those apart. How often that happens is what decides whether suppression
      * keyed on a fingerprint is viable at all, and it is invisible without
      * this. */
-    const observore_census_entry_t *tab = NULL;
-    size_t n = observore_census_entries(&tab);
     int day = observore_clock_day();
+
+    /* Static, not on the stack: esp_http_server serves one request at a time,
+     * so nothing else is in it, and the struct is about three hundred bytes of
+     * a stack that is already carrying the JSON builder.
+     *
+     * Without the exchange the answer never changes, so it is a constant that
+     * lives in flash: a build that cannot use the exchange does not pay three
+     * hundred bytes of RAM to say so. It is what observore_espnow_status()
+     * reports in that build. */
+    const int64_t now_us = esp_timer_get_time();
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    static observore_espnow_status_t cx;
+    observore_espnow_status(now_us, &cx);
+#else
+    static const observore_espnow_status_t cx = {.blocked = "", .next_s = -1};
+#endif
 
     char *body = s_body;
     observore_jbuf_t jb;
     observore_jb_init(&jb, body, s_body_cap, 2);
     observore_jb_printf(&jb,
         "{\"day\":%d,\"min_days\":%d,\"window\":%d,\"addr_limit\":%d"
-        ",\"max\":%d,\"full\":%s,\"members\":[",
+        ",\"max\":%d,\"full\":%s",
         day, OBSERVORE_CENSUS_MIN_DAYS, OBSERVORE_CENSUS_WINDOW,
         OBSERVORE_CENSUS_ADDRS, OBSERVORE_CENSUS_MAX,
         observore_census_full() ? "true" : "false");
-    for (size_t i = 0; i < n; i++) {
-        bool over = false;
-        int addrs = observore_census_addresses(tab[i].id, &over);
+
+    /* The exchange comes before the members, not after: on a board with only a
+     * few kilobytes of body the member list is what gets cut, and the panel
+     * that says whether a window is coming and what the last one did must not
+     * be. Only whether a secret is set is reported -- never the secret, the key
+     * derived from it or the check on the peer table. */
+    static const char *const FORGOT[] = {"", "owner", "secret", "no secret"};
+    const char *mode_name =
+#if CONFIG_OBSERVORE_MESH_CENSUS
+        observore_cx_mode_name(cx.mode);
+#else
+        "off";
+#endif
+    observore_jb_printf(&jb,
+        ",\"exchange\":{\"available\":%s,\"mode\":\"%s\",\"at\":\"%02u:%02u\""
+        ",\"channel\":%u,\"secret\":%s,\"next_s\":%ld,\"blocked\":\"%s\""
+        ",\"clock\":\"%s\",\"tz\":\"",
+        cx.available ? "true" : "false", mode_name,
+        (unsigned)(cx.at_min / 60), (unsigned)(cx.at_min % 60), (unsigned)cx.channel,
+        cx.secret ? "true" : "false", cx.next_s, cx.blocked,
+        observore_clock_source_name(observore_clock_source()));
+    observore_jb_escape(&jb, observore_tz_get());
+    observore_jb_printf(&jb,
+        "\",\"peer_entries\":%u,\"peer_max\":%u,\"forgot\":\"%s\""
+        ",\"low_mem\":%u,\"min_heap\":%u,\"last\":",
+        cx.peer_entries, cx.peer_max, FORGOT[cx.forgot < 4 ? cx.forgot : 0],
+        (unsigned)cx.low_mem, (unsigned)OBSERVORE_ESPNOW_MIN_HEAP);
+    if (!cx.have_last) {
+        observore_jb_printf(&jb, "null");
+    } else {
+        int64_t ago = (now_us - cx.last_closed_us) / 1000000;
+        observore_jb_printf(&jb,
+            "{\"share\":%s,\"interrupted\":%s,\"secs\":%u,\"ago_s\":%lld"
+            ",\"left\":\"%s\",\"sent\":%u,\"friends\":[",
+            cx.last_share ? "true" : "false", cx.last_interrupted ? "true" : "false",
+            (unsigned)cx.last_secs, (long long)(ago < 0 ? 0 : ago),
+            observore_mode_name((observore_mode_t)cx.last_left), (unsigned)cx.last_sent);
+        jb_node_ids(&jb, cx.last_friend, cx.last_friends);
+        observore_jb_printf(&jb,
+            "],\"merged\":%u,\"bad_tag\":%u,\"day_skew\":%u,\"malformed\":%u"
+            ",\"foreign\":%u,\"text\":\"",
+            (unsigned)cx.last_merged, (unsigned)cx.last_bad_tag, (unsigned)cx.last_day_skew,
+            (unsigned)cx.last_malformed, (unsigned)cx.last_foreign);
+        observore_jb_escape(&jb, cx.last_text);
+        observore_jb_printf(&jb, "\"}");
+    }
+    observore_jb_printf(&jb, "},\"members\":[");
+
+    /* Each row is a copy taken under the census lock, and the lock is never
+     * held while the body is sent, so a table that grows mid-listing yields
+     * rows that are each consistent with themselves. */
+    observore_census_row_t r;
+    for (size_t i = 0; observore_census_row(i, day, &r); i++) {
         observore_jb_printf(&jb,
             "%s{\"id\":\"%08lx\",\"days\":%d,\"household\":%s"
-            ",\"addresses\":%d,\"more\":%s,\"last_day\":%u}",
-            i ? "," : "", (unsigned long)tab[i].id,
-            observore_census_days_seen(tab[i].id, day),
-            observore_census_is_household(tab[i].id, day) ? "true" : "false",
-            addrs, over ? "true" : "false", (unsigned)tab[i].last_day);
+            ",\"addresses\":%d,\"more\":%s,\"last_day\":%u"
+            ",\"here\":%s,\"local_days\":%d,\"via_mesh\":%s,\"from\":[",
+            i ? "," : "", (unsigned long)r.id, r.days,
+            r.household ? "true" : "false",
+            r.addrs, r.more ? "true" : "false", (unsigned)r.last_day,
+            r.here ? "true" : "false", r.local_days, r.via_mesh ? "true" : "false");
+        jb_node_ids(&jb, r.from, r.from_n < OBSERVORE_CENSUS_FROM ? r.from_n
+                                                                  : OBSERVORE_CENSUS_FROM);
+        observore_jb_printf(&jb, "]}");
     }
     observore_jb_close(&jb, "]}");
     return send_json(req, body);
+}
+
+/* Change the census exchange, or act on it. One route with an action parameter
+ * rather than three: the server's handler table is sized from the routes, and
+ * every route is one more to audit behind the same authentication dispatcher.
+ *
+ * Nothing here switches the radio. "now" only raises a flag that the main loop
+ * takes within about a second, and the settings are read by the same loop; a
+ * handler that moved the radio between modes would block the HTTP task and
+ * would do it from outside main.c, which is the one place that knows what is
+ * safe. */
+static esp_err_t census_set_handler(httpd_req_t *req)
+{
+    char value[16];
+    if (query_param(req, "action", value, sizeof(value))) {
+        const char *why;
+        if (strcmp(value, "now") == 0) {
+            why = observore_espnow_request_now(esp_timer_get_time());
+        } else if (strcmp(value, "forget") == 0) {
+            why = observore_espnow_forget();
+        } else {
+            return fail(req, "action is now or forget");
+        }
+        return why ? fail(req, why) : ok(req);
+    }
+
+    char mode[16], at[8], channel[8];
+    const bool have_mode    = query_param(req, "mode", mode, sizeof(mode));
+    const bool have_at      = query_param(req, "at", at, sizeof(at));
+    const bool have_channel = query_param(req, "channel", channel, sizeof(channel));
+    if (!have_mode && !have_at && !have_channel) {
+        return fail(req, "nothing to change: mode, at or channel");
+    }
+    const char *why = observore_espnow_configure(have_mode ? mode : NULL,
+                                                 have_at ? at : NULL,
+                                                 have_channel ? channel : NULL);
+    return why ? fail(req, why) : ok(req);
 }
 
 /* The time, from the browser asking.
@@ -1211,6 +1410,9 @@ static esp_err_t mesh_handler(httpd_req_t *req)
          * for a typo in something that is simply the wrong size. */
         return fail(req, "a mesh key is exactly 64 hex characters");
     }
+    /* A changed or cleared secret empties what friends reported now, rather
+     * than at the next window, so the console's next read already says why. */
+    observore_espnow_secret_changed();
     return ok(req);
 }
 
@@ -1833,6 +2035,7 @@ esp_err_t observore_web_start(void)
         {"/api/mic",       HTTP_GET,  mic_handler,        false},
         {"/api/heap",      HTTP_GET,  heap_handler,       false},
         {"/api/census",    HTTP_GET,  census_handler,     false},
+        {"/api/census",    HTTP_POST, census_set_handler, false},
         {"/api/time",      HTTP_POST, time_handler,       false},
         {"/api/tz",        HTTP_GET,  tz_get_handler,     false},
         {"/api/tz",        HTTP_POST, tz_set_handler,     false},

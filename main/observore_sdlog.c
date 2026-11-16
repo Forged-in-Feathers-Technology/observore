@@ -270,6 +270,39 @@ void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us)
     s_written++;
 }
 
+void observore_sdlog_census(const char *summary, int64_t now_us)
+{
+    if (!s_ready || !summary) {
+        return;
+    }
+    FILE *f = file_for_now();
+    if (!f) {
+        s_dropped++;
+        return;
+    }
+
+    char when[32] = "";
+    observore_clock_iso(now_us, when, sizeof(when));
+
+    /* The result text is at most 224 characters and carries no quote, so the
+     * quoted field fits; observore_csv_field() truncates rather than
+     * overflowing if a later wording ever outgrows it. Only the main task calls
+     * this, so the buffer is static and stays off its stack. */
+    static char detail[260];
+    observore_csv_field(detail, sizeof(detail), summary);
+
+    int n = fprintf(f, "%s,%lld,census,,0,mesh,,0,mesh,census window,%s,,1\n",
+                    when, (long long)(now_us / 1000000), detail);
+    if (n < 0) {
+        s_dropped++;
+        return;
+    }
+    /* Flushed for the same reason as a detection: see observore_sdlog_note(). */
+    fflush(f);
+    fsync(fileno(f));
+    s_written++;
+}
+
 void observore_sdlog_counts(uint32_t *written, uint32_t *dropped)
 {
     if (written) *written = s_written;
@@ -283,6 +316,11 @@ void observore_sdlog_note(const observore_event_t *e) { (void)e; }
 void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us)
 {
     (void)s;
+    (void)now_us;
+}
+void observore_sdlog_census(const char *summary, int64_t now_us)
+{
+    (void)summary;
     (void)now_us;
 }
 void observore_sdlog_counts(uint32_t *w, uint32_t *d)

@@ -12,7 +12,7 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
            ../main/observore_version.c ../main/observore_heapwatch.c \
            ../main/observore_surroundings.c ../main/observore_battery.c ../main/observore_rtc.c ../main/observore_watch.c \
            ../main/observore_touchcal.c ../main/observore_clock.c \
-           ../main/observore_census.c ../main/observore_odid.c ../main/observore_peer.c ../main/observore_monitors.c ../main/observore_tap.c \
+           ../main/observore_census.c ../main/observore_census_wire.c ../main/observore_odid.c ../main/observore_peer.c ../main/observore_monitors.c ../main/observore_tap.c \
            ../main/observore_httpscert.c \
            ../main/observore_watchcfg.c \
            ../main/observore_tz.c \
@@ -27,15 +27,25 @@ SRCS     = test_detect.c ../main/observore_detect.c ../main/observore_track.c \
 # a false pass in this repository before.
 HDRS     = $(wildcard ../main/*.h)
 
+# The census exchange is compiled in for `run`, at the smallest board's peer
+# table so that eviction is cheap to reach, and compiled out for
+# `run-nocensus`. Every default build is that second one, and the census
+# tests that were written for a node on its own must hold in both.
+CENSUS_ON = -DCONFIG_OBSERVORE_MESH_CENSUS=1 -DCONFIG_OBSERVORE_PEER_CENSUS_MAX=21
+
 run: $(SRCS) $(HDRS) ../main/observore_oui_table.h
-	$(CC) $(CFLAGS) $(INCS) $(SRCS) -o run -lm
+	$(CC) $(CFLAGS) $(CENSUS_ON) $(INCS) $(SRCS) -o run -lm
+
+run-nocensus: $(SRCS) $(HDRS) ../main/observore_oui_table.h
+	$(CC) $(CFLAGS) $(INCS) $(SRCS) -o run-nocensus -lm
 
 ../main/observore_oui_table.h:
 	cd .. && python3 tools/gen_oui_table.py
 
 .PHONY: test clean
-test: run
+test: run run-nocensus
 	./run
+	./run-nocensus
 
 clean:
-	rm -f run
+	rm -f run run-nocensus

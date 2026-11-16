@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "observore_espnow.h"
 #include "observore_netcfg.h"
 #include "observore_wifi.h"
 #include "sdkconfig.h"
@@ -374,6 +375,16 @@ static void handle_wifi_settings(const uint8_t *data, size_t len)
      *
      * This project has been caught by that guard once before, when a fallback
      * to patrol silently did nothing. */
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    /* The radio must not be switched while ESP-NOW is up: stopping Wi-Fi under
+     * it is how the driver asserts. A census window closes within thirty
+     * seconds by construction, so the wait is bounded by the window's own cap,
+     * with a little over for the close to finish. */
+    for (int waited_ms = 0; observore_espnow_is_open() && waited_ms < 35000;
+         waited_ms += 250) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+#endif
     if (observore_wifi_mode() == OBSERVORE_MODE_UPLINK) {
         observore_wifi_set_mode(OBSERVORE_MODE_PATROL);
     }
@@ -419,7 +430,16 @@ static void handle_rpc(const uint8_t *body, size_t len)
 
     switch (command) {
         case CMD_WIFI_SETTINGS:
+#if CONFIG_OBSERVORE_MESH_CENSUS
+            /* The join switches the radio by itself, outside the main loop's
+             * mode lock, so no census window may open between the wait for
+             * one to close and the end of the join. */
+            observore_espnow_hold(true);
+#endif
             handle_wifi_settings(data, dlen);
+#if CONFIG_OBSERVORE_MESH_CENSUS
+            observore_espnow_hold(false);
+#endif
             break;
         case CMD_GET_STATE:
             send_state(provisioned() ? STATE_PROVISIONED : STATE_READY);

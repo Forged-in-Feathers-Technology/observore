@@ -7,6 +7,13 @@
 
 #include "observore_types.h"
 
+/* The exchange option is a build-time switch, so the header has to see it on
+ * the device. The host suite has no sdkconfig and names the option on the
+ * command line instead. */
+#ifndef OBSERVORE_HOST_TEST
+#include "sdkconfig.h"
+#endif
+
 /* What is always around.
  *
  * A stationary node learns the furniture: the doorbell, the printer, the
@@ -167,14 +174,62 @@ typedef enum {
     OBSERVORE_CENSUS_QUIET,
 } observore_census_verdict_t;
 
+/* The verdict that acts: this node's own days and the days the owner's other
+ * nodes reported, under one rule. It is observore_census_explain() without the
+ * explanation, so the score and the reason for it cannot disagree. */
 observore_census_verdict_t observore_census_verdict(uint32_t id, int day,
                                                     observore_class_t cls);
+
+/* How many of the owner's other nodes one identity can name at once.
+ *
+ * Three covers a household of four nodes. A fourth friend competes for a place
+ * by the days it brings, and loses a tie to one already counted: dropping a
+ * contribution only ever makes an identity less household, which is the safe
+ * direction. */
+#define OBSERVORE_CENSUS_FROM 3
+
+/* Why a verdict is what it is.
+ *
+ *   local     the verdict from this node's own days and addresses alone.
+ *   merged    the verdict that acts: local days joined with the owner's other
+ *             nodes' days. This is what observore_census_verdict() returns.
+ *   via_mesh  true exactly when `local` is REPORT and `merged` is not -- a
+ *             device that this node alone would still report. A merge that
+ *             turns QUIET into DAMPEN raised the alarm, so it is not counted
+ *             as quieting the owner's other nodes caused.
+ *   from      the nodes whose days still fall inside the window, in ascending
+ *             order, so a screen can name the friend rather than say "mesh".
+ *             Empty when the exchange is not compiled in. */
+typedef struct {
+    observore_census_verdict_t local;
+    observore_census_verdict_t merged;
+    bool                       via_mesh;
+    uint8_t                    from_n;
+    uint16_t                   from[OBSERVORE_CENSUS_FROM];
+} observore_census_why_t;
+
+/* The merged verdict, and the reasoning behind it.
+ *
+ * `why` may be NULL. A protected class or an id of 0 gives REPORT and REPORT
+ * with no friends named, before any table is read: the classes this device
+ * exists to find are never the census's to quieten, from this node or any
+ * other. */
+observore_census_verdict_t observore_census_explain(uint32_t id, int day,
+                                                    observore_class_t cls,
+                                                    observore_census_why_t *why);
 
 /* How much of its weight a dampened sighting keeps: half, never less than
  * one. Halving a single point would round to silence, which is the one
  * outcome this is designed to avoid. */
 uint16_t observore_census_dampen(uint16_t points);
 
+/* Lock order. The tracker's lock is taken first and the census lock inside it,
+ * never the other way, because the tracker asks for the verdict with its own
+ * lock held. Nothing under the census lock calls into the tracker or takes the
+ * mute store's lock: the protected-class check reads a constant descriptor.
+ * Readers copy out and never hold the census lock across network I/O.
+ *
+ * Call this before anything else touches the census: it creates the lock. */
 void observore_census_init(void);
 
 /* Record that `id` was seen on `day`, at address `mac` (six bytes, or NULL
@@ -228,9 +283,40 @@ void observore_census_addr_spread(int *one, int *few, int *many);
  * by a person before anything is built on it. */
 int observore_census_household_at_ceiling(int day);
 
-/* The table, for persistence and for the console. Returns the number of
- * entries and points `out` at them. */
-size_t observore_census_entries(const observore_census_entry_t **out);
+/* One identity as the console lists it: a copy, taken under the census lock,
+ * so a reader sees a row that is consistent with itself while the table goes
+ * on changing. Nothing here points into a table.
+ *
+ *   days, household, addrs, more   merged: this node's days and addresses
+ *                                  joined with the owner's other nodes'.
+ *   local_days, household_local    this node's own alone.
+ *   via_mesh                       household, and not household_local: the
+ *                                  owner's other nodes are why.
+ *   here                           false for an identity only the owner's other
+ *                                  nodes have seen.
+ *   last_day                       this node's entry's, or the other nodes'
+ *                                  when `here` is false.
+ *   from                           the nodes whose days count, ascending. */
+typedef struct {
+    uint32_t id;
+    int      days;
+    int      local_days;
+    bool     household;
+    bool     household_local;
+    bool     via_mesh;
+    bool     here;
+    int      addrs;
+    bool     more;
+    uint16_t last_day;
+    uint8_t  from_n;
+    uint16_t from[OBSERVORE_CENSUS_FROM];
+} observore_census_row_t;
+
+/* Fill row `i` as of `day`. Returns false past the end, so the listing is a
+ * loop that stops there. This node's own entries come first in table order,
+ * then, with the exchange, the identities only the owner's other nodes have
+ * seen, in theirs. The table can change between calls; each row is whole. */
+bool observore_census_row(size_t i, int day, observore_census_row_t *out);
 
 /* Whether the table is full.
  *
@@ -251,3 +337,217 @@ size_t observore_census_blob(void *out, size_t cap);
  * own header, is refused: restoring half an entry is worse than starting
  * empty. Returns false if the blob was rejected. */
 bool observore_census_restore(const void *blob, size_t len);
+
+/* The band's text while a census window is open, written into `buf` with
+ * snprintf semantics clamped to len - 1; returns the length written.
+ *
+ *   " CENSUS SHARE 18s  CAUTION 12"    exchange mode with something to send
+ *   " CENSUS LISTEN 18s  CAUTION 12"   listening only, or nothing to send
+ *
+ * The level word and the score stay in it. A node in a window is still a
+ * detector, and a transmission must not be a way to hide its verdict: the band
+ * is the one place a person at the device cannot miss, so the announcement and
+ * the verdict share it. One leading space, because the longest form (LISTEN, 30
+ * seconds, CAUTION, 99) is 30 characters and the narrowest panel is 31 columns:
+ * the level word and the score are never the part that is cut. A NULL level
+ * reads "?". Always compiled and pure, so the screen has no #if and the host
+ * suite pins the wording. */
+size_t observore_census_band_text(bool sharing, unsigned remaining_s,
+                                  const char *level, unsigned score,
+                                  char *buf, size_t len);
+
+/* The census part of the bar: "3 quiet, 1 via mesh". The via-mesh figure is
+ * part of the quiet total, not an addition to it (3 quiet, of which the owner's
+ * other nodes caused 1), so the total means what it meant before the exchange.
+ * "3 quiet" when friends caused none, and "" (length 0) when nothing is quiet.
+ * Snprintf semantics clamped to len - 1. */
+size_t observore_census_quiet_text(int quieted, int quieted_mesh, char *buf,
+                                   size_t len);
+
+#if CONFIG_OBSERVORE_MESH_CENSUS
+
+/* What the owner's other nodes have seen.
+ *
+ * A friend's entries live in a table of their own, so a friend can never cost
+ * this node an identity it learned itself: the local table above is not
+ * touched by anything in this section.
+ *
+ * Each friend's days are kept separately rather than OR'd into one mask. That
+ * is what lets a friend be named only while its days are still inside the
+ * window, and what lets a merge be an OR that a repeat or a replay cannot
+ * change: the days a friend reports are days that happened, and receiving them
+ * twice or out of order leaves the table as it was.
+ *
+ * Addresses are one union, because the address ceiling asks how many, not who
+ * saw them. */
+#define OBSERVORE_PEER_CENSUS_MAX     CONFIG_OBSERVORE_PEER_CENSUS_MAX
+
+/* Which code wrote the stored table, for the same reason as
+ * OBSERVORE_CENSUS_FORMAT: record it rather than recognise the shape. */
+#define OBSERVORE_PEER_CENSUS_FORMAT  1
+
+/* How many bytes of the key check the stored table carries. */
+#define OBSERVORE_PEER_CENSUS_CHECK_LEN 4
+
+/* One identity as the owner's other nodes reported it. Every from[].days is
+ * aligned to `last_day`, as bit 0 is. Node 0 marks a free place, because a
+ * node id is never 0 (observore_peer_node_id() returns 1 in its place). */
+typedef struct {
+    uint32_t id;
+    uint16_t last_day;
+    uint16_t addr[OBSERVORE_CENSUS_ADDRS];
+    uint8_t  addr_n;
+    uint8_t  addr_over;
+    struct {
+        uint16_t node;
+        uint16_t days;
+    } from[OBSERVORE_CENSUS_FROM];
+} observore_peer_census_entry_t;
+
+_Static_assert(sizeof(observore_peer_census_entry_t) == 36,
+               "a peer census entry is 36 bytes, which the stored blob relies on");
+_Static_assert(OBSERVORE_PEER_CENSUS_MAX >= 16 && OBSERVORE_PEER_CENSUS_MAX <= 64,
+               "the peer table is sized between 16 and 64 identities");
+
+/* Where the exchange keeps its state.
+ *
+ * On an ESP32-S3 with PSRAM the peer table and the exchange's working set are
+ * taken from the heap once, at init, preferring PSRAM. A static table sits in
+ * internal DRAM, and on a screen board that is the memory a window needs: the
+ * Waveshare 1.85" runs with under 2 KB of internal heap free before the
+ * exchange is built in at all, and the 2.3 KB table at 64 identities came out
+ * of that. Everywhere else the tables stay static, where their cost is fixed
+ * and measured at build time against the C5 and C6 budget. */
+#if !defined(OBSERVORE_HOST_TEST) && defined(CONFIG_IDF_TARGET_ESP32S3) && \
+    defined(CONFIG_SPIRAM) && CONFIG_OBSERVORE_MESH_CENSUS
+#define OBSERVORE_CX_STATE_IN_PSRAM 1
+#else
+#define OBSERVORE_CX_STATE_IN_PSRAM 0
+#endif
+
+typedef enum {
+    OBSERVORE_CENSUS_MERGE_SAME = 0,   /* nothing changed */
+    OBSERVORE_CENSUS_MERGE_CHANGED,    /* the stored entry's bytes changed */
+    OBSERVORE_CENSUS_MERGE_REFUSED,    /* not a record this node will take */
+} observore_census_merge_t;
+
+/* Take one census entry a friend reported, as a record already parsed and
+ * authenticated by the caller.
+ *
+ * `node` is the friend's id and `my_day` this node's census day. The entry's
+ * days and addresses are added to what is held for that friend and nothing is
+ * ever taken away, so the merge is an OR: a repeated, replayed or reordered
+ * entry can only deliver days that already happened. It never touches this
+ * node's own table.
+ *
+ * Refused, with nothing written: no entry, node 0, id 0, an empty day mask, an
+ * address count above the ceiling, a `last_day` more than one day after
+ * `my_day` (a friend's clock is allowed to be one day ahead, not more), and
+ * `my_day` outside the days the record can hold, which includes
+ * OBSERVORE_CENSUS_NO_DAY. Days that fell out of the window before this node's
+ * day are not an error and are not stored: they leave the merge SAME.
+ *
+ * Returns CHANGED only when the stored entry's bytes changed. */
+observore_census_merge_t observore_census_peer_merge(uint16_t node, int my_day,
+                                                     const observore_census_entry_t *in);
+
+/* How many identities are held from the owner's other nodes. */
+size_t observore_census_peer_count(void);
+
+/* Whether the peer table exists. It always does where it is static; where it
+ * is allocated at init (OBSERVORE_CX_STATE_IN_PSRAM) it is absent only if that
+ * allocation failed, and then the exchange stays off and the census reads as
+ * though no other node had reported anything. */
+bool observore_census_peer_ready(void);
+
+/* Why the peer table last emptied. */
+typedef enum {
+    OBSERVORE_CENSUS_FORGOT_NONE = 0,
+    OBSERVORE_CENSUS_FORGOT_OWNER,       /* the owner asked */
+    OBSERVORE_CENSUS_FORGOT_SECRET,      /* the household secret changed */
+    OBSERVORE_CENSUS_FORGOT_NO_SECRET,   /* there is no household secret */
+} observore_census_forget_t;
+
+/* Empty the peer table and remember why. This node's own census is not
+ * touched. */
+void observore_census_peer_forget(observore_census_forget_t why);
+
+/* The last reason the peer table emptied: NONE until something forgot it. A
+ * later merge does not clear it, so the console can still say why the table
+ * started empty. */
+observore_census_forget_t observore_census_peer_forgot(void);
+
+/* Remove the entries none of whose friends has a day left inside the window as
+ * of `day`. A friend one day ahead keeps its tomorrow. With no day nothing is
+ * known to have aged out, and nothing is removed. */
+void observore_census_peer_prune(int day);
+
+/* True once after any change since the last call: a merge that changed an
+ * entry, a forget of a table that held something, a prune that removed
+ * something, a re-key that emptied the table. The radio path saves the table
+ * at the close of a window only when this is true, which keeps the flash
+ * writes to one a window. */
+bool observore_census_peer_take_changed(void);
+
+/* Serialise the peer table, header and all, into `out`, as
+ * observore_census_blob() does for this node's own: the size needed is
+ * returned, and with `out` NULL or `cap` too small nothing is written. */
+size_t observore_census_peer_blob(void *out, size_t cap);
+
+/* Replace the peer table from a blob previously saved, held under the key
+ * check `check` (four bytes of an HMAC of the household secret).
+ *
+ * Refused, and the table emptied rather than left half read: another format
+ * version, a count above the table, a length that is not exactly the header
+ * plus that many entries. A table saved under a different key check is refused
+ * too, emptied, and the reason recorded as FORGOT_SECRET: what another
+ * household secret reported is not this household's. The check is stored with
+ * the table either way. Restoring into the store itself skips the copy, as the
+ * local restore does. Returns false when the blob was refused. */
+bool observore_census_peer_restore(const void *blob, size_t len,
+                                   const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN]);
+
+/* The household secret may have changed: hold the table under `check`. Returns
+ * true when the stored check differed and a table that held something was
+ * emptied, with FORGOT_SECRET recorded. The new check is stored either way. */
+bool observore_census_peer_rekey(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN]);
+
+/* What this node may put on the air: its own census, as of `day`.
+ *
+ * This is the only way the local census reaches the air. It reads this node's
+ * own table and never the peer table, so a friend's days are never relayed and
+ * no day can loop between nodes: an identity only a friend has seen is not
+ * here, and one this node has seen carries only the days this node saw. Every
+ * entry with a day still inside the window is copied with its days aligned to
+ * `day` and last_day set to it, which is the form a receiver reads without
+ * knowing this node's clock.
+ *
+ * The table is copied under one lock hold, so a round of frames never mixes two
+ * states of it. Returns how many entries were written, at most `max`; 0 when
+ * the census is empty, when every day in it has aged out, and for
+ * OBSERVORE_CENSUS_NO_DAY or a day the record cannot hold. A node with nothing
+ * to say sends nothing. */
+size_t observore_census_local_sendable(int day, observore_census_entry_t *out, size_t max);
+
+#ifndef OBSERVORE_HOST_TEST
+/* Bring the peer table back from flash at boot, held under `check`, the key
+ * check of the household secret now set. Call once, after observore_census_init()
+ * (which empties the table and its check) and after the secret has been loaded.
+ *
+ * With no secret (`have_secret` false) the stored table is not trusted and not
+ * kept: whatever flash holds is read only to learn that it is there, the table
+ * starts empty with the reason recorded, and the empty table is written back so
+ * flash agrees with RAM. With a secret, the stored table is restored when it
+ * carries this check; one written by another build or under another secret
+ * starts the table empty, says which, and is overwritten at once. Nothing stored
+ * is the quiet first-boot case: an empty table, with the check held. */
+void observore_census_peer_load(const uint8_t check[OBSERVORE_PEER_CENSUS_CHECK_LEN],
+                                bool have_secret);
+
+/* Write the peer table to flash, header and entries as they stand. The radio
+ * path calls it at most once a window, when the table changed. A failure is
+ * logged and leaves the table in RAM as it was. */
+void observore_census_peer_save(void);
+#endif
+
+#endif /* CONFIG_OBSERVORE_MESH_CENSUS */

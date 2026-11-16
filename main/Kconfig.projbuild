@@ -196,6 +196,67 @@ config OBSERVORE_MESH_TX
         has a finding worth passing on and not otherwise, so an idle node is
         exactly as quiet as one built without this.
 
+config OBSERVORE_MESH_CENSUS
+    bool "Share the household census with your own nodes over ESP-NOW (spends passivity in a daily window)"
+    default n
+    depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32C5 || IDF_TARGET_ESP32C6
+    help
+        Let the owner's own nodes tell each other what each has learned is
+        household, so that a device that is furniture to the household stops
+        being reported on every node. Off by default, and off is the important
+        case.
+
+        What it does. Once a day, in a short window, nodes that share the
+        household secret exchange their census on one channel, encrypted and
+        authenticated with a key derived from that secret. Patrol pauses for at
+        most 30 seconds. A friend's days are added to this node's own by the
+        census's existing rule -- three distinct days -- so a household
+        learned on one node reaches the others, and nothing about what earns
+        membership is loosened. A protected class is never quieted by it.
+
+        What it costs. A node that transmits can be found by direction-finding,
+        and the window is the one time this node does. A node set to listen
+        only emits nothing at all and keeps its passivity; it still takes in
+        what its friends send.
+
+        Why the classic ESP32 is not offered. Its household secret sits in
+        plaintext NVS, because that chip cannot encrypt it. A key lifted from a
+        stolen board could forge a census that quiets devices on every node, so
+        those boards are excluded rather than trusted. The symbol is
+        unavailable there, and a defaults line that names it is dropped
+        without a word, which is why the build gate reads the resolved
+        sdkconfig instead of the defaults file.
+
+        With this unset the exchange code is not compiled: the build has no
+        path to the radio window. Even with it set, the exchange is off until
+        the owner turns it on in the console, and it refuses to turn on until a
+        household secret is set.
+
+if OBSERVORE_MESH_CENSUS
+
+config OBSERVORE_PEER_CENSUS_MAX
+    int "Identities kept from the owner's other nodes"
+    range 16 64
+    default 64 if IDF_TARGET_ESP32S3
+    default 21 if OBSERVORE_DISPLAY
+    default 30
+    help
+        How many identities the table of what the owner's other nodes
+        reported can hold. It is a table of its own, so it can never cost this
+        node an identity it learned itself.
+
+        Each entry is 36 bytes, about 2.3 KB at 64, 1.1 KB at 30 and 0.8 KB
+        at 21. On ESP32-S3 builds the table is allocated from PSRAM at boot,
+        so its size costs no internal RAM there. On C5 and C6 it is static
+        internal RAM, and those boards run with the smallest internal heap
+        (see docs/memory.md), which is why they default to 30 without a
+        screen and 21 with one: with the exchange compiled in, everything it
+        adds there (this table, the receive queue and the rest of its state,
+        and on a board with a screen the system page's own status line) stays
+        under 3 KB of static RAM, counted as .bss plus .data.
+
+endif
+
 config OBSERVORE_MAX_DEVICES
     int "Devices tracked at once"
     default 192

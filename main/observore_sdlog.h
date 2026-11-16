@@ -50,6 +50,18 @@ void observore_sdlog_note(const observore_event_t *e);
  * report", and the detail names the node and the points it added. */
 void observore_sdlog_peer(const observore_peer_share_t *s, int64_t now_us);
 
+/* Append one row for a census window: this node transmitted or listened, and
+ * what came of it. `summary` is observore_cx_result_text(), the same wording as
+ * the log and the console. Safe to call with no card, no slot or logging off: it
+ * does nothing.
+ *
+ * The row has 13 columns like every other, class "census", the mac left empty,
+ * source and evidence "mesh", the label "census window" and the summary as the
+ * detail. It records that this node took part and the counts and node ids that
+ * came of it, never a sender address or anything from a frame that was refused.
+ * Main task only, as observore_sdlog_peer(). */
+void observore_sdlog_census(const char *summary, int64_t now_us);
+
 /* How many records have been written since boot, and how many were lost
  * because the card would not take them. */
 void observore_sdlog_counts(uint32_t *written, uint32_t *dropped);

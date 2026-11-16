@@ -83,6 +83,7 @@
 #include "observore_wifi.h"
 #include "observore_ble.h"
 #include "observore_census.h"
+#include "observore_espnow.h"
 #include "observore_peer.h"
 #include "observore_nodepos.h"
 #include "observore_track.h"
@@ -1634,8 +1635,22 @@ static void draw_watch(const observore_status_t *st,
     uint16_t band = st->level == OBSERVORE_LEVEL_ALERT   ? C_RED
                   : st->level == OBSERVORE_LEVEL_CAUTION ? C_AMBER
                                                          : C_GREEN;
-    snprintf(text, sizeof(text), "  OBSERVORE  %-8s  score %u",
-             observore_level_name(st->level), st->score);
+    /* While a census window is open the band says so, with the countdown, in
+     * the same colour and keeping the level word and the score: the band is the
+     * one place a person at the device cannot miss, which is why a transmission
+     * is announced there, and a node in a window is still a detector whose
+     * verdict must not disappear behind its announcement. The findings below
+     * are untouched. False in a build without the exchange, so no #if. */
+    unsigned cx_left = 0;
+    bool cx_share = false;
+    if (observore_espnow_window(now_us, &cx_left, &cx_share)) {
+        observore_census_band_text(cx_share, cx_left,
+                                   observore_level_name(st->level), st->score,
+                                   text, sizeof(text));
+    } else {
+        snprintf(text, sizeof(text), "  OBSERVORE  %-8s  score %u",
+                 observore_level_name(st->level), st->score);
+    }
     line(0, text, C_BLACK, band);
     /* The count of switched-off monitors sits in the band itself, beside the
      * verdict, because that is the only place it cannot be missed.
@@ -1676,7 +1691,18 @@ static void draw_watch(const observore_status_t *st,
      * figure is on the system page, where there is room to say what it means.
      * The band is for what would otherwise be invisible. */
     if (st->census_quieted > 0) {
-        BAR_ADD("   %d quiet", st->census_quieted);
+        /* The part the owner's other nodes caused is said as a part of the
+         * total, "3 quiet, 1 via mesh": the total keeps its old meaning. */
+        char quiet[32];
+        observore_census_quiet_text(st->census_quieted, st->census_quieted_mesh,
+                                    quiet, sizeof(quiet));
+        BAR_ADD("   %s", quiet);
+    }
+    /* A half-weight finding stays listed, so the bar names only the part
+     * another node caused: that is how other nodes' influence on this one is
+     * announced, and it costs nothing when no friend caused any. */
+    if (st->census_dampened_mesh > 0) {
+        BAR_ADD("   %d half via mesh", st->census_dampened_mesh);
     }
     /* Transmitting goes in the band, which is the only place on the device a
      * person cannot miss. Everything else this detector does is
@@ -1703,7 +1729,7 @@ static void draw_watch(const observore_status_t *st,
         BAR_ADD("   +%u peer", (unsigned)st->peer_points);
     }
     if (st->monitors_off == 0 && st->census_quieted == 0 &&
-        st->peer_points == 0) {
+        st->census_dampened_mesh == 0 && st->peer_points == 0) {
         BAR_ADD("   %lu sightings", (unsigned long)st->total_sightings);
     }
 #undef BAR_ADD
@@ -2358,6 +2384,30 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
     }
     line(r++, text, C_WHITE, C_BLACK);
 
+    /* The census exchange is a second thing this node may transmit, so it gets
+     * its own line where the first is said: what the owner set, and what the
+     * last window did. Only on a build that has it, and compiled only there:
+     * the status struct is about three hundred bytes of RAM that a build
+     * without the exchange has no use for. */
+#if CONFIG_OBSERVORE_MESH_CENSUS
+    if (observore_espnow_available()) {
+        static observore_espnow_status_t xst;
+        observore_espnow_status(now_us, &xst);
+        snprintf(text, sizeof(text), " exchange %s %02u:%02u ch %u",
+                 xst.mode == 2 ? "share" : xst.mode == 1 ? "listen" : "off",
+                 (unsigned)(xst.at_min / 60), (unsigned)(xst.at_min % 60),
+                 (unsigned)xst.channel);
+        line(r++, text, C_WHITE, C_BLACK);
+        if (xst.have_last) {
+            snprintf(text, sizeof(text), " last cx  heard %u, merged %u, %u bad",
+                     (unsigned)xst.last_friends, (unsigned)xst.last_merged,
+                     (unsigned)xst.last_bad_tag + (unsigned)xst.last_day_skew +
+                         (unsigned)xst.last_malformed);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+    }
+#endif
+
     /* What other nodes' warnings are adding to the score, and where it comes
      * from. Said even when the answer is nothing, because a listen-only node
      * that has heard no one and one that has heard everyone look the same
@@ -2489,6 +2539,13 @@ static void draw_system(const observore_status_t *st, int64_t now_us)
         if (st->census_quieted > 0 || st->census_dampened > 0) {
             snprintf(text, sizeof(text), " quieted  %d silent, %d at half",
                      st->census_quieted, st->census_dampened);
+            line(r++, text, C_WHITE, C_BLACK);
+        }
+        /* How much of that the owner's other nodes caused, so the total above
+         * keeps its meaning and the split is read beside it. */
+        if (st->census_quieted_mesh > 0 || st->census_dampened_mesh > 0) {
+            snprintf(text, sizeof(text), " via mesh %d silent, %d at half",
+                     st->census_quieted_mesh, st->census_dampened_mesh);
             line(r++, text, C_WHITE, C_BLACK);
         }
     }

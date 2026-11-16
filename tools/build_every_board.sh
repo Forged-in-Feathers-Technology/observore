@@ -17,6 +17,23 @@
 #   tools/build_every_board.sh              every board, stopping at the first failure
 #   tools/build_every_board.sh -k           keep going, report at the end
 #   tools/build_every_board.sh nm-cyd-c5    just these
+#   tools/build_every_board.sh --census [-k] [boards]
+#                                           the same boards with boards/mesh-census.defaults
+#                                           layered last
+#
+# The census exchange is off in every board profile, so nothing in the ordinary
+# matrix compiles it, and code no build touches is code that rots. --census
+# layers the option on and builds the same boards. A "depends on" that cannot be
+# met drops a defaults line silently -- the classic ESP32 is meant to refuse the
+# option, and a mistyped dependency would refuse it everywhere -- so a census
+# build is judged by what resolved and what linked, never by the layer file:
+# the S3, C5 and C6 must resolve CONFIG_OBSERVORE_MESH_CENSUS=y with encrypted NVS
+# and link the radio path, and a classic ESP32 must resolve no such line and link
+# none of it. An ordinary run proves the opposite for every board it builds: the
+# exchange is absent unless somebody asked for it.
+#
+# One line is printed per board, in release.yml order whatever order the names
+# were given in, with and without --census; that is how two runs are compared.
 #
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -26,14 +43,27 @@ cd "$(dirname "$0")/.."
 BUILD_ONLY=()
 
 KEEP=0
-[[ "${1:-}" == "-k" ]] && { KEEP=1; shift; }
-WANT=("$@")
+CENSUS=0
+WANT=()
+for arg in "$@"; do
+    case "$arg" in
+    -k)       KEEP=1 ;;
+    --census) CENSUS=1 ;;
+    *)        WANT+=("$arg") ;;
+    esac
+done
 
 if [[ -z "${IDF_PATH:-}" ]]; then
     echo "ESP-IDF is not on the path. Source export.sh first:" >&2
     echo "    . ~/esp/esp-idf/export.sh" >&2
     exit 2
 fi
+
+# CI's build action exports IDF_TARGET for the one chip it was started for. This
+# script sets the target per board, and idf.py refuses a set-target that
+# disagrees with the environment, so every board after the first chip's would
+# fail for a reason that has nothing to do with the board.
+unset IDF_TARGET
 
 # One awk pass over the matrix: each "- board:" starts a record, and target and
 # profile follow it. Reading the file beats restating it.
@@ -71,6 +101,7 @@ for row in "${ROWS[@]}"; do
 
     defaults="sdkconfig.defaults"
     [[ -n "$profile" ]] && defaults="sdkconfig.defaults;$profile"
+    [[ $CENSUS -eq 1 ]] && defaults="$defaults;boards/mesh-census.defaults"
 
     printf '%-26s %-9s ' "$board" "$target"
     log="$OUT/$board.log"
@@ -90,9 +121,38 @@ for row in "${ROWS[@]}"; do
             echo "built, but resolved to '$got' rather than '$want'"
             fail+=("$board (wrong board name)")
         else
+            # What the census exchange resolved to and linked, read from this
+            # board's own sdkconfig and map. On: the option, encrypted NVS and
+            # the radio path. Off: no such line and no such symbol.
+            cfg="$OUT/$board/sdkconfig"
+            map="$OUT/$board/observore.map"
+            has_opt=0; has_nvs=0; has_sym=0
+            grep -qx 'CONFIG_OBSERVORE_MESH_CENSUS=y' "$cfg" && has_opt=1
+            grep -qx 'CONFIG_NVS_ENCRYPTION=y' "$cfg" && has_nvs=1
+            grep -q 'observore_espnow_open' "$map" && has_sym=1
+            case "$target" in
+            esp32s3|esp32c5|esp32c6) can_have=1 ;;
+            *)                       can_have=0 ;;
+            esac
+            if [[ $CENSUS -eq 1 && $can_have -eq 1 ]]; then
+                label="census on"
+                ok=$((has_opt && has_nvs && has_sym))
+                found="option $has_opt, encrypted NVS $has_nvs, radio path linked $has_sym"
+                state="off"; should="on"
+            else
+                [[ $CENSUS -eq 1 ]] && label="census resolved off (classic ESP32)" || label="census off"
+                ok=$((! has_opt && ! has_sym))
+                found="option $has_opt, radio path linked $has_sym"
+                state="on"; should="off"
+            fi
             size=$(stat -c%s "$OUT/$board/observore.bin" 2>/dev/null || echo 0)
-            printf 'ok   %s KB\n' "$((size / 1024))"
-            pass+=("$board")
+            if [[ $ok -ne 1 ]]; then
+                echo "built, but the census exchange is $state and should be $should ($found)"
+                fail+=("$board (census exchange $state)")
+            else
+                printf 'ok   %s KB  %s\n' "$((size / 1024))" "$label"
+                pass+=("$board")
+            fi
         fi
     else
         echo "FAILED"
@@ -109,6 +169,18 @@ for row in "${ROWS[@]}"; do
         fi
     fi
 done
+
+# A gate that built nothing has proven nothing. A board name that matches no
+# row is a typo or a board that left the release matrix, and reporting "0 built,
+# 0 failed" for it reads as a pass.
+if [[ ${#pass[@]} -eq 0 && ${#fail[@]} -eq 0 ]]; then
+    if [[ ${#WANT[@]} -gt 0 ]]; then
+        echo "no board matched: ${WANT[*]}" >&2
+    else
+        echo "no board matched" >&2
+    fi
+    exit 1
+fi
 
 echo
 echo "${#pass[@]} built, ${#fail[@]} failed"

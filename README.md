@@ -185,10 +185,18 @@ observe it back, because nothing leaves the radio:
 | Wi-Fi sniff | receive-only |
 | BLE warning bursts | **off unless built in** — see below |
 | — and the node's own position, if it has one | **off unless you set one** |
+| ESP-NOW census window | **off unless built in and switched on** — see below |
 
-That last pair is the one exception, and the bursts are off in every default
-build. See [Warning the neighbours](docs/mesh.md#warning-the-neighbours) for
-what it costs and how a build without it cannot do it at all.
+Those are the exceptions, and each is off in every default build. The warning
+bursts are one; see [Warning the neighbours](docs/mesh.md#warning-the-neighbours)
+for what they cost and how a build without them cannot send at all. The census
+window is the other: it is compiled only into ESP32-S3, C5 and C6 builds that ask
+for it, it is off at first boot even then, and each window lasts at most 30
+seconds: one a day at the owner's time, and one by hand no sooner than five
+minutes after the last, while the screen and the log say so, and the LED does
+too unless it is showing a caution or an alert. It is described in [Sharing
+the household census](docs/mesh.md#sharing-the-household-census). Listen-only
+mode hears the owner's other nodes and emits nothing.
 
 A warning can carry where the node is, which is a second thing to decide
 rather than a detail of the first. It is sent only if you give the node a
@@ -534,10 +542,12 @@ elements Remote ID travels in. Where interception law turns on content against
 metadata, which is most places, that distinction is the substance of the
 matter, and it is a property of the code rather than a promise.
 
-The one exception to "receiver" is
-`CONFIG_OBSERVORE_MESH_TX`, off in every shipped build, which makes the device
-warn other nodes over BLE. A build with it on is a radio transmitter, and
-distributing such hardware brings EU RED and FCC Part 15 into scope.
+The two exceptions to "receiver" are `CONFIG_OBSERVORE_MESH_TX`, which makes the
+device warn other nodes over BLE, and `CONFIG_OBSERVORE_MESH_CENSUS`, which lets
+it share its household census with the owner's other nodes over ESP-NOW in a
+short daily window. Both are off in every shipped build. A build with either on
+is a radio transmitter, and distributing such hardware brings EU RED and FCC
+Part 15 into scope.
 
 ### What it writes down, and for how long
 

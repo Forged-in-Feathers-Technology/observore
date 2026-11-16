@@ -194,6 +194,12 @@ typedef struct {
      * the fix both times was not a better rule but a visible one. */
     int           census_quieted;
     int           census_dampened;
+    /* The parts of `census_quieted` and `census_dampened` that the owner's
+     * other nodes caused: devices this node alone would still report. Carried
+     * for the same reason `census_quieted` is -- suppression has to say where
+     * it came from. */
+    int           census_quieted_mesh;
+    int           census_dampened_mesh;
     /* How much other nodes' warnings added to `score`, and from whom.
      *
      * Carried in the status for the same reason `monitors_off` and
@@ -228,6 +234,13 @@ void observore_track_set_journeys(uint32_t journeys);
  * quiets nothing at all. A board whose clock has never been set cannot tell
  * one day from another, so it cannot know what is furniture. */
 void observore_track_set_day(int day);
+
+/* The day the score is judging the census against: what observore_track_set_day()
+ * last pushed in, OBSERVORE_CENSUS_NO_DAY until something has. A surface that
+ * marks a device as quieted or dampened must judge against this day and not
+ * read the clock again, so that a row's mark and the points it carries agree
+ * even in the moment between a day change and the next sweep. */
+int observore_track_day(void);
 
 /* Whether the board is at the far end of a journey: open once the
  * surroundings confirm it is somewhere else, closed half a minute later.

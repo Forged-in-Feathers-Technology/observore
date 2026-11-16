@@ -4,6 +4,7 @@
 
 #include "esp_log.h"
 #include "mbedtls/md.h"
+#include "mbedtls/platform_util.h"
 
 #include "observore_nvs.h"
 
@@ -123,4 +124,26 @@ bool observore_meshkey_verify(const uint8_t *msg, size_t len,
         diff |= (uint8_t)(want[i] ^ tag[i]);
     }
     return diff == 0;
+}
+
+bool observore_meshkey_derive(const char *label, uint8_t *out, size_t len)
+{
+    if (!s_have || !label || !out || len == 0 || len > 32) {
+        return false;
+    }
+    size_t n = strlen(label);
+    if (n > OBSERVORE_MESHKEY_LABEL_MAX) {
+        return false;
+    }
+    uint8_t msg[OBSERVORE_MESHKEY_LABEL_MAX + 1];
+    memcpy(msg, label, n);
+    msg[n] = 0x01;
+    uint8_t full[32];
+    const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    bool ok = md && mbedtls_md_hmac(md, s_key, sizeof(s_key), msg, n + 1, full) == 0;
+    if (ok) {
+        memcpy(out, full, len);
+    }
+    mbedtls_platform_zeroize(full, sizeof(full));
+    return ok;
 }
