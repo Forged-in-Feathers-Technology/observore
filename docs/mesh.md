@@ -3,6 +3,21 @@
 Several boards in one household can tell each other what they have seen. Off by
 default, four tiers deep: listen, warn, sign and count.
 
+## The mesh, end to end
+
+This is the whole mesh as built. Every tier is off by default unless its line
+says otherwise, and each line links to the section that holds the detail.
+
+- **Share the household census.** The ESP-NOW census exchange,
+  `CONFIG_OBSERVORE_MESH_CENSUS`, exists only on ESP32-S3, C5 and C6 builds and
+  is off at first boot. A window opens once a day for at most 30 seconds, and
+  listen only emits nothing. See [Sharing the household
+  census](#sharing-the-household-census).
+- **The half-weight household rule.** What the household rule does to an
+  identity at the address ceiling, and what it did in the field, is in
+  [Learning the furniture, then acting on it
+  carefully](ignoring.md#learning-the-furniture-then-acting-on-it-carefully).
+
 ## Warning the neighbours
 
 Several nodes see more than one does, and a second vantage point is the

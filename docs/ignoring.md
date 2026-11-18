@@ -412,7 +412,8 @@ two rules, and one that outranks both:
   quiet. Four of ten here: the doorbell, the printer, the things that do not
   rotate. It contributes no points and does not appear in the findings.
 - **household and at the ceiling** — down-weighted, never silenced. It keeps
-  **half** its points, rounded up so a single point never rounds to silence,
+  **half** its points, rounded down but never below one, so three points
+  become one and a single point stays one rather than rounding to silence,
   and stays in the findings. If the shape really is one rotating phone the
   noise goes away; if it covers a population, a stranger's device still
   registers. The failure mode becomes under-alarmed rather than blind, which
