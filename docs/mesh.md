@@ -1,7 +1,45 @@
 # Nodes that warn each other
 
 Several boards in one household can tell each other what they have seen. Off by
-default, four tiers deep: listen, warn, sign and count.
+default, in tiers: listen, warn, say where, sign, count, and share the
+household census.
+
+## The mesh, end to end
+
+This is the whole mesh as built. Every tier is off by default unless its line
+says otherwise, and each line links to the section that holds the detail.
+
+- **Listen.** Every build hears its neighbours' warnings. It is receive-only
+  and free, because the radio is already scanning. See [Hearing other nodes,
+  without becoming findable](#hearing-other-nodes-without-becoming-findable).
+- **Warn.** `CONFIG_OBSERVORE_MESH_TX` is off by default and compiled out
+  without it. A node warns only about what it would report to its owner, from a
+  fresh random address, every 90 to 150 seconds. See [Warning the
+  neighbours](#warning-the-neighbours).
+- **Say where.** A warning may carry a coarse position, about 2.8 m, from
+  `/api/nodepos` or a GPS fix. Received, it reads as an approximate distance and
+  compass bearing, or as `position known`. See [Warnings that say
+  where](#warnings-that-say-where) and [How a received position
+  reads](#how-a-received-position-reads).
+- **Sign.** One household secret marks the owner's own nodes as trusted. See
+  [Warnings your own nodes signed](#warnings-your-own-nodes-signed).
+- **Count.** A trusted node adds 3 per class, stopping at the class's own
+  weight. All strangers together add 1 per class, and 2 in all. Peers add 6 at
+  most. Nothing a peer sends lowers a score, quiets a device or touches a
+  protected class. See [What a warning adds to the
+  score](#what-a-warning-adds-to-the-score).
+- **Share the household census.** The ESP-NOW census exchange,
+  `CONFIG_OBSERVORE_MESH_CENSUS`, exists only on ESP32-S3, C5 and C6 builds and
+  is off at first boot. A window opens once a day for at most 30 seconds, and
+  listen only emits nothing. See [Sharing the household
+  census](#sharing-the-household-census).
+- **The half-weight household rule.** What the household rule does to an
+  identity at the address ceiling, and what it did in the field, is in
+  [Learning the furniture, then acting on it
+  carefully](ignoring.md#learning-the-furniture-then-acting-on-it-carefully).
+
+Strangers may raise noise, only the owner's own nodes may lower anything, and a
+protected class is always reported.
 
 ## Warning the neighbours
 
@@ -586,8 +624,9 @@ half only listens.** The device already scans BLE continuously, so hearing a
 neighbour costs nothing and adds no exposure — which is the whole reason
 receiving comes first.
 
-Transmitting is a separate, opt-in change, and not built. A node that
-broadcasts becomes findable by direction-finding, and *there is an observer
+Transmitting is a separate opt-in, `CONFIG_OBSERVORE_MESH_TX`, absent from
+every default build (see [Warning the neighbours](#warning-the-neighbours)). A
+node that broadcasts becomes findable by direction-finding, and *there is an observer
 here* is the one thing a counter-surveillance device should not announce. So a
 **receive-only node is a first-class configuration**, not a degraded one: it
 benefits from every warning in range and emits nothing.
@@ -672,7 +711,7 @@ arithmetic is exact both ways and there is no rounding decision to get wrong.
 
 The version bumped to 2 when this changed. An unknown version is refused, so an
 old node and a new one simply do not hear each other — the right failure, and
-free right now because nothing transmits yet.
+at the time it cost nothing, because no node transmitted then.
 
 `/api/status` reports `peers: {nodes, warnings}` and the three point figures,
 `points`, `trusted_points` and `stranger_points`. `nodes` counts distinct node

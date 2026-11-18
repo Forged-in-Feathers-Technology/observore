@@ -412,7 +412,8 @@ two rules, and one that outranks both:
   quiet. Four of ten here: the doorbell, the printer, the things that do not
   rotate. It contributes no points and does not appear in the findings.
 - **household and at the ceiling** — down-weighted, never silenced. It keeps
-  **half** its points, rounded up so a single point never rounds to silence,
+  **half** its points, rounded down but never below one, so three points
+  become one and a single point stays one rather than rounding to silence,
   and stays in the findings. If the shape really is one rotating phone the
   noise goes away; if it covers a population, a stranger's device still
   registers. The failure mode becomes under-alarmed rather than blind, which
@@ -468,11 +469,12 @@ and had no way to say it: the same shape of fault as a brightness setting you
 cannot reach from a screen too dim to read.
 
 `/api/status` reports it as `census: {known, household, days, quieted,
-dampened}`. The first pair is what the table has learned — `known` climbing
-while `household` stays at zero would mean the rule is never being satisfied,
-and there is no other way to see that from outside. The last pair is what is
-being done about it right now, which is the only thing that explains the
-score.
+dampened, quieted_mesh, dampened_mesh}`. The first pair is what the table has
+learned — `known` climbing while `household` stays at zero would mean the rule
+is never being satisfied, and there is no other way to see that from outside.
+The next pair is what is being done about it right now, which is the only thing
+that explains the score. The last two are the part of each that is caused by
+the owner's other nodes.
 
 ### Counting the addresses, which is the number that decides the next step
 

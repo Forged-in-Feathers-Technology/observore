@@ -365,6 +365,17 @@ strangers can never change the level. Nothing a peer sends lowers a score, quiet
 changes what a protected class reads. The rule, its limits and the arithmetic
 are in [docs/mesh.md](docs/mesh.md#what-a-warning-adds-to-the-score).
 
+**The household census can quiet a device, and it says when it has.** A device
+the census has learned is household, and that stays below the address ceiling,
+is quiet: it adds nothing, it is not listed, and the count says so. One that is
+household at the ceiling, where one advert shape may cover many devices, keeps
+half its points, rounded down but never below one, and stays listed. A protected
+class is always reported, whatever the census says. The verdict is the same
+whether the days were learned by this node or by the owner's other nodes over
+the ESP-NOW exchange. The rule, the measurements behind it and what it did in
+the field are in
+[docs/ignoring.md](docs/ignoring.md#learning-the-furniture-then-acting-on-it-carefully).
+
 ### Channels
 
 The sniffer sweeps a list of channels, not a range, because 5 GHz channel
@@ -1650,8 +1661,9 @@ why each decision was made, and what went wrong on hardware before it worked.
   the scoring, and the walks that reshaped them
 - [Ignoring what you already know about](docs/ignoring.md) — mutes, the baseline,
   and the household census the device builds by itself
-- [Nodes that warn each other](docs/mesh.md) — several boards in one household,
-  off by default, three tiers deep
+- [Nodes that warn each other](docs/mesh.md) — several boards in one household:
+  listening, warnings, positions, signing, score weight and the shared household
+  census; everything that transmits is off by default
 - [The display boards in detail](docs/display.md) — touch calibration, the
   pocket-watch face, brightness
 - [Firmware, updates and flash layout](docs/firmware.md) — what it knows about its
