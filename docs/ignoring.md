@@ -469,11 +469,12 @@ and had no way to say it: the same shape of fault as a brightness setting you
 cannot reach from a screen too dim to read.
 
 `/api/status` reports it as `census: {known, household, days, quieted,
-dampened}`. The first pair is what the table has learned — `known` climbing
-while `household` stays at zero would mean the rule is never being satisfied,
-and there is no other way to see that from outside. The last pair is what is
-being done about it right now, which is the only thing that explains the
-score.
+dampened, quieted_mesh, dampened_mesh}`. The first pair is what the table has
+learned — `known` climbing while `household` stays at zero would mean the rule
+is never being satisfied, and there is no other way to see that from outside.
+The next pair is what is being done about it right now, which is the only thing
+that explains the score. The last two are the part of each that is caused by
+the owner's other nodes.
 
 ### Counting the addresses, which is the number that decides the next step
 
